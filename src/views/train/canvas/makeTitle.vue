@@ -18,7 +18,7 @@
         <div v-for="(image, index) in imageList" :key="index" class="image-item" @click="selectImage(image)">
           <img :src="image.src" :alt="image.name" />
           <p style="font-size: 13px;">{{ image.name }}</p>
-          <span v-if="isSelected(image)||image.markFlat=='Y'" class="selected-indicator">✔</span>
+          <span v-if="isSelected(image)||image.markFlat=='Y'" class="selected-indicator">{{markIcon}}</span>
         </div>
        
       </div>
@@ -54,8 +54,8 @@
     </div>
 
     <!-- 使用 Ant Design Vue 的 Modal 弹框输入标签 -->
-    <a-modal v-model="isModalVisible" title="请输入标注名称" @ok="handleOk" @cancel="handleCancel">
-      <a-input v-model="currentLabel" placeholder="输入标注名称" />
+    <a-modal v-model="isModalVisible" title="请输入标注名称"   @open="handleModalVisibleChange"  @ok="handleOk" @cancel="handleCancel">
+      <a-input    ref="inputRef" v-model="currentLabel" placeholder="输入标注名称"  @keydown.enter="handleOk" />
     </a-modal>
 
   </div>
@@ -102,6 +102,7 @@
           },
 
         ],
+        markIcon:"✔",
         markText:"暂无标注结果",
         currentImage: null,
         canvasWidth: 700,
@@ -117,6 +118,15 @@
         selectedImage: null
       };
     },
+     watch: {
+        isModalVisible(newVal) {
+          if (newVal) {
+            this.$nextTick(() => {
+              this.$refs.inputRef.focus(); // 聚焦到输入框
+            });
+          }
+        }
+      },
     created() {
       this.getModelList();
       const value = this.$route.query.id;
@@ -132,6 +142,7 @@
 
     },
     methods: {
+     
       handleSelection(value) {
         this.formData.searchValue = value;
         this.getImageList(value)
@@ -202,7 +213,8 @@
         if(this.currentImage.markFlat=="Y"){
           this.markText="已完成标注/需要重新标注请重新绘制"
         }else{
-          this.markText="暂无标注"
+          this.markText="暂无标注";
+  
         }
         if (this.selectedImage === image) {
           // Deselect if the same image is clicked again
@@ -306,13 +318,17 @@
         this.currentLabel = rect.label; // 预填充当前标签
         this.currentRect = rect; // 保存当前矩形，稍后更新
       },
-
+      handleKeyDown(event){
+        alert("event")
+      },
       // Modal 确认按钮
       handleOk() {
         if (this.currentLabel) {
           this.currentRect.label = this.currentLabel;
           this.drawImage(); // 重新绘制图片和标注框，显示标签
           this.isModalVisible = false; // 关闭 Modal
+        }else{
+          this.$message.warning("当前未标注不可提交");
         }
       },
 

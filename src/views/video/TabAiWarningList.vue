@@ -12,7 +12,7 @@
     <!-- 操作按钮区域 -->
     <div class="table-operator">
       <a-button @click="handleAdd" type="primary" icon="plus">新增</a-button>
-      <a-button type="primary" icon="download" @click="handleExportXls('Ai事件订阅')">导出</a-button>
+      <a-button type="primary" icon="download" @click="handleExportXls('报警信息')">导出</a-button>
       <a-upload name="file" :showUploadList="false" :multiple="false" :headers="tokenHeader" :action="importExcelUrl" @change="handleImportExcel">
         <a-button type="primary" icon="import">导入</a-button>
       </a-upload>
@@ -70,10 +70,6 @@
         <span slot="action" slot-scope="text, record">
           <a @click="handleEdit(record)">编辑</a>
 
-          <a-divider type="vertical" v-if="record.runState==0" />
-          <a  v-if="record.runState==0"  @click="handleRun(record,1)">开始执行</a>
-          <a-divider type="vertical"  v-if="record.runState==1"/>
-          <a  v-if="record.runState==1"  @click="handleRun(record,0)">结束执行</a>
           <a-divider type="vertical" />
           <a-dropdown>
             <a class="ant-dropdown-link">更多 <a-icon type="down" /></a>
@@ -93,7 +89,7 @@
       </a-table>
     </div>
 
-    <tab-ai-subscription-modal ref="modalForm" @ok="modalFormOk"></tab-ai-subscription-modal>
+    <tab-ai-warning-modal ref="modalForm" @ok="modalFormOk"></tab-ai-warning-modal>
   </a-card>
 </template>
 
@@ -102,20 +98,18 @@
   import '@/assets/less/TableExpand.less'
   import { mixinDevice } from '@/utils/mixin'
   import { JeecgListMixin } from '@/mixins/JeecgListMixin'
-  import TabAiSubscriptionModal from './modules/TabAiSubscriptionModal'
-  import {
-    httpAction,
-    getAction
-  } from '@/api/manage'
+  import TabAiWarningModal from './modules/TabAiWarningModal'
+  import {filterMultiDictText} from '@/components/dict/JDictSelectUtil'
+
   export default {
-    name: 'TabAiSubscriptionList',
+    name: 'TabAiWarningList',
     mixins:[JeecgListMixin, mixinDevice],
     components: {
-      TabAiSubscriptionModal
+      TabAiWarningModal
     },
     data () {
       return {
-        description: 'Ai事件订阅管理页面',
+        description: '报警信息管理页面',
         // 表头
         columns: [
           {
@@ -129,48 +123,47 @@
             }
           },
           {
-            title:'订阅名称',
+            title:'预警类型',
             align:"center",
-            dataIndex: 'name'
+            dataIndex: 'warningType'
           },
           {
-            title:'订阅类型',
+            title:'预警内容',
             align:"center",
-            dataIndex: 'eventTypesName'
+            dataIndex: 'warningInfo'
           },
           {
-            title:'订阅回调地址',
+            title:'预警视频地址',
             align:"center",
-            dataIndex: 'eventUrl'
+            dataIndex: 'warningCome'
           },
           {
-            title:'同类型报警间隔',
+            title:'预警时间',
             align:"center",
-            dataIndex: 'eventNumber'
+            dataIndex: 'warningTime',
+            customRender:function (text) {
+              return !text?"":(text.length>10?text.substr(0,10):text)
+            }
           },
           {
-            title:'运行状态',
+            title:'预警状态',
             align:"center",
-            dataIndex: 'runState_dictText'
+            dataIndex: 'waringState'
           },
-          // {
-          //   title:'报警消息',
-          //   align:"center",
-          //   dataIndex: 'eventInfo'
-          // },
           {
-            title:'订阅地址URL',
+            title:'预警算法',
+            align:"center",
+            dataIndex: 'waringAi'
+          },
+          {
+            title:'预警消息',
+            align:"center",
+            dataIndex: 'waringText'
+          },
+          {
+            title:'备注',
             align:"center",
             dataIndex: 'remake'
-          },
-          {
-            title:'推送状态',
-            align:"center",
-            dataIndex: 'pushStatic_dictText'
-          }, {
-            title:'设备编号',
-            align:"center",
-            dataIndex: 'indexCode'
           },
           {
             title: '操作',
@@ -182,12 +175,11 @@
           }
         ],
         url: {
-          list: "/tab/tabAiSubscription/list",
-          delete: "/tab/tabAiSubscription/delete",
-          deleteBatch: "/tab/tabAiSubscription/deleteBatch",
-          exportXlsUrl: "/tab/tabAiSubscription/exportXls",
-          importExcelUrl: "tab/tabAiSubscription/importExcel",
-          updateUrl:"tab/tabAiSubscription/edit"
+          list: "/video/tabAiWarning/list",
+          delete: "/video/tabAiWarning/delete",
+          deleteBatch: "/video/tabAiWarning/deleteBatch",
+          exportXlsUrl: "/video/tabAiWarning/exportXls",
+          importExcelUrl: "video/tabAiWarning/importExcel",
           
         },
         dictOptions:{},
@@ -207,37 +199,15 @@
       },
       getSuperFieldList(){
         let fieldList=[];
-        fieldList.push({type:'list_multi',value:'eventTypes',text:'订阅类型',dictTable:"", dictText:'', dictCode:''})
-        fieldList.push({type:'string',value:'eventUrl',text:'订阅回调地址',dictCode:''})
-        fieldList.push({type:'string',value:'eventNumber',text:'同类型报警间隔',dictCode:''})
-        fieldList.push({type:'string',value:'eventInfo',text:'报警消息',dictCode:''})
+        fieldList.push({type:'int',value:'warningType',text:'预警类型',dictCode:'warning_type'})
+        fieldList.push({type:'string',value:'warningInfo',text:'预警内容',dictCode:''})
+        fieldList.push({type:'string',value:'warningCome',text:'预警视频地址',dictCode:''})
+        fieldList.push({type:'date',value:'warningTime',text:'预警时间'})
+        fieldList.push({type:'string',value:'waringState',text:'预警状态',dictCode:'waring_state'})
+        fieldList.push({type:'string',value:'waringAi',text:'预警算法',dictCode:''})
+        fieldList.push({type:'string',value:'waringText',text:'预警消息',dictCode:''})
         fieldList.push({type:'string',value:'remake',text:'备注',dictCode:''})
         this.superFieldList = fieldList
-      },
-      handleRun(record,flag){
-        let that = this;
-        this.$confirm({
-          title: "确认识别吗",
-          content: "手动触发后一直执行,直到手动结束！",
-          onOk: function() {
-
-             // debugger;
-            let url=that.url.updateUrl;
-            record.runState=flag;
-            httpAction(url, record, "POST").then((res) => {
-              if (res.success) {
-                that.$message.success(res.message);
-                that.$emit('ok');
-              } else {
-                that.$message.warning(res.message);
-              }
-                  that.loadData();
-            }).finally(() => {
-              that.confirmLoading = false;
-            })
-        
-          }
-        });
       }
     }
   }

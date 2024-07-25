@@ -5,6 +5,13 @@
       <a-form layout="inline" @keyup.enter.native="searchQuery">
         <a-row :gutter="24">
           <a-col :xl="6" :lg="7" :md="8" :sm="24">
+
+             <a-form-item label="所属模型" >
+       <!--        <j-dict-select-tag v-model="model.modelId" dictCode="tab_model_try,model_name,id"  /> -->
+                             <j-search-select-tag v-model="queryParam.modelId" dict="tab_model_try,model_name,id"  />
+             </a-form-item>
+          </a-col>
+          <a-col :xl="6" :lg="7" :md="8" :sm="24">
             <a-form-item label="图片名称">
               <a-input placeholder="请输入图片名称" v-model="queryParam.picName"></a-input>
             </a-form-item>
@@ -221,10 +228,11 @@ import { filterObj } from '@/utils/util';
       getQueryParams() {
         //获取查询条件
       
-        var param = Object.assign({},this.filters);
+        var param = Object.assign(this.queryParam,this.filters);
         param.field = this.getQueryField();
         param.pageNo = this.ipagination.current;
         param.pageSize = this.ipagination.pageSize;
+   
         return filterObj(param);
       },
       initDictConfig(){

@@ -4,45 +4,43 @@
       <a-form-model ref="form" :model="model" :rules="validatorRules" slot="detail">
         <a-row>
           <a-col :span="24">
-            <a-form-model-item label="所属模型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="modelId">
-      <!--        <j-dict-select-tag v-model="model.modelId" dictCode="tab_model_try,model_name,id"  /> -->
-                            <j-search-select-tag v-model="model.modelId" dict="tab_model_try,model_name,id"  />
+            <a-form-model-item label="预警类型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="warningType">
+              <a-input-number v-model="model.warningType" placeholder="请输入预警类型" style="width: 100%" />
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="图片类型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="picType">
-              <j-search-select-tag v-model="model.picType" dict="pic_type"  />
+            <a-form-model-item label="预警内容" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="warningInfo">
+              <a-input v-model="model.warningInfo" placeholder="请输入预警内容"  ></a-input>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="图片名称" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="picName">
-              <a-input v-model="model.picName" placeholder="请输入图片名称"  ></a-input>
+            <a-form-model-item label="预警视频地址" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="warningCome">
+              <a-input v-model="model.warningCome" placeholder="请输入预警视频地址"  ></a-input>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="图片地址" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="picUrl">
-              <j-image-upload isMultiple  v-model="model.picUrl" ></j-image-upload>
+            <a-form-model-item label="预警时间" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="warningTime">
+              <j-date placeholder="请选择预警时间" v-model="model.warningTime"  style="width: 100%" />
+            </a-form-model-item>
+          </a-col>
+          <a-col :span="24">
+            <a-form-model-item label="预警状态" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="waringState">
+              <a-input v-model="model.waringState" placeholder="请输入预警状态"  ></a-input>
+            </a-form-model-item>
+          </a-col>
+          <a-col :span="24">
+            <a-form-model-item label="预警算法" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="waringAi">
+              <a-input v-model="model.waringAi" placeholder="请输入预警算法"  ></a-input>
+            </a-form-model-item>
+          </a-col>
+          <a-col :span="24">
+            <a-form-model-item label="预警消息" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="waringText">
+              <a-input v-model="model.waringText" placeholder="请输入预警消息"  ></a-input>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
             <a-form-model-item label="备注" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="remake">
               <a-input v-model="model.remake" placeholder="请输入备注"  ></a-input>
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="是否标注" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="markType">
-              <a-input v-model="model.markType" placeholder="请输入是否标注"  ></a-input>
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="标注文件" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="markXml">
-            <!--  <a-input v-model="model.markXml" placeholder="请输入标注文件"  ></a-input> -->
-                  <j-upload v-model="model.markXml"   ></j-upload>
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="标注标签" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="markTitle">
-              <a-input v-model="model.markTitle" placeholder="请输入标注标签"  ></a-input>
             </a-form-model-item>
           </a-col>
         </a-row>
@@ -57,7 +55,7 @@
   import { validateDuplicateValue } from '@/utils/util'
 
   export default {
-    name: 'TabEasyPicForm',
+    name: 'TabAiWarningForm',
     components: {
     },
     props: {
@@ -82,14 +80,11 @@
         },
         confirmLoading: false,
         validatorRules: {
-          modelId: [
-             { required: true, message: '请选择模型名称!'},
-          ],
         },
         url: {
-          add: "/easy/tabEasyPic/add",
-          edit: "/easy/tabEasyPic/edit",
-          queryById: "/easy/tabEasyPic/queryById"
+          add: "/video/tabAiWarning/add",
+          edit: "/video/tabAiWarning/edit",
+          queryById: "/video/tabAiWarning/queryById"
         }
       }
     },

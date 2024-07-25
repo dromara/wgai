@@ -22,7 +22,9 @@
       </a-form-model-item> -->
 
       <a-form-item style="margin-top:24px">
-        <a-button size="large"  type="primary"  htmlType="submit"  class="login-button"  :loading="loginBtn"  @click.stop.prevent="handleSubmit" :disabled="loginBtn">确定
+     <!--  <a-button size="large"  type="primary"  htmlType="submit"  class="login-button"  :loading="loginBtn"  @click.stop.prevent="handleSubmitStar" :disabled="loginBtn">使用 Gitee 账号 Star
+        </a-button> -->
+        <a-button size="large"  type="primary"  htmlType="submit"  class="login-button"  :loading="loginBtn"  @click.stop.prevent="handleSubmit" :disabled="loginBtn">登录
         </a-button>
       </a-form-item>
 
@@ -42,7 +44,7 @@ import LoginSelectTenant from './LoginSelectTenant'
 import TwoStepCaptcha from '@/components/tools/TwoStepCaptcha'
 import { getEncryptedString } from '@/utils/encryption/aesEncrypt'
 import { timeFix } from '@/utils/util'
-
+import Cookies from "js-cookie";
 import LoginAccount from './LoginAccount'
 import LoginPhone from './LoginPhone'
 
@@ -70,9 +72,35 @@ export default {
     created() {
       Vue.ls.remove(ACCESS_TOKEN)
       this.getRouterData();
-      this.rememberMe = true
+      this.rememberMe = true;
+      const giteeStarId = this.$route.query.giteeStarId;
+          if (giteeStarId) {
+            Cookies.set("giteeStarId", giteeStarId, { expires: 24 * 60 });
+            this.$modal.msgSuccess("已授权");
+          }
+          this.getCode();
+          this.getCookie();
     },
     methods:{
+       getCode() {
+            getCodeImg().then(res => {
+              this.captchaEnabled = res.captchaEnabled === undefined ? true : res.captchaEnabled;
+              if (this.captchaEnabled) {
+                this.codeUrl = "data:image/gif;base64," + res.img;
+                this.loginForm.uuid = res.uuid;
+              }
+            });
+          },
+          getCookie() {
+            const username = Cookies.get("username");
+            const password = Cookies.get("password");
+            const rememberMe = Cookies.get('rememberMe')
+            this.loginForm = {
+              username: username === undefined ? this.loginForm.username : username,
+              password: password === undefined ? this.loginForm.password : decrypt(password),
+              rememberMe: rememberMe === undefined ? false : Boolean(rememberMe)
+            };
+          },
       handleTabClick(key){
         this.customActiveKey = key
       },
@@ -88,12 +116,16 @@ export default {
           }
         })
       },
-
+      handleSubmitStar(){
+          window.location.href = `https://gitee.com/dromara/wgai.git`;
+      },
       //登录
       handleSubmit () {
         this.loginBtn = true;
         if (this.customActiveKey === 'tab1') {
           // 使用账户密码登录
+             let giteeStarId = Cookies.get("giteeStarId");
+             console.log(giteeStarId)
           this.$refs.alogin.handleLogin(this.rememberMe)
         } else {
           //手机号码登录

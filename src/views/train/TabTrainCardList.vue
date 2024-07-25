@@ -27,7 +27,8 @@
           <a-card :hoverable="true">
             <a-card-meta @click="goDeviceInfo(item.id)">
               <div style="margin-bottom: 2px;" slot="title">
-                <img class="card-avatar" :src="imgPath+item.modelPic" />
+                <img class="card-avatar" v-if="item.modelPic!=null" :src="imgPath+item.modelPic" />
+                <img class="card-avatar" v-if="item.modelPic==null" src="/logo.png" />
                 <span style="margin-left: 15px;font-size: 20px;color:#1890FF ;">
                   {{ item.modelName }}
                 </span>
@@ -74,7 +75,7 @@
                   <div style="width: 49%;float:left">
                     <a-icon style="color: #2292DD;" type="save" />
                     <span style=" font-size: 14px;color:#1890FF ;">图片总大小:</span>
-                    <span style="margin-left: 5px;font-size: 12px">{{item.fileSize==null?'0MB':item.fileSize}}</span>
+                    <span style="margin-left: 5px;font-size: 12px">{{item.fileSize==null?'0':item.fileSize}}MB</span>
                   </div>
                   <div style="width: 100%;float:left">
                     <a-icon style="color: #2292DD;" type="box-plot" />
@@ -277,6 +278,8 @@
         }
       },
       startTrain(item) { //开始训练
+        // this.$message.error("演示demo禁止训练！");
+        // return;
         let that = this;
         let content = "未完全标记确认要训练吗?";
         if (item.makeNumber <= 0 || item.picNumber <= 0) {

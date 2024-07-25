@@ -79,6 +79,7 @@
           debug: false,
           debugLevel: "debug",
           useMSE: true,
+        //  isFlv:true,
           useSIMD: true,
           useWCS: true,
           useMThreading: true,

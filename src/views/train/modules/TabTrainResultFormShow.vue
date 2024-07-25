@@ -73,9 +73,20 @@
               <j-image-upload isMultiple  v-model="model.trainBatch1" ></j-image-upload>
             </a-form-model-item>
           </a-col>
+     
           <a-col :span="6">
             <a-form-model-item label="训练批次2" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="trainBatch2">
               <j-image-upload isMultiple  v-model="model.trainBatch2" ></j-image-upload>
+            </a-form-model-item>
+          </a-col>
+          <a-col :span="6">
+            <a-form-model-item label="训练结果验证0" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="trainBatch0">
+              <j-image-upload isMultiple  v-model="model.valBatch0Lables" ></j-image-upload>
+            </a-form-model-item>
+          </a-col>
+          <a-col :span="6">
+            <a-form-model-item label="训练结果验证1" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="trainBatch1">
+              <j-image-upload isMultiple  v-model="model.valBatch0Pred" ></j-image-upload>
             </a-form-model-item>
           </a-col>
           <a-col :span="6">

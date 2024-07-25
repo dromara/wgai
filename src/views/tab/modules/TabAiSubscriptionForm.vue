@@ -3,6 +3,12 @@
     <j-form-container :disabled="formDisabled">
       <a-form-model ref="form" :model="model" :rules="validatorRules" slot="detail">
         <a-row>
+          
+          <a-col :span="24">
+            <a-form-model-item label="订阅名称" :labelCol="labelCol" :wrapperCol="wrapperCol" >
+             <a-input v-model="model.name" placeholder="请输入订阅名称"  ></a-input>
+            </a-form-model-item>
+          </a-col>
           <a-col :span="24">
             <a-form-model-item label="订阅类型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="eventTypes">
               <j-multi-select-tag type="list_multi" v-model="model.eventTypes" dictCode="tab_ai_model,ai_name,id" placeholder="请选择订阅类型" />
@@ -33,6 +39,29 @@
               <a-input v-model="model.indexCode" placeholder="请输入设备编号"  ></a-input>
             </a-form-model-item>
           </a-col>
+          
+          <a-col :span="24">
+            <a-form-model-item label="是否推送" :labelCol="labelCol" :wrapperCol="wrapperCol" >
+              <j-dict-select-tag type="list" v-model="model.pushStatic" dictCode="push_static"
+                placeholder="请选择推送" />
+            </a-form-model-item>
+          </a-col>
+          
+          <a-col :span="24">
+            <a-form-model-item label="是否播报" :labelCol="labelCol" :wrapperCol="wrapperCol" >
+              <j-dict-select-tag type="list" v-model="model.audioStatic" dictCode="push_static"
+                placeholder="请选择推送" />
+            </a-form-model-item>
+          </a-col>
+          
+         
+         <a-col :span="24">
+           <a-form-model-item label="播报选择" :labelCol="labelCol" :wrapperCol="wrapperCol" >
+             <j-dict-select-tag type="list" v-model="model.audioId" dictCode="tab_audio_device,device_name,id"
+               placeholder="请选择播报名称" />
+           </a-form-model-item>
+         </a-col>
+          
         </a-row>
       </a-form-model>
     </j-form-container>

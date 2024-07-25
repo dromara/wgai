@@ -68,8 +68,9 @@
         </template>
 
         <span slot="action" slot-scope="text, record">
-          <a @click="handleEdit(record)">编辑</a>
-
+        <a @click="handleEdit(record)">编辑</a>
+          <a-divider type="vertical" />
+          <a @click="handleNext(record)">模型下发</a>
           <a-divider type="vertical" />
           <a-dropdown>
             <a class="ant-dropdown-link">更多 <a-icon type="down" /></a>
@@ -99,7 +100,10 @@
   import { mixinDevice } from '@/utils/mixin'
   import { JeecgListMixin } from '@/mixins/JeecgListMixin'
   import TabAiModelModal from './modules/TabAiModelModal'
-
+  import {
+    httpAction,
+    getAction
+  } from '@/api/manage'
   export default {
     name: 'TabAiModelList',
     mixins:[JeecgListMixin, mixinDevice],
@@ -164,7 +168,7 @@
           deleteBatch: "/tab/tabAiModel/deleteBatch",
           exportXlsUrl: "/tab/tabAiModel/exportXls",
           importExcelUrl: "tab/tabAiModel/importExcel",
-          
+          nextUrl:"/tab/tabAiModel/nextModel"
         },
         dictOptions:{},
         superFieldList:[],
@@ -180,6 +184,33 @@
     },
     methods: {
       initDictConfig(){
+      },
+      handleNext(info){
+        console.log("info", this.url);
+        let that = this;
+        this.$confirm({
+          title: "确认下发模型吗",
+          content: "模型会下发到模型列表中所有地址！",
+          onOk: function() {
+            let httpurl = '';
+            let method = '';
+            //  debugger;
+            httpurl += that.url.nextUrl;
+            method = 'post';
+        
+            httpAction(httpurl, info, method).then((res) => {
+              if (res.success) {
+                that.$message.success(res.message);
+                that.$emit('ok');
+              } else {
+                that.$message.warning(res.message);
+              }
+            }).finally(() => {
+              that.confirmLoading = false;
+            })
+        
+          }
+        });
       },
       getSuperFieldList(){
         let fieldList=[];

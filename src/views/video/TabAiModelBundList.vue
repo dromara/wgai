@@ -65,23 +65,17 @@
 
           <a-divider type="vertical" />
           <a @click="handleIdentify(record)">AI识别</a>
-        <!--  <a-divider type="vertical" v-if="record.spaceOne==='1'" />
+          <a-divider type="vertical" v-if="record.spaceOne==='1'" />
           <a v-if="record.spaceOne==='1'" @click="handleIdentifyClose(record)">视频识别结束</a>
           
           <a-divider type="vertical" v-if="record.spaceOne==='1'" />
-          <a  v-if="record.spaceOne==='1'" @click="handleOpenVideo(record)">视频区域报警配置</a>-->
-          <a-divider type="vertical" /> 
+          <a  v-if="record.spaceOne==='1'" @click="handleOpenVideo(record)">视频区域报警配置</a>
+          <a-divider type="vertical" />
           <a-dropdown>
             <a class="ant-dropdown-link">更多
               <a-icon type="down" />
             </a>
             <a-menu slot="overlay">
-              <a-menu-item>
-                 <a  v-if="record.spaceOne==='1'" @click="handleOpenVideo(record)">视频区域报警配置</a>
-              </a-menu-item>
-              <a-menu-item>
-                        <a v-if="record.spaceOne==='1'" @click="handleIdentifyClose(record)">视频识别结束</a>
-              </a-menu-item>
               <a-menu-item>
                 <a @click="handleDetail(record)">详情</a>
               </a-menu-item>
@@ -161,24 +155,6 @@
             scopedSlots: {
               customRender: 'imgSlot'
             }
-          },{
-            title:'是否推送',
-            align:"center",
-            dataIndex: 'isPush'
-          }, {
-            title:'是否播报',
-            align:"center",
-            dataIndex: 'isAudio'
-          }, {
-            title:'推送地址',
-            align:"center",
-            dataIndex: 'pushId_dictText'
-
-          }, {
-            title:'播报地址',
-            align:"center",
-            dataIndex: 'audioId_dictText'
-
           },
           {
             title: '备注',

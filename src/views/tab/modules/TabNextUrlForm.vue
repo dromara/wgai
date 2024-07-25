@@ -4,45 +4,23 @@
       <a-form-model ref="form" :model="model" :rules="validatorRules" slot="detail">
         <a-row>
           <a-col :span="24">
-            <a-form-model-item label="所属模型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="modelId">
-      <!--        <j-dict-select-tag v-model="model.modelId" dictCode="tab_model_try,model_name,id"  /> -->
-                            <j-search-select-tag v-model="model.modelId" dict="tab_model_try,model_name,id"  />
+            <a-form-model-item label="名称" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="name">
+              <a-input v-model="model.name" placeholder="请输入名称"  ></a-input>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="图片类型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="picType">
-              <j-search-select-tag v-model="model.picType" dict="pic_type"  />
+            <a-form-model-item label="下发地址" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="nextUrl">
+              <a-input v-model="model.nextUrl" placeholder="请输入下发地址"  ></a-input>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="图片名称" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="picName">
-              <a-input v-model="model.picName" placeholder="请输入图片名称"  ></a-input>
+            <a-form-model-item label="顺序" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="nextSort">
+              <a-input-number v-model="model.nextSort" placeholder="请输入顺序" style="width: 100%" />
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="图片地址" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="picUrl">
-              <j-image-upload isMultiple  v-model="model.picUrl" ></j-image-upload>
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="备注" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="remake">
-              <a-input v-model="model.remake" placeholder="请输入备注"  ></a-input>
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="是否标注" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="markType">
-              <a-input v-model="model.markType" placeholder="请输入是否标注"  ></a-input>
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="标注文件" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="markXml">
-            <!--  <a-input v-model="model.markXml" placeholder="请输入标注文件"  ></a-input> -->
-                  <j-upload v-model="model.markXml"   ></j-upload>
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="标注标签" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="markTitle">
-              <a-input v-model="model.markTitle" placeholder="请输入标注标签"  ></a-input>
+            <a-form-model-item label="是否启用" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="startFlag">
+              <j-switch v-model="model.startFlag"  ></j-switch>
             </a-form-model-item>
           </a-col>
         </a-row>
@@ -57,7 +35,7 @@
   import { validateDuplicateValue } from '@/utils/util'
 
   export default {
-    name: 'TabEasyPicForm',
+    name: 'TabNextUrlForm',
     components: {
     },
     props: {
@@ -82,14 +60,17 @@
         },
         confirmLoading: false,
         validatorRules: {
-          modelId: [
-             { required: true, message: '请选择模型名称!'},
-          ],
+           name: [
+              { required: true, message: '请输入名称!'},
+           ],
+           nextUrl: [
+              { required: true, message: '请输入下发地址!'},
+           ],
         },
         url: {
-          add: "/easy/tabEasyPic/add",
-          edit: "/easy/tabEasyPic/edit",
-          queryById: "/easy/tabEasyPic/queryById"
+          add: "/tab/tabNextUrl/add",
+          edit: "/tab/tabNextUrl/edit",
+          queryById: "/tab/tabNextUrl/queryById"
         }
       }
     },

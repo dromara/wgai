@@ -4,6 +4,33 @@
     <div class="table-page-search-wrapper">
       <a-form layout="inline" @keyup.enter.native="searchQuery">
         <a-row :gutter="24">
+          <a-col :xl="6" :lg="7" :md="8" :sm="24">
+            <a-form-item label="所属模型">
+              <j-search-select-tag placeholder="请选择所属模型" v-model="queryParam.modelId" dict="tab_model_try,model_title,id"/>
+            </a-form-item>
+          </a-col>
+          <a-col :xl="6" :lg="7" :md="8" :sm="24">
+            <a-form-item label="视频类型">
+              <j-dict-select-tag placeholder="请选择视频类型" v-model="queryParam.videoType" dictCode="video_type"/>
+            </a-form-item>
+          </a-col>
+          <template v-if="toggleSearchStatus">
+            <a-col :xl="6" :lg="7" :md="8" :sm="24">
+              <a-form-item label="保存目录(不勾选图片模型库生效)">
+                <a-input placeholder="请输入保存目录(不勾选图片模型库生效)" v-model="queryParam.savePath"></a-input>
+              </a-form-item>
+            </a-col>
+          </template>
+          <a-col :xl="6" :lg="7" :md="8" :sm="24">
+            <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
+              <a-button type="primary" @click="searchQuery" icon="search">查询</a-button>
+              <a-button type="primary" @click="searchReset" icon="reload" style="margin-left: 8px">重置</a-button>
+              <a @click="handleToggleSearch" style="margin-left: 8px">
+                {{ toggleSearchStatus ? '收起' : '展开' }}
+                <a-icon :type="toggleSearchStatus ? 'up' : 'down'"/>
+              </a>
+            </span>
+          </a-col>
         </a-row>
       </a-form>
     </div>
@@ -12,7 +39,7 @@
     <!-- 操作按钮区域 -->
     <div class="table-operator">
       <a-button @click="handleAdd" type="primary" icon="plus">新增</a-button>
-      <a-button type="primary" icon="download" @click="handleExportXls('Ai事件订阅')">导出</a-button>
+      <a-button type="primary" icon="download" @click="handleExportXls('采集图片配置')">导出</a-button>
       <a-upload name="file" :showUploadList="false" :multiple="false" :headers="tokenHeader" :action="importExcelUrl" @change="handleImportExcel">
         <a-button type="primary" icon="import">导入</a-button>
       </a-upload>
@@ -70,10 +97,9 @@
         <span slot="action" slot-scope="text, record">
           <a @click="handleEdit(record)">编辑</a>
 
-          <a-divider type="vertical" v-if="record.runState==0" />
-          <a  v-if="record.runState==0"  @click="handleRun(record,1)">开始执行</a>
-          <a-divider type="vertical"  v-if="record.runState==1"/>
-          <a  v-if="record.runState==1"  @click="handleRun(record,0)">结束执行</a>
+          <a-divider type="vertical" />
+          <a @click="handleCollect(record)">开始采集</a>
+          
           <a-divider type="vertical" />
           <a-dropdown>
             <a class="ant-dropdown-link">更多 <a-icon type="down" /></a>
@@ -93,29 +119,27 @@
       </a-table>
     </div>
 
-    <tab-ai-subscription-modal ref="modalForm" @ok="modalFormOk"></tab-ai-subscription-modal>
+    <tab-ai-clickpic-setting-modal ref="modalForm" @ok="modalFormOk"></tab-ai-clickpic-setting-modal>
   </a-card>
 </template>
 
 <script>
-
+  import {httpAction, getAction} from '@/api/manage'
   import '@/assets/less/TableExpand.less'
   import { mixinDevice } from '@/utils/mixin'
   import { JeecgListMixin } from '@/mixins/JeecgListMixin'
-  import TabAiSubscriptionModal from './modules/TabAiSubscriptionModal'
-  import {
-    httpAction,
-    getAction
-  } from '@/api/manage'
+  import TabAiClickpicSettingModal from './modules/TabAiClickpicSettingModal'
+  import {filterMultiDictText} from '@/components/dict/JDictSelectUtil'
+
   export default {
-    name: 'TabAiSubscriptionList',
+    name: 'TabAiClickpicSettingList',
     mixins:[JeecgListMixin, mixinDevice],
     components: {
-      TabAiSubscriptionModal
+      TabAiClickpicSettingModal
     },
     data () {
       return {
-        description: 'Ai事件订阅管理页面',
+        description: '采集图片配置管理页面',
         // 表头
         columns: [
           {
@@ -129,48 +153,57 @@
             }
           },
           {
-            title:'订阅名称',
+            title:'所属模型',
             align:"center",
-            dataIndex: 'name'
+            dataIndex: 'modelId_dictText'
           },
           {
-            title:'订阅类型',
+            title:'视频类型',
             align:"center",
-            dataIndex: 'eventTypesName'
+            dataIndex: 'videoType_dictText'
           },
           {
-            title:'订阅回调地址',
+            title:'视频地址',
             align:"center",
-            dataIndex: 'eventUrl'
+            dataIndex: 'videoUrl',
+            scopedSlots: {customRender: 'fileSlot'}
           },
           {
-            title:'同类型报警间隔',
+            title:'间隔帧',
             align:"center",
-            dataIndex: 'eventNumber'
+            dataIndex: 'interFrameInterval'
+          },
+          {
+            title:'采集数量',
+            align:"center",
+            dataIndex: 'picNumber'
+          },
+          {
+            title:'保存目录(不勾选图片模型库生效)',
+            align:"center",
+            dataIndex: 'savePath'
           },
           {
             title:'运行状态',
             align:"center",
-            dataIndex: 'runState_dictText'
+            dataIndex: 'runState'
           },
-          // {
-          //   title:'报警消息',
-          //   align:"center",
-          //   dataIndex: 'eventInfo'
-          // },
           {
-            title:'订阅地址URL',
+            title:'备注',
             align:"center",
             dataIndex: 'remake'
           },
           {
-            title:'推送状态',
+            title:'是否覆盖',
             align:"center",
-            dataIndex: 'pushStatic_dictText'
-          }, {
-            title:'设备编号',
+            dataIndex: 'isCover',
+            customRender: (text) => (text ? filterMultiDictText(this.dictOptions['isCover'], text) : ''),
+          },
+          {
+            title:'是否放入图片模型库',
             align:"center",
-            dataIndex: 'indexCode'
+            dataIndex: 'picModelInster',
+            customRender: (text) => (text ? filterMultiDictText(this.dictOptions['picModelInster'], text) : ''),
           },
           {
             title: '操作',
@@ -182,19 +215,20 @@
           }
         ],
         url: {
-          list: "/tab/tabAiSubscription/list",
-          delete: "/tab/tabAiSubscription/delete",
-          deleteBatch: "/tab/tabAiSubscription/deleteBatch",
-          exportXlsUrl: "/tab/tabAiSubscription/exportXls",
-          importExcelUrl: "tab/tabAiSubscription/importExcel",
-          updateUrl:"tab/tabAiSubscription/edit"
-          
+          list: "/video/tabAiClickpicSetting/list",
+          delete: "/video/tabAiClickpicSetting/delete",
+          deleteBatch: "/video/tabAiClickpicSetting/deleteBatch",
+          exportXlsUrl: "/video/tabAiClickpicSetting/exportXls",
+          importExcelUrl: "video/tabAiClickpicSetting/importExcel",
+            starupPic: "video/tabAiClickpicSetting/starupPic",
         },
         dictOptions:{},
         superFieldList:[],
       }
     },
     created() {
+      this.$set(this.dictOptions, 'isCover', [{text:'是',value:'Y'},{text:'否',value:'N'}])
+      this.$set(this.dictOptions, 'picModelInster', [{text:'是',value:'Y'},{text:'否',value:'N'}])
     this.getSuperFieldList();
     },
     computed: {
@@ -203,41 +237,50 @@
       },
     },
     methods: {
-      initDictConfig(){
-      },
-      getSuperFieldList(){
-        let fieldList=[];
-        fieldList.push({type:'list_multi',value:'eventTypes',text:'订阅类型',dictTable:"", dictText:'', dictCode:''})
-        fieldList.push({type:'string',value:'eventUrl',text:'订阅回调地址',dictCode:''})
-        fieldList.push({type:'string',value:'eventNumber',text:'同类型报警间隔',dictCode:''})
-        fieldList.push({type:'string',value:'eventInfo',text:'报警消息',dictCode:''})
-        fieldList.push({type:'string',value:'remake',text:'备注',dictCode:''})
-        this.superFieldList = fieldList
-      },
-      handleRun(record,flag){
+      handleCollect(info){
+        console.log("info", this.url);
         let that = this;
         this.$confirm({
-          title: "确认识别吗",
-          content: "手动触发后一直执行,直到手动结束！",
+          title: "确认采集吗",
+          content: "采集后图片会存放在指定目录！",
           onOk: function() {
-
-             // debugger;
-            let url=that.url.updateUrl;
-            record.runState=flag;
-            httpAction(url, record, "POST").then((res) => {
+            let httpurl = '';
+            let method = '';
+            //  debugger;
+            httpurl += that.url.starupPic;
+            method = 'post';
+        
+            httpAction(httpurl, info, method).then((res) => {
               if (res.success) {
                 that.$message.success(res.message);
                 that.$emit('ok');
               } else {
                 that.$message.warning(res.message);
               }
-                  that.loadData();
+         
             }).finally(() => {
               that.confirmLoading = false;
+                 that.loadData();
             })
         
           }
         });
+      },
+      initDictConfig(){
+      },
+      getSuperFieldList(){
+        let fieldList=[];
+        fieldList.push({type:'sel_search',value:'modelId',text:'所属模型',dictTable:"tab_model_try", dictText:'model_title', dictCode:'id'})
+        fieldList.push({type:'string',value:'videoType',text:'视频类型',dictCode:'video_type'})
+        fieldList.push({type:'string',value:'videoUrl',text:'视频地址',dictCode:''})
+        fieldList.push({type:'int',value:'interFrameInterval',text:'间隔帧',dictCode:''})
+        fieldList.push({type:'int',value:'picNumber',text:'采集数量',dictCode:''})
+        fieldList.push({type:'string',value:'savePath',text:'保存目录(不勾选图片模型库生效)',dictCode:''})
+        fieldList.push({type:'string',value:'runState',text:'运行状态',dictCode:'is_open'})
+        fieldList.push({type:'string',value:'remake',text:'备注',dictCode:''})
+        fieldList.push({type:'switch',value:'isCover',text:'是否覆盖'})
+        fieldList.push({type:'switch',value:'picModelInster',text:'是否放入图片模型库'})
+        this.superFieldList = fieldList
       }
     }
   }

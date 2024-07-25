@@ -32,34 +32,6 @@
             </a-form-model-item>
 
           </a-col>
-          
-          <a-col :span="24">
-            <a-form-model-item label="是否播报" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="isAudio">
-              <j-switch v-model="model.isAudio"  ></j-switch>
-            </a-form-model-item>
-          </a-col>
-          
-          <a-col :span="24">
-            <a-form-model-item label="播报选择" :labelCol="labelCol" :wrapperCol="wrapperCol" >
-              <j-dict-select-tag type="list" v-model="model.audioId" dictCode="tab_audio_device,device_name,id"
-                placeholder="请选择播报名称" />
-            </a-form-model-item>
-          </a-col>
-          
-          <a-col :span="24">
-            <a-form-model-item label="是否推送" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="isPush">
-              <j-switch v-model="model.isPush"  ></j-switch>
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="推送选择" :labelCol="labelCol" :wrapperCol="wrapperCol" >
-              <j-dict-select-tag type="list" v-model="model.pushId" dictCode="tab_ai_subscription,name,id"
-                placeholder="请选择推送名称" />
-            </a-form-model-item>
-          </a-col>
-          
-          
-          
           <a-col :span="24">
             <a-form-model-item label="备注" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="remake">
               <a-input v-model="model.remake" placeholder="请输入备注"></a-input>

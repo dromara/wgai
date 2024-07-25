@@ -40,6 +40,11 @@
               <a-input v-model="model.txtInfo" placeholder="请输入标签内容"  ></a-input>
             </a-form-model-item>
           </a-col> -->
+         <a-col :span="24">
+           <a-form-model-item label="标签内容" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="txtInfo">
+             <a-input v-model="model.txtInfo" placeholder="请输入标签内容"  ></a-input>
+           </a-form-model-item>
+         </a-col>
           <a-col :span="24">
             <a-form-model-item label="图片文件(ZIP)" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="picUrl">
               <j-upload v-model="model.picUrl"  multiple=false  number=1 ></j-upload>

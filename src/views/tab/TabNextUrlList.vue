@@ -4,6 +4,26 @@
     <div class="table-page-search-wrapper">
       <a-form layout="inline" @keyup.enter.native="searchQuery">
         <a-row :gutter="24">
+          <a-col :xl="6" :lg="7" :md="8" :sm="24">
+            <a-form-item label="名称">
+              <a-input placeholder="请输入名称" v-model="queryParam.name"></a-input>
+            </a-form-item>
+          </a-col>
+          <a-col :xl="6" :lg="7" :md="8" :sm="24">
+            <a-form-item label="下发地址">
+              <a-input placeholder="请输入下发地址" v-model="queryParam.nextUrl"></a-input>
+            </a-form-item>
+          </a-col>
+          <a-col :xl="6" :lg="7" :md="8" :sm="24">
+            <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
+              <a-button type="primary" @click="searchQuery" icon="search">查询</a-button>
+              <a-button type="primary" @click="searchReset" icon="reload" style="margin-left: 8px">重置</a-button>
+              <a @click="handleToggleSearch" style="margin-left: 8px">
+                {{ toggleSearchStatus ? '收起' : '展开' }}
+                <a-icon :type="toggleSearchStatus ? 'up' : 'down'"/>
+              </a>
+            </span>
+          </a-col>
         </a-row>
       </a-form>
     </div>
@@ -12,7 +32,7 @@
     <!-- 操作按钮区域 -->
     <div class="table-operator">
       <a-button @click="handleAdd" type="primary" icon="plus">新增</a-button>
-      <a-button type="primary" icon="download" @click="handleExportXls('Ai事件订阅')">导出</a-button>
+      <a-button type="primary" icon="download" @click="handleExportXls('模型下发列表')">导出</a-button>
       <a-upload name="file" :showUploadList="false" :multiple="false" :headers="tokenHeader" :action="importExcelUrl" @change="handleImportExcel">
         <a-button type="primary" icon="import">导入</a-button>
       </a-upload>
@@ -70,10 +90,6 @@
         <span slot="action" slot-scope="text, record">
           <a @click="handleEdit(record)">编辑</a>
 
-          <a-divider type="vertical" v-if="record.runState==0" />
-          <a  v-if="record.runState==0"  @click="handleRun(record,1)">开始执行</a>
-          <a-divider type="vertical"  v-if="record.runState==1"/>
-          <a  v-if="record.runState==1"  @click="handleRun(record,0)">结束执行</a>
           <a-divider type="vertical" />
           <a-dropdown>
             <a class="ant-dropdown-link">更多 <a-icon type="down" /></a>
@@ -93,7 +109,7 @@
       </a-table>
     </div>
 
-    <tab-ai-subscription-modal ref="modalForm" @ok="modalFormOk"></tab-ai-subscription-modal>
+    <tab-next-url-modal ref="modalForm" @ok="modalFormOk"></tab-next-url-modal>
   </a-card>
 </template>
 
@@ -102,20 +118,18 @@
   import '@/assets/less/TableExpand.less'
   import { mixinDevice } from '@/utils/mixin'
   import { JeecgListMixin } from '@/mixins/JeecgListMixin'
-  import TabAiSubscriptionModal from './modules/TabAiSubscriptionModal'
-  import {
-    httpAction,
-    getAction
-  } from '@/api/manage'
+  import TabNextUrlModal from './modules/TabNextUrlModal'
+  import {filterMultiDictText} from '@/components/dict/JDictSelectUtil'
+
   export default {
-    name: 'TabAiSubscriptionList',
+    name: 'TabNextUrlList',
     mixins:[JeecgListMixin, mixinDevice],
     components: {
-      TabAiSubscriptionModal
+      TabNextUrlModal
     },
     data () {
       return {
-        description: 'Ai事件订阅管理页面',
+        description: '模型下发列表管理页面',
         // 表头
         columns: [
           {
@@ -129,48 +143,26 @@
             }
           },
           {
-            title:'订阅名称',
+            title:'名称',
             align:"center",
             dataIndex: 'name'
           },
           {
-            title:'订阅类型',
+            title:'下发地址',
             align:"center",
-            dataIndex: 'eventTypesName'
+            dataIndex: 'nextUrl'
           },
           {
-            title:'订阅回调地址',
+            title:'顺序',
             align:"center",
-            dataIndex: 'eventUrl'
+            sorter: true,
+            dataIndex: 'nextSort'
           },
           {
-            title:'同类型报警间隔',
+            title:'是否启用',
             align:"center",
-            dataIndex: 'eventNumber'
-          },
-          {
-            title:'运行状态',
-            align:"center",
-            dataIndex: 'runState_dictText'
-          },
-          // {
-          //   title:'报警消息',
-          //   align:"center",
-          //   dataIndex: 'eventInfo'
-          // },
-          {
-            title:'订阅地址URL',
-            align:"center",
-            dataIndex: 'remake'
-          },
-          {
-            title:'推送状态',
-            align:"center",
-            dataIndex: 'pushStatic_dictText'
-          }, {
-            title:'设备编号',
-            align:"center",
-            dataIndex: 'indexCode'
+            dataIndex: 'startFlag',
+            customRender: (text) => (text ? filterMultiDictText(this.dictOptions['startFlag'], text) : ''),
           },
           {
             title: '操作',
@@ -182,12 +174,11 @@
           }
         ],
         url: {
-          list: "/tab/tabAiSubscription/list",
-          delete: "/tab/tabAiSubscription/delete",
-          deleteBatch: "/tab/tabAiSubscription/deleteBatch",
-          exportXlsUrl: "/tab/tabAiSubscription/exportXls",
-          importExcelUrl: "tab/tabAiSubscription/importExcel",
-          updateUrl:"tab/tabAiSubscription/edit"
+          list: "/tab/tabNextUrl/list",
+          delete: "/tab/tabNextUrl/delete",
+          deleteBatch: "/tab/tabNextUrl/deleteBatch",
+          exportXlsUrl: "/tab/tabNextUrl/exportXls",
+          importExcelUrl: "tab/tabNextUrl/importExcel",
           
         },
         dictOptions:{},
@@ -195,6 +186,7 @@
       }
     },
     created() {
+      this.$set(this.dictOptions, 'startFlag', [{text:'是',value:'Y'},{text:'否',value:'N'}])
     this.getSuperFieldList();
     },
     computed: {
@@ -207,37 +199,11 @@
       },
       getSuperFieldList(){
         let fieldList=[];
-        fieldList.push({type:'list_multi',value:'eventTypes',text:'订阅类型',dictTable:"", dictText:'', dictCode:''})
-        fieldList.push({type:'string',value:'eventUrl',text:'订阅回调地址',dictCode:''})
-        fieldList.push({type:'string',value:'eventNumber',text:'同类型报警间隔',dictCode:''})
-        fieldList.push({type:'string',value:'eventInfo',text:'报警消息',dictCode:''})
-        fieldList.push({type:'string',value:'remake',text:'备注',dictCode:''})
+        fieldList.push({type:'string',value:'name',text:'名称',dictCode:''})
+        fieldList.push({type:'string',value:'nextUrl',text:'下发地址',dictCode:''})
+        fieldList.push({type:'int',value:'nextSort',text:'顺序',dictCode:''})
+        fieldList.push({type:'switch',value:'startFlag',text:'是否启用'})
         this.superFieldList = fieldList
-      },
-      handleRun(record,flag){
-        let that = this;
-        this.$confirm({
-          title: "确认识别吗",
-          content: "手动触发后一直执行,直到手动结束！",
-          onOk: function() {
-
-             // debugger;
-            let url=that.url.updateUrl;
-            record.runState=flag;
-            httpAction(url, record, "POST").then((res) => {
-              if (res.success) {
-                that.$message.success(res.message);
-                that.$emit('ok');
-              } else {
-                that.$message.warning(res.message);
-              }
-                  that.loadData();
-            }).finally(() => {
-              that.confirmLoading = false;
-            })
-        
-          }
-        });
       }
     }
   }
