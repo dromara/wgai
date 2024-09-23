@@ -27,7 +27,7 @@
           </a-col>
           <a-col :span="24" v-if="model.spaceOne==0">
             <a-form-model-item label="图片存放地址" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="saveUrl">
-              <j-image-upload isMultiple v-model="model.saveUrl"></j-image-upload>
+              <j-upload isMultiple v-model="model.saveUrl"></j-upload>
               <span>注：输入图片地址就不用上传图片会自动保存</span>
             </a-form-model-item>
 

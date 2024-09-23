@@ -259,7 +259,7 @@
 
       },
       websocketclose: function(e) {
-        console.log("connection closed (" + e.code + ")");
+        console.log("connection closed ");
       },
 
       websocketSend(text) {

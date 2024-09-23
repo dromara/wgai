@@ -65,8 +65,11 @@
 
           <a-divider type="vertical" />
           <a @click="handleIdentify(record)">AI识别</a>
-          <a-divider type="vertical" />
+          <a-divider type="vertical" v-if="record.spaceOne==='1'" />
           <a v-if="record.spaceOne==='1'" @click="handleIdentifyClose(record)">视频识别结束</a>
+          
+          <a-divider type="vertical" v-if="record.spaceOne==='1'" />
+          <a  v-if="record.spaceOne==='1'" @click="handleOpenVideo(record)">视频区域报警配置</a>
           <a-divider type="vertical" />
           <a-dropdown>
             <a class="ant-dropdown-link">更多
@@ -272,6 +275,9 @@
 
           }
         });
+      },
+      handleOpenVideo(info){
+       this.$router.push('livecanvas/AddressList');
       }
     }
   }

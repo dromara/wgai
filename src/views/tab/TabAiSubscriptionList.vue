@@ -70,6 +70,10 @@
         <span slot="action" slot-scope="text, record">
           <a @click="handleEdit(record)">编辑</a>
 
+          <a-divider type="vertical" v-if="record.runState==0" />
+          <a  v-if="record.runState==0"  @click="handleRun(record,1)">开始执行</a>
+          <a-divider type="vertical"  v-if="record.runState==1"/>
+          <a  v-if="record.runState==1"  @click="handleRun(record,0)">结束执行</a>
           <a-divider type="vertical" />
           <a-dropdown>
             <a class="ant-dropdown-link">更多 <a-icon type="down" /></a>
@@ -99,7 +103,10 @@
   import { mixinDevice } from '@/utils/mixin'
   import { JeecgListMixin } from '@/mixins/JeecgListMixin'
   import TabAiSubscriptionModal from './modules/TabAiSubscriptionModal'
-
+  import {
+    httpAction,
+    getAction
+  } from '@/api/manage'
   export default {
     name: 'TabAiSubscriptionList',
     mixins:[JeecgListMixin, mixinDevice],
@@ -137,10 +144,15 @@
             dataIndex: 'eventNumber'
           },
           {
-            title:'报警消息',
+            title:'运行状态',
             align:"center",
-            dataIndex: 'eventInfo'
+            dataIndex: 'runState_dictText'
           },
+          // {
+          //   title:'报警消息',
+          //   align:"center",
+          //   dataIndex: 'eventInfo'
+          // },
           {
             title:'订阅地址URL',
             align:"center",
@@ -170,6 +182,7 @@
           deleteBatch: "/tab/tabAiSubscription/deleteBatch",
           exportXlsUrl: "/tab/tabAiSubscription/exportXls",
           importExcelUrl: "tab/tabAiSubscription/importExcel",
+          updateUrl:"tab/tabAiSubscription/edit"
           
         },
         dictOptions:{},
@@ -195,6 +208,31 @@
         fieldList.push({type:'string',value:'eventInfo',text:'报警消息',dictCode:''})
         fieldList.push({type:'string',value:'remake',text:'备注',dictCode:''})
         this.superFieldList = fieldList
+      },
+      handleRun(record,flag){
+        let that = this;
+        this.$confirm({
+          title: "确认识别吗",
+          content: "手动触发后一直执行,直到手动结束！",
+          onOk: function() {
+
+             // debugger;
+            let url=that.url.updateUrl;
+            record.runState=flag;
+            httpAction(url, record, "POST").then((res) => {
+              if (res.success) {
+                that.$message.success(res.message);
+                that.$emit('ok');
+              } else {
+                that.$message.warning(res.message);
+              }
+                  that.loadData();
+            }).finally(() => {
+              that.confirmLoading = false;
+            })
+        
+          }
+        });
       }
     }
   }
