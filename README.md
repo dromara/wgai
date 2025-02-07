@@ -1,29 +1,44 @@
-![index](wg/100100.png)
-# 简介
-## 测试地址
-> 测试账户 wgai wgai@2024 http://116.198.227.105:8888/
-> 
-> [<span style="color: red;">@测试地址</span>](http://116.198.227.105:8888/)
-> 
-> 注：50元子买的服务器 跑跑就坠机建议不要暴力使用
-## 官方文档
-> [<span style="color: red;">@官方文档</span>](http://116.198.227.105/#/)
+<p align="center">
+  <a href="https://hertzbeat.apache.org">
+     <img alt="hertzbeat" src="wg/100100.png" width="160">
+  </a>
+</p>
+<h4 align="center">
+<a href="README_CN.md">中文文档</a> 
+</h4>
+
+**官网:  [<span style="color: red;">http://116.198.227.105/#/</span>](http://116.198.227.105/#/)**
+
+[![Discord](https://img.shields.io/badge/Chat-Discord-7289DA?logo=discord)](https://discord.gg/Fb6M73htGr)
+[![Reddit](https://img.shields.io/badge/Reddit-Community-7289DA?logo=reddit)](https://www.reddit.com/r/hertzbeat/)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/8139/badge)](https://www.bestpractices.dev/projects/8139)
+[![Docker Pulls](https://img.shields.io/docker/pulls/apache/hertzbeat?style=%20for-the-badge&logo=docker&label=DockerHub%20Download)](https://hub.docker.com/r/apache/hertzbeat)
+[![Contribute with Gitpod](https://img.shields.io/badge/Contribute%20with-Gitpod-908a85?logo=gitpod&color=green)](https://gitpod.io/#https://github.com/apache/hertzbeat)
+
+## 🎡 <font color="green">介绍</font>
 > 开箱即用的JAVA AI平台融合了AI图像识别opencv、yolo、esayAI内核识别;AI智能客服、AI语言模型、可定制化自主离线化部署并自主化行业化使用
 避免占用内存、GPU消耗训练与识别分开使用;支持yolov3、yolov5、yolov8模型 支持exel、txt等文本语言模型；
+### 测试地址&账户
+> [<span style="color: red;"> http://116.198.227.105:8888</span>](http://116.198.227.105:8888/)
+> wgai wgai@2024
+> 
+> <span style="color: red;">注：50元子买的服务器 跑跑就坠机建议不要暴力使用</span>
+
+
 
 # 直接上手
 
 ## 下载即可使用 
 > springboot+vue+mysql 支持国产化数据库 配置内容不再详细赘述 如果java 薄弱建议先学习java 再来使用  前端在VUE分支！！！
 
-> [<span style="color: red;">@gitee仓库地址</span>](https://gitee.com/wggh_admin/wgai)
+> [<span style="color: red;">@gitee仓库地址 https://gitee.com/wggh_admin/wgai</span>](https://gitee.com/wggh_admin/wgai)
 
->[<span style="color: red;">@github仓库地址</span>](https://github.com/YeyuchenBa/wgai)
+>[<span style="color: red;">@github仓库地址 https://github.com/YeyuchenBa/wgai</span>](https://github.com/YeyuchenBa/wgai)
 
 # 新功能截图和功能介绍配置
 ### 在线训练&标注内容已经上线开源 支持windwos/linux 国产化服务器部署
 #### 模型列表
-![audio1](wg/moxingkapian.jpg)
+![audio2](wg/moxingkapian.jpg)
 #### 在线标注
 ![audio1](wg/zaixianbiaozhu.jpg)
 #### 训练结果
@@ -31,7 +46,7 @@
 #### 训练日志
 ![audio1](wg/xunlianrizhi.jpg)
 
-### 新功能演示视频&GIF
+### 新功能演示视频
 
 >[<span style="color: red;">@在线训练演示视频地址：https://www.bilibili.com/video/BV1EJwheEEYq/?vd_source=73d8a30a253a95bdb8b89a5fec80d9b9</span>](https://www.bilibili.com/video/BV1EJwheEEYq/?vd_source=73d8a30a253a95bdb8b89a5fec80d9b9)
 
@@ -131,6 +146,8 @@
 ### 微信交流群
 ## 加微信技术交流群（目前只有微信交流群）
 ![加交流群](wg/chatpic.jpg) 
+## 🛡️ License
+[`Apache License, Version 2.0`](https://www.apache.org/licenses/LICENSE-2.0.html)
 
 
 
