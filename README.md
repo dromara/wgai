@@ -4,7 +4,7 @@
   </a>
 </p>
 <h4 align="center">
-<a href="README_CN.md">中文文档</a> 
+<a href="README.md">中文文档</a> |<a href="README_EN.md">English Document</a> |
 </h4>
 
 **官网:  [<span style="color: red;">http://116.198.227.105/#/</span>](http://116.198.227.105/#/)**
