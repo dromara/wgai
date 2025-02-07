@@ -93,7 +93,7 @@ Avoid using memory and GPU separately for training and recognition; Support YOLO
 
 ![startplay](wg/startplay.gif)
 
-### 第三方接入
+### Third party access
 >Third party access
 
 ![dingyue](wg/dingyue.jpg)
@@ -101,7 +101,7 @@ Avoid using memory and GPU separately for training and recognition; Support YOLO
 
 > The currently supported item recognition settings include Chinese translation and border color (continuously updated). If you have any specific model requirements, please contact me 1552138571@qq.com Or qq: 1552138571)
 
-## - 自主智能聊天、ChatGpt
+## - ChatGpt
 ### chatGPT
 > Support text language models such as Exel and TXT; Scenario specific training
 
