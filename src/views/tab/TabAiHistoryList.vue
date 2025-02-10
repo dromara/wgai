@@ -132,7 +132,7 @@
             dataIndex: 'bundName'
           },
           {
-            title:'耗时',
+            title:'识别耗时(ms)',
             align:"center",
             dataIndex: 'sendTime'
           },

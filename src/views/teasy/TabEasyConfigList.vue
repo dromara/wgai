@@ -109,7 +109,7 @@
     </div>
 
     <tab-easy-config-modal ref="modalForm" @ok="modalFormOk"></tab-easy-config-modal>
-        <Select-Pic-Modal ref="selectPicModal" @selectFinished="selectOK"></Select-Pic-Modal>
+    <Select-Pic-Modal ref="selectPicModal" @selectFinished="selectOK"></Select-Pic-Modal>
   </a-card>
 </template>
 

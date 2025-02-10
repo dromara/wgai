@@ -5,19 +5,34 @@
       <a-form layout="inline" @keyup.enter.native="searchQuery">
         <a-row :gutter="24">
           <a-col :xl="6" :lg="7" :md="8" :sm="24">
-            <a-form-item label="图片名称">
-              <a-input placeholder="请输入图片名称" v-model="queryParam.picName"></a-input>
+            <a-form-item label="是否使用">
+              <j-dict-select-tag placeholder="请选择是否使用" v-model="queryParam.isStart"  dictCode="run_state" />
             </a-form-item>
           </a-col>
           <a-col :xl="6" :lg="7" :md="8" :sm="24">
-            <a-form-item label="图片地址">
-              <a-input placeholder="请输入图片地址" v-model="queryParam.picUrl"></a-input>
+            <a-form-item label="热词">
+              <a-input placeholder="请输入热词" v-model="queryParam.hotWord"></a-input>
             </a-form-item>
           </a-col>
           <template v-if="toggleSearchStatus">
             <a-col :xl="6" :lg="7" :md="8" :sm="24">
-              <a-form-item label="备注">
-                <a-input placeholder="请输入备注" v-model="queryParam.remake"></a-input>
+              <a-form-item label="encoder权重">
+                <a-input placeholder="请输入encoder权重" v-model="queryParam.encoderPath"></a-input>
+              </a-form-item>
+            </a-col>
+            <a-col :xl="6" :lg="7" :md="8" :sm="24">
+              <a-form-item label="decoder权重">
+                <a-input placeholder="请输入decoder权重" v-model="queryParam.decoderPath"></a-input>
+              </a-form-item>
+            </a-col>
+            <a-col :xl="6" :lg="7" :md="8" :sm="24">
+              <a-form-item label="joiner权重">
+                <a-input placeholder="请输入joiner权重" v-model="queryParam.joinerPath"></a-input>
+              </a-form-item>
+            </a-col>
+            <a-col :xl="6" :lg="7" :md="8" :sm="24">
+              <a-form-item label="token占词">
+                <a-input placeholder="请输入token占词" v-model="queryParam.tokenPath"></a-input>
               </a-form-item>
             </a-col>
           </template>
@@ -39,7 +54,7 @@
     <!-- 操作按钮区域 -->
     <div class="table-operator">
       <a-button @click="handleAdd" type="primary" icon="plus">新增</a-button>
-      <a-button type="primary" icon="download" @click="handleExportXls('训练图片')">导出</a-button>
+      <a-button type="primary" icon="download" @click="handleExportXls('语音配置')">导出</a-button>
       <a-upload name="file" :showUploadList="false" :multiple="false" :headers="tokenHeader" :action="importExcelUrl" @change="handleImportExcel">
         <a-button type="primary" icon="import">导入</a-button>
       </a-upload>
@@ -65,7 +80,6 @@
         size="middle"
         :scroll="{x:true}"
         bordered
-  
         rowKey="id"
         :columns="columns"
         :dataSource="dataSource"
@@ -117,7 +131,7 @@
       </a-table>
     </div>
 
-    <tab-easy-pic-modal ref="modalForm" @ok="modalFormOk"></tab-easy-pic-modal>
+    <tab-audit-setting-modal ref="modalForm" @ok="modalFormOk"></tab-audit-setting-modal>
   </a-card>
 </template>
 
@@ -126,18 +140,17 @@
   import '@/assets/less/TableExpand.less'
   import { mixinDevice } from '@/utils/mixin'
   import { JeecgListMixin } from '@/mixins/JeecgListMixin'
-  import TabEasyPicModal from './modules/TabEasyPicModal'
-  import {filterMultiDictText} from '@/components/dict/JDictSelectUtil'
-import { filterObj } from '@/utils/util';
+  import TabAuditSettingModal from './modules/TabAuditSettingModal'
+
   export default {
-    name: 'TabEasyPicList',
+    name: 'TabAuditSettingList',
     mixins:[JeecgListMixin, mixinDevice],
     components: {
-      TabEasyPicModal
+      TabAuditSettingModal
     },
     data () {
       return {
-        description: '训练图片管理页面',
+        description: '语音配置管理页面',
         // 表头
         columns: [
           {
@@ -151,41 +164,54 @@ import { filterObj } from '@/utils/util';
             }
           },
           {
-            title:'图片类型',
+            title:'是否使用',
             align:"center",
-            dataIndex: 'picType_dictText'
+            dataIndex: 'isStart_dictText'
           },
           {
-            title:'图片名称',
+            title:'热词',
             align:"center",
-            dataIndex: 'picName'
+            dataIndex: 'hotWord',
+            scopedSlots: {customRender: 'fileSlot'}
           },
           {
-            title:'图片地址',
+            title:'encoder权重',
             align:"center",
-            dataIndex: 'picUrl',
-            scopedSlots: {customRender: 'imgSlot'}
+            dataIndex: 'encoderPath',
+            scopedSlots: {customRender: 'fileSlot'}
+          },
+          {
+            title:'decoder权重',
+            align:"center",
+            dataIndex: 'decoderPath',
+            scopedSlots: {customRender: 'fileSlot'}
+          },
+          {
+            title:'joiner权重',
+            align:"center",
+            dataIndex: 'joinerPath',
+            scopedSlots: {customRender: 'fileSlot'}
+          },
+          {
+            title:'token占词',
+            align:"center",
+            dataIndex: 'tokenPath',
+            scopedSlots: {customRender: 'fileSlot'}
+          },
+          {
+            title:'识别词类型',
+            align:"center",
+            dataIndex: 'modeLing'
+          },
+          {
+            title:'识别模式',
+            align:"center",
+            dataIndex: 'decodingMethod'
           },
           {
             title:'备注',
             align:"center",
             dataIndex: 'remake'
-          },
-          {
-            title:'是否标注',
-            align:"center",
-            dataIndex: 'markType'
-          },
-          {
-            title:'标注文件',
-            align:"center",
-            dataIndex: 'markXml',
-           scopedSlots: {customRender: 'fileSlot'}
-          },
-          {
-            title:'标注标签',
-            align:"center",
-            dataIndex: 'markTitle'
           },
           {
             title: '操作',
@@ -197,11 +223,11 @@ import { filterObj } from '@/utils/util';
           }
         ],
         url: {
-          list: "/easy/tabEasyPic/list",
-          delete: "/easy/tabEasyPic/delete",
-          deleteBatch: "/easy/tabEasyPic/deleteBatch",
-          exportXlsUrl: "/easy/tabEasyPic/exportXls",
-          importExcelUrl: "easy/tabEasyPic/importExcel",
+          list: "/audio/tabAuditSetting/list",
+          delete: "/audio/tabAuditSetting/delete",
+          deleteBatch: "/audio/tabAuditSetting/deleteBatch",
+          exportXlsUrl: "/audio/tabAuditSetting/exportXls",
+          importExcelUrl: "audio/tabAuditSetting/importExcel",
           
         },
         dictOptions:{},
@@ -209,7 +235,6 @@ import { filterObj } from '@/utils/util';
       }
     },
     created() {
-     
     this.getSuperFieldList();
     },
     computed: {
@@ -218,26 +243,19 @@ import { filterObj } from '@/utils/util';
       },
     },
     methods: {
-      getQueryParams() {
-        //获取查询条件
-      
-        var param = Object.assign({},this.filters);
-        param.field = this.getQueryField();
-        param.pageNo = this.ipagination.current;
-        param.pageSize = this.ipagination.pageSize;
-        return filterObj(param);
-      },
       initDictConfig(){
       },
       getSuperFieldList(){
         let fieldList=[];
-        fieldList.push({type:'sel_search',value:'picType',text:'图片类型',dictTable:"", dictText:'', dictCode:'pic_type'})
-        fieldList.push({type:'string',value:'picName',text:'图片名称',dictCode:''})
-        fieldList.push({type:'string',value:'picUrl',text:'图片地址',dictCode:''})
+        fieldList.push({type:'int',value:'isStart',text:'是否使用',dictCode:"run_state"})
+        fieldList.push({type:'string',value:'hotWord',text:'热词',dictCode:''})
+        fieldList.push({type:'string',value:'encoderPath',text:'encoder权重',dictCode:''})
+        fieldList.push({type:'string',value:'decoderPath',text:'decoder权重',dictCode:''})
+        fieldList.push({type:'string',value:'joinerPath',text:'joiner权重',dictCode:''})
+        fieldList.push({type:'string',value:'tokenPath',text:'token占词',dictCode:''})
+        fieldList.push({type:'string',value:'modeLing',text:'识别词类型',dictCode:''})
+        fieldList.push({type:'string',value:'decodingMethod',text:'识别模式',dictCode:''})
         fieldList.push({type:'string',value:'remake',text:'备注',dictCode:''})
-        fieldList.push({type:'string',value:'markType',text:'是否标注',dictCode:''})
-        fieldList.push({type:'string',value:'markXml',text:'标注文件',dictCode:''})
-        fieldList.push({type:'string',value:'markTitle',text:'标注标签',dictCode:''})
         this.superFieldList = fieldList
       }
     }

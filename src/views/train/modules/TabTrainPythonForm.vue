@@ -4,45 +4,33 @@
       <a-form-model ref="form" :model="model" :rules="validatorRules" slot="detail">
         <a-row>
           <a-col :span="24">
-            <a-form-model-item label="所属模型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="modelId">
-      <!--        <j-dict-select-tag v-model="model.modelId" dictCode="tab_model_try,model_name,id"  /> -->
-                            <j-search-select-tag v-model="model.picType" dict="tab_model_try,model_name,id"  />
+            <a-form-model-item label="脚本名称" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="pyName">
+              <a-input v-model="model.pyName" placeholder="请输入脚本名称"  ></a-input>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="图片类型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="picType">
-              <j-search-select-tag v-model="model.picType" dict="pic_type"  />
+            <a-form-model-item label="脚本文件" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="pyUrl">
+              <j-upload v-model="model.pyUrl"   ></j-upload>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="图片名称" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="picName">
-              <a-input v-model="model.picName" placeholder="请输入图片名称"  ></a-input>
+            <a-form-model-item label="文件放置地址" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="pyPath">
+              <a-input v-model="model.pyPath" placeholder="请输入文件放置地址"  ></a-input>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="图片地址" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="picUrl">
-              <j-image-upload isMultiple  v-model="model.picUrl" ></j-image-upload>
+            <a-form-model-item label="脚本备注" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="pyRemake">
+              <a-input v-model="model.pyRemake" placeholder="请输入脚本备注"  ></a-input>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="备注" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="remake">
-              <a-input v-model="model.remake" placeholder="请输入备注"  ></a-input>
+            <a-form-model-item label="脚本类型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="pyType">
+              <j-dict-select-tag type="list" v-model="model.pyType" dictCode="py_type" placeholder="请选择脚本类型" />
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="是否标注" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="markType">
-              <a-input v-model="model.markType" placeholder="请输入是否标注"  ></a-input>
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="标注文件" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="markXml">
-            <!--  <a-input v-model="model.markXml" placeholder="请输入标注文件"  ></a-input> -->
-                  <j-upload v-model="model.markXml"   ></j-upload>
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="标注标签" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="markTitle">
-              <a-input v-model="model.markTitle" placeholder="请输入标注标签"  ></a-input>
+            <a-form-model-item label="执行顺序" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="pySort">
+              <a-input-number v-model="model.pySort" placeholder="请输入执行顺序" style="width: 100%" />
             </a-form-model-item>
           </a-col>
         </a-row>
@@ -57,7 +45,7 @@
   import { validateDuplicateValue } from '@/utils/util'
 
   export default {
-    name: 'TabEasyPicForm',
+    name: 'TabTrainPythonForm',
     components: {
     },
     props: {
@@ -82,14 +70,17 @@
         },
         confirmLoading: false,
         validatorRules: {
-          modelId: [
-             { required: true, message: '请选择模型名称!'},
-          ],
+           pyName: [
+              { required: true, message: '请输入脚本名称!'},
+           ],
+           pySort: [
+              { required: true, message: '请输入执行顺序!'},
+           ],
         },
         url: {
-          add: "/easy/tabEasyPic/add",
-          edit: "/easy/tabEasyPic/edit",
-          queryById: "/easy/tabEasyPic/queryById"
+          add: "/train/tabTrainPython/add",
+          edit: "/train/tabTrainPython/edit",
+          queryById: "/train/tabTrainPython/queryById"
         }
       }
     },

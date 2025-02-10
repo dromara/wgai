@@ -4,33 +4,6 @@
     <div class="table-page-search-wrapper">
       <a-form layout="inline" @keyup.enter.native="searchQuery">
         <a-row :gutter="24">
-          <a-col :xl="6" :lg="7" :md="8" :sm="24">
-            <a-form-item label="图片名称">
-              <a-input placeholder="请输入图片名称" v-model="queryParam.picName"></a-input>
-            </a-form-item>
-          </a-col>
-          <a-col :xl="6" :lg="7" :md="8" :sm="24">
-            <a-form-item label="图片地址">
-              <a-input placeholder="请输入图片地址" v-model="queryParam.picUrl"></a-input>
-            </a-form-item>
-          </a-col>
-          <template v-if="toggleSearchStatus">
-            <a-col :xl="6" :lg="7" :md="8" :sm="24">
-              <a-form-item label="备注">
-                <a-input placeholder="请输入备注" v-model="queryParam.remake"></a-input>
-              </a-form-item>
-            </a-col>
-          </template>
-          <a-col :xl="6" :lg="7" :md="8" :sm="24">
-            <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
-              <a-button type="primary" @click="searchQuery" icon="search">查询</a-button>
-              <a-button type="primary" @click="searchReset" icon="reload" style="margin-left: 8px">重置</a-button>
-              <a @click="handleToggleSearch" style="margin-left: 8px">
-                {{ toggleSearchStatus ? '收起' : '展开' }}
-                <a-icon :type="toggleSearchStatus ? 'up' : 'down'"/>
-              </a>
-            </span>
-          </a-col>
         </a-row>
       </a-form>
     </div>
@@ -39,7 +12,7 @@
     <!-- 操作按钮区域 -->
     <div class="table-operator">
       <a-button @click="handleAdd" type="primary" icon="plus">新增</a-button>
-      <a-button type="primary" icon="download" @click="handleExportXls('训练图片')">导出</a-button>
+      <a-button type="primary" icon="download" @click="handleExportXls('训练日志')">导出</a-button>
       <a-upload name="file" :showUploadList="false" :multiple="false" :headers="tokenHeader" :action="importExcelUrl" @change="handleImportExcel">
         <a-button type="primary" icon="import">导入</a-button>
       </a-upload>
@@ -65,7 +38,6 @@
         size="middle"
         :scroll="{x:true}"
         bordered
-  
         rowKey="id"
         :columns="columns"
         :dataSource="dataSource"
@@ -117,7 +89,7 @@
       </a-table>
     </div>
 
-    <tab-easy-pic-modal ref="modalForm" @ok="modalFormOk"></tab-easy-pic-modal>
+    <tab-train-log-modal ref="modalForm" @ok="modalFormOk"></tab-train-log-modal>
   </a-card>
 </template>
 
@@ -126,18 +98,18 @@
   import '@/assets/less/TableExpand.less'
   import { mixinDevice } from '@/utils/mixin'
   import { JeecgListMixin } from '@/mixins/JeecgListMixin'
-  import TabEasyPicModal from './modules/TabEasyPicModal'
+  import TabTrainLogModal from './modules/TabTrainLogModal'
   import {filterMultiDictText} from '@/components/dict/JDictSelectUtil'
-import { filterObj } from '@/utils/util';
+
   export default {
-    name: 'TabEasyPicList',
+    name: 'TabTrainLogList',
     mixins:[JeecgListMixin, mixinDevice],
     components: {
-      TabEasyPicModal
+      TabTrainLogModal
     },
     data () {
       return {
-        description: '训练图片管理页面',
+        description: '训练日志管理页面',
         // 表头
         columns: [
           {
@@ -151,41 +123,14 @@ import { filterObj } from '@/utils/util';
             }
           },
           {
-            title:'图片类型',
+            title:'模型名称',
             align:"center",
-            dataIndex: 'picType_dictText'
+            dataIndex: 'modelId_dictText'
           },
           {
-            title:'图片名称',
+            title:'日志内容',
             align:"center",
-            dataIndex: 'picName'
-          },
-          {
-            title:'图片地址',
-            align:"center",
-            dataIndex: 'picUrl',
-            scopedSlots: {customRender: 'imgSlot'}
-          },
-          {
-            title:'备注',
-            align:"center",
-            dataIndex: 'remake'
-          },
-          {
-            title:'是否标注',
-            align:"center",
-            dataIndex: 'markType'
-          },
-          {
-            title:'标注文件',
-            align:"center",
-            dataIndex: 'markXml',
-           scopedSlots: {customRender: 'fileSlot'}
-          },
-          {
-            title:'标注标签',
-            align:"center",
-            dataIndex: 'markTitle'
+            dataIndex: 'trainLog'
           },
           {
             title: '操作',
@@ -197,11 +142,11 @@ import { filterObj } from '@/utils/util';
           }
         ],
         url: {
-          list: "/easy/tabEasyPic/list",
-          delete: "/easy/tabEasyPic/delete",
-          deleteBatch: "/easy/tabEasyPic/deleteBatch",
-          exportXlsUrl: "/easy/tabEasyPic/exportXls",
-          importExcelUrl: "easy/tabEasyPic/importExcel",
+          list: "/train/tabTrainLog/list",
+          delete: "/train/tabTrainLog/delete",
+          deleteBatch: "/train/tabTrainLog/deleteBatch",
+          exportXlsUrl: "/train/tabTrainLog/exportXls",
+          importExcelUrl: "train/tabTrainLog/importExcel",
           
         },
         dictOptions:{},
@@ -209,7 +154,6 @@ import { filterObj } from '@/utils/util';
       }
     },
     created() {
-     
     this.getSuperFieldList();
     },
     computed: {
@@ -218,26 +162,12 @@ import { filterObj } from '@/utils/util';
       },
     },
     methods: {
-      getQueryParams() {
-        //获取查询条件
-      
-        var param = Object.assign({},this.filters);
-        param.field = this.getQueryField();
-        param.pageNo = this.ipagination.current;
-        param.pageSize = this.ipagination.pageSize;
-        return filterObj(param);
-      },
       initDictConfig(){
       },
       getSuperFieldList(){
         let fieldList=[];
-        fieldList.push({type:'sel_search',value:'picType',text:'图片类型',dictTable:"", dictText:'', dictCode:'pic_type'})
-        fieldList.push({type:'string',value:'picName',text:'图片名称',dictCode:''})
-        fieldList.push({type:'string',value:'picUrl',text:'图片地址',dictCode:''})
-        fieldList.push({type:'string',value:'remake',text:'备注',dictCode:''})
-        fieldList.push({type:'string',value:'markType',text:'是否标注',dictCode:''})
-        fieldList.push({type:'string',value:'markXml',text:'标注文件',dictCode:''})
-        fieldList.push({type:'string',value:'markTitle',text:'标注标签',dictCode:''})
+        fieldList.push({type:'string',value:'modelId',text:'模型名称',dictCode:"tab_model_try,model_name,id"})
+        fieldList.push({type:'Text',value:'trainLog',text:'日志内容',dictCode:''})
         this.superFieldList = fieldList
       }
     }

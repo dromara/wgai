@@ -5,19 +5,29 @@
       <a-form layout="inline" @keyup.enter.native="searchQuery">
         <a-row :gutter="24">
           <a-col :xl="6" :lg="7" :md="8" :sm="24">
-            <a-form-item label="图片名称">
-              <a-input placeholder="请输入图片名称" v-model="queryParam.picName"></a-input>
+            <a-form-item label="脚本名称">
+              <a-input placeholder="请输入脚本名称" v-model="queryParam.pyName"></a-input>
             </a-form-item>
           </a-col>
           <a-col :xl="6" :lg="7" :md="8" :sm="24">
-            <a-form-item label="图片地址">
-              <a-input placeholder="请输入图片地址" v-model="queryParam.picUrl"></a-input>
+            <a-form-item label="脚本文件">
+              <a-input placeholder="请输入脚本文件" v-model="queryParam.pyUrl"></a-input>
             </a-form-item>
           </a-col>
           <template v-if="toggleSearchStatus">
             <a-col :xl="6" :lg="7" :md="8" :sm="24">
-              <a-form-item label="备注">
-                <a-input placeholder="请输入备注" v-model="queryParam.remake"></a-input>
+              <a-form-item label="文件放置地址">
+                <a-input placeholder="请输入文件放置地址" v-model="queryParam.pyPath"></a-input>
+              </a-form-item>
+            </a-col>
+            <a-col :xl="6" :lg="7" :md="8" :sm="24">
+              <a-form-item label="脚本备注">
+                <a-input placeholder="请输入脚本备注" v-model="queryParam.pyRemake"></a-input>
+              </a-form-item>
+            </a-col>
+            <a-col :xl="6" :lg="7" :md="8" :sm="24">
+              <a-form-item label="脚本类型">
+                <j-dict-select-tag placeholder="请选择脚本类型" v-model="queryParam.pyType" dictCode="py_type"/>
               </a-form-item>
             </a-col>
           </template>
@@ -39,7 +49,7 @@
     <!-- 操作按钮区域 -->
     <div class="table-operator">
       <a-button @click="handleAdd" type="primary" icon="plus">新增</a-button>
-      <a-button type="primary" icon="download" @click="handleExportXls('训练图片')">导出</a-button>
+      <a-button type="primary" icon="download" @click="handleExportXls('训练脚本模板')">导出</a-button>
       <a-upload name="file" :showUploadList="false" :multiple="false" :headers="tokenHeader" :action="importExcelUrl" @change="handleImportExcel">
         <a-button type="primary" icon="import">导入</a-button>
       </a-upload>
@@ -65,7 +75,6 @@
         size="middle"
         :scroll="{x:true}"
         bordered
-  
         rowKey="id"
         :columns="columns"
         :dataSource="dataSource"
@@ -96,6 +105,9 @@
         </template>
 
         <span slot="action" slot-scope="text, record">
+           
+          <a @click="startOne(record)">单步运行</a>
+          <a-divider type="vertical" />
           <a @click="handleEdit(record)">编辑</a>
 
           <a-divider type="vertical" />
@@ -117,27 +129,31 @@
       </a-table>
     </div>
 
-    <tab-easy-pic-modal ref="modalForm" @ok="modalFormOk"></tab-easy-pic-modal>
+    <tab-train-python-modal ref="modalForm" @ok="modalFormOk"></tab-train-python-modal>
   </a-card>
 </template>
 
 <script>
-
+import { filterObj } from '@/utils/util';
   import '@/assets/less/TableExpand.less'
   import { mixinDevice } from '@/utils/mixin'
   import { JeecgListMixin } from '@/mixins/JeecgListMixin'
-  import TabEasyPicModal from './modules/TabEasyPicModal'
+  import TabTrainPythonModal from './modules/TabTrainPythonModal'
   import {filterMultiDictText} from '@/components/dict/JDictSelectUtil'
-import { filterObj } from '@/utils/util';
+  import {
+    httpAction,
+    getAction,
+    uploadAction 
+  } from '@/api/manage'
   export default {
-    name: 'TabEasyPicList',
+    name: 'TabTrainPythonList',
     mixins:[JeecgListMixin, mixinDevice],
     components: {
-      TabEasyPicModal
+      TabTrainPythonModal
     },
     data () {
       return {
-        description: '训练图片管理页面',
+        description: '训练脚本模板管理页面',
         // 表头
         columns: [
           {
@@ -151,41 +167,36 @@ import { filterObj } from '@/utils/util';
             }
           },
           {
-            title:'图片类型',
+            title:'脚本名称',
             align:"center",
-            dataIndex: 'picType_dictText'
+            dataIndex: 'pyName'
           },
           {
-            title:'图片名称',
+            title:'脚本文件',
             align:"center",
-            dataIndex: 'picName'
+            dataIndex: 'pyUrl',
+            scopedSlots: {customRender: 'fileSlot'}
           },
           {
-            title:'图片地址',
+            title:'文件放置地址',
             align:"center",
-            dataIndex: 'picUrl',
-            scopedSlots: {customRender: 'imgSlot'}
+            dataIndex: 'pyPath'
           },
           {
-            title:'备注',
+            title:'脚本备注',
             align:"center",
-            dataIndex: 'remake'
+            dataIndex: 'pyRemake'
           },
           {
-            title:'是否标注',
+            title:'脚本类型',
             align:"center",
-            dataIndex: 'markType'
+            dataIndex: 'pyType_dictText'
           },
           {
-            title:'标注文件',
+            title:'执行顺序',
             align:"center",
-            dataIndex: 'markXml',
-           scopedSlots: {customRender: 'fileSlot'}
-          },
-          {
-            title:'标注标签',
-            align:"center",
-            dataIndex: 'markTitle'
+            sorter: true,
+            dataIndex: 'pySort'
           },
           {
             title: '操作',
@@ -197,11 +208,11 @@ import { filterObj } from '@/utils/util';
           }
         ],
         url: {
-          list: "/easy/tabEasyPic/list",
-          delete: "/easy/tabEasyPic/delete",
-          deleteBatch: "/easy/tabEasyPic/deleteBatch",
-          exportXlsUrl: "/easy/tabEasyPic/exportXls",
-          importExcelUrl: "easy/tabEasyPic/importExcel",
+          list: "/train/tabTrainPython/list",
+          delete: "/train/tabTrainPython/delete",
+          deleteBatch: "/train/tabTrainPython/deleteBatch",
+          exportXlsUrl: "/train/tabTrainPython/exportXls",
+          importExcelUrl: "train/tabTrainPython/importExcel",
           
         },
         dictOptions:{},
@@ -209,7 +220,6 @@ import { filterObj } from '@/utils/util';
       }
     },
     created() {
-     
     this.getSuperFieldList();
     },
     computed: {
@@ -225,20 +235,33 @@ import { filterObj } from '@/utils/util';
         param.field = this.getQueryField();
         param.pageNo = this.ipagination.current;
         param.pageSize = this.ipagination.pageSize;
+        param.column="pySort";
+        param.order="asc";
         return filterObj(param);
       },
       initDictConfig(){
       },
       getSuperFieldList(){
         let fieldList=[];
-        fieldList.push({type:'sel_search',value:'picType',text:'图片类型',dictTable:"", dictText:'', dictCode:'pic_type'})
-        fieldList.push({type:'string',value:'picName',text:'图片名称',dictCode:''})
-        fieldList.push({type:'string',value:'picUrl',text:'图片地址',dictCode:''})
-        fieldList.push({type:'string',value:'remake',text:'备注',dictCode:''})
-        fieldList.push({type:'string',value:'markType',text:'是否标注',dictCode:''})
-        fieldList.push({type:'string',value:'markXml',text:'标注文件',dictCode:''})
-        fieldList.push({type:'string',value:'markTitle',text:'标注标签',dictCode:''})
+        fieldList.push({type:'string',value:'pyName',text:'脚本名称',dictCode:''})
+        fieldList.push({type:'string',value:'pyUrl',text:'脚本文件',dictCode:''})
+        fieldList.push({type:'string',value:'pyPath',text:'文件放置地址',dictCode:''})
+        fieldList.push({type:'string',value:'pyRemake',text:'脚本备注',dictCode:''})
+        fieldList.push({type:'string',value:'pyType',text:'脚本类型',dictCode:'py_type'})
+        fieldList.push({type:'int',value:'pySort',text:'执行顺序',dictCode:''})
         this.superFieldList = fieldList
+      },
+      startOne(record){
+        let that=this;
+        getAction("/train/tabTrainPython/startOnePy", {sort:record.pySort}).then((res) => {
+          if (res.success) {
+        
+             that.$message.success("单步执行");
+          
+          } else {
+             that.$message.warning("单步执行失败");
+          }
+        })
       }
     }
   }
