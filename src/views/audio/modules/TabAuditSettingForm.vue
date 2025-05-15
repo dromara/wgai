@@ -4,6 +4,11 @@
       <a-form-model ref="form" :model="model" :rules="validatorRules" slot="detail">
         <a-row>
           <a-col :span="24">
+            <a-form-model-item label="语音类型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="audioType">
+              <j-dict-select-tag type="list" v-model="model.audioType" dictCode="audio_type" placeholder="请选择是语音类型" />
+            </a-form-model-item>
+          </a-col>
+          <a-col :span="24">
             <a-form-model-item label="是否使用" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="isStart">
               <j-dict-select-tag type="list" v-model="model.isStart" dictCode="run_state" placeholder="请选择是否使用" />
             </a-form-model-item>
@@ -85,9 +90,9 @@
         },
         confirmLoading: false,
         validatorRules: {
-           hotWord: [
-              { required: true, message: '请输入热词!'},
-           ],
+           // hotWord: [
+           //    { required: true, message: '请输入热词!'},
+           // ],
            encoderPath: [
               { required: true, message: '请输入encoder权重!'},
            ],
@@ -106,6 +111,8 @@
            decodingMethod: [
               { required: true, message: '请输入识别模式!'},
            ],
+           isStart:[ { required: true, message: '请选择是否使用!'},],
+           audioType:[ { required: true, message: '请选择语音类型!'},]
         },
         url: {
           add: "/audio/tabAuditSetting/add",

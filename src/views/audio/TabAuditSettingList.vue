@@ -164,6 +164,11 @@
             }
           },
           {
+            title:'语音模型类型',
+            align:"center",
+            dataIndex: 'audioType_dictText'
+          },
+          {
             title:'是否使用',
             align:"center",
             dataIndex: 'isStart_dictText'

@@ -4,48 +4,28 @@
       <a-form-model ref="form" :model="model" :rules="validatorRules" slot="detail">
         <a-row>
           <a-col :span="24">
-            <a-form-model-item label="英文标签名称" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="englishName">
-              <a-input v-model="model.englishName" placeholder="请输入英文标签名称"  ></a-input>
+            <a-form-model-item label="脚本名称" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="pyName">
+              <a-input v-model="model.pyName" placeholder="请输入脚本名称"  ></a-input>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="中文标签名称" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="chainName">
-              <a-input v-model="model.chainName" placeholder="请输入中文标签名称"  ></a-input>
+            <a-form-model-item label="脚本地址" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="pyUrl">
+              <a-input v-model="model.pyUrl" placeholder="请输入脚本地址"  ></a-input>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="RGB颜色代码" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="rgbColor">
-              <a-input v-model="model.rgbColor" placeholder="请输入RGB颜色代码"  ></a-input>
+            <a-form-model-item label="脚本文件" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="pyPath">
+              <j-upload v-model="model.pyPath"   ></j-upload>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="CSS颜色代码" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="cssColor">
-              <a-input v-model="model.cssColor" placeholder="请输入CSS颜色代码"  ></a-input>
+            <a-form-model-item label="脚本类型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="pyType">
+              <j-dict-select-tag type="list" v-model="model.pyType" dictCode="py_type" placeholder="请选择脚本类型" />
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="示例图片" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="sendUrl">
-              <j-image-upload isMultiple  v-model="model.sendUrl" ></j-image-upload>
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="报警内容" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="remark">
-              <a-input v-model="model.remark" placeholder="请输入报警内容"  ></a-input>
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="语音播报内容" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="spaceOne">
-              <a-input v-model="model.spaceOne" placeholder="请输入语音播报内容"  ></a-input>
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="计数数量" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="spaceTwo">
-              <a-input type="number"  v-model="model.spaceTwo"  placeholder="请输入计数数量"  ></a-input>
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="是否推送第三方" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="spaceThree">
-                  <j-switch v-model="model.spaceThree"  ></j-switch>
+            <a-form-model-item label="脚本顺序" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="pysort">
+              <a-input-number v-model="model.pysort" placeholder="请输入脚本顺序" style="width: 100%" />
             </a-form-model-item>
           </a-col>
         </a-row>
@@ -60,7 +40,7 @@
   import { validateDuplicateValue } from '@/utils/util'
 
   export default {
-    name: 'TabAiBaseForm',
+    name: 'TabSzrPythonForm',
     components: {
     },
     props: {
@@ -87,9 +67,9 @@
         validatorRules: {
         },
         url: {
-          add: "/tab/tabAiBase/add",
-          edit: "/tab/tabAiBase/edit",
-          queryById: "/tab/tabAiBase/queryById"
+          add: "/szr/tabSzrPython/add",
+          edit: "/szr/tabSzrPython/edit",
+          queryById: "/szr/tabSzrPython/queryById"
         }
       }
     },

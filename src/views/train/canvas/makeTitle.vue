@@ -15,7 +15,7 @@
 
       <h3>标注图片列表 ∨</h3>
       <div class="image-list">
-        <div v-for="(image, index) in imageList" :key="index" class="image-item" @click="selectImage(image)">
+        <div v-for="(image, index) in imageList" :key="index" :style="{ backgroundColor: isSelected(image) ? '#00ff2f' : '#ccc' }"  class="image-item" @click="selectImage(image)">
           <img :src="image.src" :alt="image.name" />
           <p style="font-size: 13px;">{{ image.name }}</p>
           <span v-if="isSelected(image)||image.markFlat=='Y'" class="selected-indicator">{{markIcon}}</span>
@@ -36,7 +36,11 @@
       <div class="header2">
         <h3 style="float: left;">标注结果:</h3>
         <!-- 保存按钮居右 -->
-        <a-button style="float:right" type="primary" @click="saveAnnotations">保存</a-button>
+        <a-button style="float:right;p" type="danger" @click="deleteAnnotations">删除</a-button> 
+        
+        
+        <a-button style="float:right;margin-right:5%" type="primary" @click="saveAnnotations">保存</a-button>
+    
       </div>
       <br /><br />
       <div v-if="rectangles.length">
@@ -54,7 +58,7 @@
     </div>
 
     <!-- 使用 Ant Design Vue 的 Modal 弹框输入标签 -->
-    <a-modal v-model="isModalVisible" title="请输入标注名称"   @open="handleModalVisibleChange"  @ok="handleOk" @cancel="handleCancel">
+    <a-modal v-model="isModalVisible" title="请输入标注名称"    @ok="handleOk" @cancel="handleCancel">
       <a-input    ref="inputRef" v-model="currentLabel" placeholder="输入标注名称"  @keydown.enter="handleOk" />
     </a-modal>
 
@@ -70,7 +74,8 @@
   import {
     httpAction,
     getAction,
-    postAction
+    postAction,
+    deleteAction
   } from '@/api/manage'
   import store from '@/store/'
   import Vue from 'vue'
@@ -164,7 +169,8 @@
                 id: i.id,
                 name: i.picName,
                 src: that.ImageUrl + i.picUrl,
-                markFlat:i.markType
+                markFlat:i.markType,
+                markFeature:i.markFeature
               })
             }
 
@@ -203,7 +209,7 @@
       },
       isSelected(image) {
             return this.selectedImage === image;
-          },
+      },
       // 标注图片
       selectImage(image) {
         this.currentImage = image;
@@ -211,7 +217,7 @@
         console.log("图片宽度", this.image.width);
         console.log("图片长度", this.image.height);
         if(this.currentImage.markFlat=="Y"){
-          this.markText="已完成标注/需要重新标注请重新绘制"
+          this.markText=(this.currentImage.markFeature==null?"标注图":this.currentImage.markFeature)+":已完成标注/需要重新标注请重新绘制"
         }else{
           this.markText="暂无标注";
   
@@ -370,6 +376,22 @@
 
         console.log("annotations", annotations);
         console.log("picXmlList", picXmlList);
+        if(picXmlList.length==0){
+          if(this.currentImage){
+              let picId=this.currentImage.id;
+              if(picId){
+                picXmlList.push({
+                  picId: picId,
+                })
+              }else{
+                 this.$message.warn(`请先选择图片再进行保存`) 
+                 return;
+              }
+          }else{
+                this.$message.warn(`请先选择图片再进行保存`)
+                return;
+          }
+        }
         postAction("/train/tabModelTry/addMarkPic", picXmlList).then(res => {
           if (res.success) {
             this.$message.success(`保存成功！`)
@@ -416,6 +438,32 @@
         //   a.click();
         //   URL.revokeObjectURL(url);
       },
+      deleteAnnotations(){
+       
+         console.log(this.currentImage);
+         let picId=this.currentImage.id;
+         let that=this;
+         if(picId){
+           this.$confirm({
+             title: "确认删除图片吗？",
+             content: "图片删除不可恢复！",
+             onOk: function() {
+          
+               deleteAction("/easy/tabEasyPic/delete", {id: picId}).then((res) => {
+                 if (res.success) {
+                   //重新计算分页问题
+                  
+                   that.$message.success(res.message);
+                  that.getImageList(that.formData.searchValue)
+                 } else {
+                   that.$message.warning(res.message);
+                 }
+               });
+               
+             }
+           });
+         }
+      }
     },
   };
 </script>

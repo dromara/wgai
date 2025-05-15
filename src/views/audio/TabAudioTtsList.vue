@@ -4,53 +4,6 @@
     <div class="table-page-search-wrapper">
       <a-form layout="inline" @keyup.enter.native="searchQuery">
         <a-row :gutter="24">
-          <a-col :xl="6" :lg="7" :md="8" :sm="24">
-
-             <a-form-item label="所属模型" >
-       <!--        <j-dict-select-tag v-model="model.modelId" dictCode="tab_model_try,model_name,id"  /> -->
-                             <j-search-select-tag v-model="queryParam.modelId" dict="tab_model_try,model_name,id"  />
-             </a-form-item>
-          </a-col>
-          <a-col :xl="6" :lg="7" :md="8" :sm="24">
-          
-                <a-form-item label="是否标注" >
-          <!--        <j-dict-select-tag v-model="model.modelId" dictCode="tab_model_try,model_name,id"  /> -->
-                                <j-search-select-tag v-model="queryParam.markType" dict="is_open"  />
-                </a-form-item>
-             </a-col>
-          <a-col :xl="6" :lg="7" :md="8" :sm="24">
-            <a-form-item label="图片名称">
-              <a-input placeholder="请输入图片名称" v-model="queryParam.picName"></a-input>
-            </a-form-item>
-          </a-col>
-          <a-col :xl="6" :lg="7" :md="8" :sm="24">
-            <a-form-item label="图片地址">
-              <a-input placeholder="请输入图片地址" v-model="queryParam.picUrl"></a-input>
-            </a-form-item>
-          </a-col>
-          
-          <a-col :xl="6" :lg="7" :md="8" :sm="24">
-            <a-form-item label="标注特征">
-              <a-input placeholder="请输入标注特征" v-model="queryParam.markFeature"></a-input>
-            </a-form-item>
-          </a-col>
-          <template v-if="toggleSearchStatus">
-            <a-col :xl="6" :lg="7" :md="8" :sm="24">
-              <a-form-item label="备注">
-                <a-input placeholder="请输入备注" v-model="queryParam.remake"></a-input>
-              </a-form-item>
-            </a-col>
-          </template>
-          <a-col :xl="6" :lg="7" :md="8" :sm="24">
-            <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
-              <a-button type="primary" @click="searchQuery" icon="search">查询</a-button>
-              <a-button type="primary" @click="searchReset" icon="reload" style="margin-left: 8px">重置</a-button>
-              <a @click="handleToggleSearch" style="margin-left: 8px">
-                {{ toggleSearchStatus ? '收起' : '展开' }}
-                <a-icon :type="toggleSearchStatus ? 'up' : 'down'"/>
-              </a>
-            </span>
-          </a-col>
         </a-row>
       </a-form>
     </div>
@@ -59,7 +12,7 @@
     <!-- 操作按钮区域 -->
     <div class="table-operator">
       <a-button @click="handleAdd" type="primary" icon="plus">新增</a-button>
-      <a-button type="primary" icon="download" @click="handleExportXls('训练图片')">导出</a-button>
+      <a-button type="primary" icon="download" @click="handleExportXls('文本转TTS')">导出</a-button>
       <a-upload name="file" :showUploadList="false" :multiple="false" :headers="tokenHeader" :action="importExcelUrl" @change="handleImportExcel">
         <a-button type="primary" icon="import">导入</a-button>
       </a-upload>
@@ -85,7 +38,6 @@
         size="middle"
         :scroll="{x:true}"
         bordered
-  
         rowKey="id"
         :columns="columns"
         :dataSource="dataSource"
@@ -115,9 +67,15 @@
           </a-button>
         </template>
 
+ <template slot="audio" slot-scope="text,record">
+          <span v-if="!text" style="font-size: 12px;font-style: italic;">无文件</span>
+           <audio   v-else controls :src="getImgView(record.savePath)"></audio>
+        </template>
+
         <span slot="action" slot-scope="text, record">
           <a @click="handleEdit(record)">编辑</a>
-
+          <a-divider type="vertical" />
+          <a @click="handleTextToSpeed(record)">转文字</a>
           <a-divider type="vertical" />
           <a-dropdown>
             <a class="ant-dropdown-link">更多 <a-icon type="down" /></a>
@@ -137,7 +95,7 @@
       </a-table>
     </div>
 
-    <tab-easy-pic-modal ref="modalForm" @ok="modalFormOk"></tab-easy-pic-modal>
+    <tab-audio-tts-modal ref="modalForm" @ok="modalFormOk"></tab-audio-tts-modal>
   </a-card>
 </template>
 
@@ -146,18 +104,21 @@
   import '@/assets/less/TableExpand.less'
   import { mixinDevice } from '@/utils/mixin'
   import { JeecgListMixin } from '@/mixins/JeecgListMixin'
-  import TabEasyPicModal from './modules/TabEasyPicModal'
+  import TabAudioTtsModal from './modules/TabAudioTtsModal'
   import {filterMultiDictText} from '@/components/dict/JDictSelectUtil'
-import { filterObj } from '@/utils/util';
+  import {
+    httpAction,
+    getAction
+  } from '@/api/manage'
   export default {
-    name: 'TabEasyPicList',
+    name: 'TabAudioTtsList',
     mixins:[JeecgListMixin, mixinDevice],
     components: {
-      TabEasyPicModal
+      TabAudioTtsModal
     },
     data () {
       return {
-        description: '训练图片管理页面',
+        description: '文本转TTS管理页面',
         // 表头
         columns: [
           {
@@ -171,45 +132,73 @@ import { filterObj } from '@/utils/util';
             }
           },
           {
-            title:'图片类型',
+            title:'语音类型',
             align:"center",
-            dataIndex: 'picType_dictText'
+            dataIndex: 'audioType_dictText'
           },
           {
-            title:'图片名称',
+            title:'语音名称',
             align:"center",
-            dataIndex: 'picName'
+            dataIndex: 'audioName'
           },
           {
-            title:'图片地址',
+            title:'模型文件',
             align:"center",
-            dataIndex: 'picUrl',
-            scopedSlots: {customRender: 'imgSlot'}
+            dataIndex: 'audioModel',
+            scopedSlots: {customRender: 'fileSlot'}
           },
           {
-            title:'备注',
+            title:'token文件',
             align:"center",
-            dataIndex: 'remake'
+            dataIndex: 'audioToken',
+            scopedSlots: {customRender: 'fileSlot'}
           },
           {
-            title:'是否标注',
+            title:'lexicon文件',
             align:"center",
-            dataIndex: 'markType'
+            dataIndex: 'audioLexicon',
+            scopedSlots: {customRender: 'fileSlot'}
           },
           {
-            title:'标注文件',
+            title:'Dict目录',
             align:"center",
-            dataIndex: 'markXml',
-           scopedSlots: {customRender: 'fileSlot'}
+            dataIndex: 'dictDir',
+            scopedSlots: {customRender: 'fileSlot'}
           },
           {
-            title:'标注标签',
+            title:'fsts多文件地址',
             align:"center",
-            dataIndex: 'markTitle'
-          },  {
-            title:'标注特征',
+            dataIndex: 'ruleFasts',
+            scopedSlots: {customRender: 'fileSlot'}
+          },
+          {
+            title:'线程数',
             align:"center",
-            dataIndex: 'markFeature'
+            dataIndex: 'threadNum'
+          },
+          {
+            title:'音色下标',
+            align:"center",
+            dataIndex: 'audioSid'
+          },
+          {
+            title:'语音速度',
+            align:"center",
+            dataIndex: 'audioSpeed'
+          },
+          {
+            title:'转换后保存地址',
+            align:"center",
+            dataIndex: 'savePath',
+             scopedSlots: {customRender: 'audio'},
+              // customRender: function (t, r, index) {
+              //       return '<audio controls :src="record.dictDir"></audio>';
+              // }
+          },
+          {
+            title:'文本转语音内容',
+            align:"center",
+            dataIndex: 'audioText'
           },
           {
             title: '操作',
@@ -221,19 +210,18 @@ import { filterObj } from '@/utils/util';
           }
         ],
         url: {
-          list: "/easy/tabEasyPic/list",
-          delete: "/easy/tabEasyPic/delete",
-          deleteBatch: "/easy/tabEasyPic/deleteBatch",
-          exportXlsUrl: "/easy/tabEasyPic/exportXls",
-          importExcelUrl: "easy/tabEasyPic/importExcel",
-          
+          list: "/audio/tabAudioTts/list",
+          delete: "/audio/tabAudioTts/delete",
+          deleteBatch: "/audio/tabAudioTts/deleteBatch",
+          exportXlsUrl: "/audio/tabAudioTts/exportXls",
+          importExcelUrl: "audio/tabAudioTts/importExcel",
+          textToSpeed:"audio/tabAudioTts/textToSpeed"
         },
         dictOptions:{},
         superFieldList:[],
       }
     },
     created() {
-     
     this.getSuperFieldList();
     },
     computed: {
@@ -242,29 +230,52 @@ import { filterObj } from '@/utils/util';
       },
     },
     methods: {
-      getQueryParams() {
-        //获取查询条件
-      
-        var param = Object.assign(this.queryParam,this.filters);
-        param.field = this.getQueryField();
-        param.pageNo = this.ipagination.current;
-        param.pageSize = this.ipagination.pageSize;
-   
-        return filterObj(param);
-      },
       initDictConfig(){
       },
       getSuperFieldList(){
         let fieldList=[];
-        fieldList.push({type:'sel_search',value:'picType',text:'图片类型',dictTable:"", dictText:'', dictCode:'pic_type'})
-        fieldList.push({type:'string',value:'picName',text:'图片名称',dictCode:''})
-        fieldList.push({type:'string',value:'picUrl',text:'图片地址',dictCode:''})
-        fieldList.push({type:'string',value:'remake',text:'备注',dictCode:''})
-        fieldList.push({type:'string',value:'markType',text:'是否标注',dictCode:''})
-        fieldList.push({type:'string',value:'markXml',text:'标注文件',dictCode:''})
-        fieldList.push({type:'string',value:'markTitle',text:'标注标签',dictCode:''})
-          fieldList.push({type:'string',value:'markFeature',text:'标注特征',dictCode:''})
+        fieldList.push({type:'string',value:'audioType',text:'语音类型',dictCode:'audio_type'})
+        fieldList.push({type:'string',value:'audioName',text:'语音名称',dictCode:''})
+        fieldList.push({type:'string',value:'audioModel',text:'模型文件',dictCode:''})
+        fieldList.push({type:'string',value:'audioToken',text:'token文件',dictCode:''})
+        fieldList.push({type:'string',value:'audioLexicon',text:'lexicon文件',dictCode:''})
+        fieldList.push({type:'string',value:'dictDir',text:'Dict目录',dictCode:''})
+        fieldList.push({type:'string',value:'ruleFasts',text:'fsts多文件地址',dictCode:''})
+        fieldList.push({type:'int',value:'threadNum',text:'线程数',dictCode:''})
+        fieldList.push({type:'int',value:'audioSid',text:'音色下标',dictCode:''})
+        fieldList.push({type:'double',value:'audioSpeed',text:'语音速度',dictCode:''})
+        fieldList.push({type:'string',value:'savePath',text:'保存地址',dictCode:''})
+        fieldList.push({type:'string',value:'audioText',text:'文本转语音内容',dictCode:''})
         this.superFieldList = fieldList
+      },
+      handleTextToSpeed(info){
+          console.log("info", this.url);
+          let that = this;
+          this.$confirm({
+            title: "确定文字转语音吗？",
+            content: "会使用当前文字内容哦",
+            onOk: function() {
+              let httpurl = '';
+              let method = '';
+              //  debugger;
+              httpurl += that.url.textToSpeed;
+              method = 'post';
+          
+              httpAction(httpurl, info, method).then((res) => {
+                if (res.success) {
+                  that.$message.success(res.message);
+                  that.$emit('ok');
+                } else {
+                  that.$message.warning(res.message);
+                }    
+                  that.loadData();
+              }).finally(() => {
+                that.confirmLoading = false;
+                 
+              })
+          
+            }
+          });
       }
     }
   }

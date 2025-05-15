@@ -129,6 +129,26 @@
             }
           },
           {
+            title:'解码脚本',
+            align:"center",
+            dataIndex: 'pyType_dictText'
+          },
+          {
+            title:'是否需要前置',
+            align:"center",
+            dataIndex: 'isBegin_dictText'
+          },
+          {
+            title:'前置模型',
+            align:"center",
+            dataIndex: 'beginEventTypes_dictText'
+          },
+          {
+            title:'前置识别内容',
+            align:"center",
+            dataIndex: 'beginName'
+          },
+          {
             title:'订阅名称',
             align:"center",
             dataIndex: 'name'
@@ -172,6 +192,7 @@
             align:"center",
             dataIndex: 'indexCode'
           },
+        
           {
             title: '操作',
             dataIndex: 'action',

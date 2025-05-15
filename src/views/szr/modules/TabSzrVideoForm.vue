@@ -4,48 +4,33 @@
       <a-form-model ref="form" :model="model" :rules="validatorRules" slot="detail">
         <a-row>
           <a-col :span="24">
-            <a-form-model-item label="英文标签名称" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="englishName">
-              <a-input v-model="model.englishName" placeholder="请输入英文标签名称"  ></a-input>
+            <a-form-model-item label="数字人名称" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="szrName">
+              <a-input v-model="model.szrName" placeholder="请输入数字人名称"  ></a-input>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="中文标签名称" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="chainName">
-              <a-input v-model="model.chainName" placeholder="请输入中文标签名称"  ></a-input>
+            <a-form-model-item label="数字人图片" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="szrIcon">
+              <j-image-upload isMultiple  v-model="model.szrIcon" ></j-image-upload>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="RGB颜色代码" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="rgbColor">
-              <a-input v-model="model.rgbColor" placeholder="请输入RGB颜色代码"  ></a-input>
+            <a-form-model-item label="数字人视频" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="szrVideo">
+              <j-upload v-model="model.szrVideo"   ></j-upload>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="CSS颜色代码" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="cssColor">
-              <a-input v-model="model.cssColor" placeholder="请输入CSS颜色代码"  ></a-input>
+            <a-form-model-item label="数字人简介" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="szrText">
+              <a-input v-model="model.szrText" placeholder="请输入数字人简介"  ></a-input>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="示例图片" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="sendUrl">
-              <j-image-upload isMultiple  v-model="model.sendUrl" ></j-image-upload>
+            <a-form-model-item label="备注" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="szrOther">
+              <a-input v-model="model.szrOther" placeholder="请输入备注"  ></a-input>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="报警内容" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="remark">
-              <a-input v-model="model.remark" placeholder="请输入报警内容"  ></a-input>
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="语音播报内容" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="spaceOne">
-              <a-input v-model="model.spaceOne" placeholder="请输入语音播报内容"  ></a-input>
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="计数数量" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="spaceTwo">
-              <a-input type="number"  v-model="model.spaceTwo"  placeholder="请输入计数数量"  ></a-input>
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="是否推送第三方" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="spaceThree">
-                  <j-switch v-model="model.spaceThree"  ></j-switch>
+            <a-form-model-item label="数字人目录" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="szrPath">
+              <a-input v-model="model.szrPath" placeholder="请输入数字人目录"  ></a-input>
             </a-form-model-item>
           </a-col>
         </a-row>
@@ -60,7 +45,7 @@
   import { validateDuplicateValue } from '@/utils/util'
 
   export default {
-    name: 'TabAiBaseForm',
+    name: 'TabSzrVideoForm',
     components: {
     },
     props: {
@@ -87,9 +72,9 @@
         validatorRules: {
         },
         url: {
-          add: "/tab/tabAiBase/add",
-          edit: "/tab/tabAiBase/edit",
-          queryById: "/tab/tabAiBase/queryById"
+          add: "/szr/tabSzrVideo/add",
+          edit: "/szr/tabSzrVideo/edit",
+          queryById: "/szr/tabSzrVideo/queryById"
         }
       }
     },

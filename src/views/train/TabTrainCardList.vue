@@ -278,8 +278,8 @@
         }
       },
       startTrain(item) { //开始训练
-        // this.$message.error("演示demo禁止训练！");
-        // return;
+        this.$message.error("演示demo禁止训练！");
+        return;
         let that = this;
         let content = "未完全标记确认要训练吗?";
         if (item.makeNumber <= 0 || item.picNumber <= 0) {

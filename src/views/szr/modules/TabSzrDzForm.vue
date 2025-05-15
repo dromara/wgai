@@ -4,48 +4,38 @@
       <a-form-model ref="form" :model="model" :rules="validatorRules" slot="detail">
         <a-row>
           <a-col :span="24">
-            <a-form-model-item label="英文标签名称" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="englishName">
-              <a-input v-model="model.englishName" placeholder="请输入英文标签名称"  ></a-input>
+            <a-form-model-item label="数字人id" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="szrId">
+              <j-search-select-tag v-model="model.szrId" dict="tab_szr_video,szr_name,id"  />
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="中文标签名称" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="chainName">
-              <a-input v-model="model.chainName" placeholder="请输入中文标签名称"  ></a-input>
+            <a-form-model-item label="数字人name" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="szrName">
+              <a-input v-model="model.szrName" placeholder="请输入数字人name"  ></a-input>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="RGB颜色代码" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="rgbColor">
-              <a-input v-model="model.rgbColor" placeholder="请输入RGB颜色代码"  ></a-input>
+            <a-form-model-item label="数字人动作" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="szrTitle">
+              <a-input v-model="model.szrTitle" placeholder="请输入数字人动作"  ></a-input>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="CSS颜色代码" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="cssColor">
-              <a-input v-model="model.cssColor" placeholder="请输入CSS颜色代码"  ></a-input>
+            <a-form-model-item label="数字人文件" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="szrFile">
+              <j-image-upload isMultiple  v-model="model.szrFile" ></j-image-upload>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="示例图片" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="sendUrl">
-              <j-image-upload isMultiple  v-model="model.sendUrl" ></j-image-upload>
+            <a-form-model-item label="数字人帧率" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="szrFps">
+              <a-input-number v-model="model.szrFps" placeholder="请输入数字人帧率" style="width: 100%" />
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="报警内容" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="remark">
-              <a-input v-model="model.remark" placeholder="请输入报警内容"  ></a-input>
+            <a-form-model-item label="背景色" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="szrColor">
+              <a-input v-model="model.szrColor" placeholder="请输入背景色"  ></a-input>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="语音播报内容" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="spaceOne">
-              <a-input v-model="model.spaceOne" placeholder="请输入语音播报内容"  ></a-input>
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="计数数量" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="spaceTwo">
-              <a-input type="number"  v-model="model.spaceTwo"  placeholder="请输入计数数量"  ></a-input>
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="是否推送第三方" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="spaceThree">
-                  <j-switch v-model="model.spaceThree"  ></j-switch>
+            <a-form-model-item label="数字人标签" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="szrBq">
+              <a-input v-model="model.szrBq" placeholder="请输入数字人标签"  ></a-input>
             </a-form-model-item>
           </a-col>
         </a-row>
@@ -60,7 +50,7 @@
   import { validateDuplicateValue } from '@/utils/util'
 
   export default {
-    name: 'TabAiBaseForm',
+    name: 'TabSzrDzForm',
     components: {
     },
     props: {
@@ -87,9 +77,9 @@
         validatorRules: {
         },
         url: {
-          add: "/tab/tabAiBase/add",
-          edit: "/tab/tabAiBase/edit",
-          queryById: "/tab/tabAiBase/queryById"
+          add: "/szr/tabSzrDz/add",
+          edit: "/szr/tabSzrDz/edit",
+          queryById: "/szr/tabSzrDz/queryById"
         }
       }
     },

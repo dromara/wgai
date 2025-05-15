@@ -12,18 +12,18 @@
     <!-- 操作按钮区域 -->
     <div class="table-operator">
       <a-button @click="handleAdd" type="primary" icon="plus">新增</a-button>
-      <a-button type="primary" icon="download" @click="handleExportXls('AI模型')">导出</a-button>
+      <a-button type="primary" icon="download" @click="handleExportXls('数字人')">导出</a-button>
       <a-upload name="file" :showUploadList="false" :multiple="false" :headers="tokenHeader" :action="importExcelUrl" @change="handleImportExcel">
         <a-button type="primary" icon="import">导入</a-button>
       </a-upload>
       <!-- 高级查询区域 -->
       <j-super-query :fieldList="superFieldList" ref="superQueryModal" @handleSuperQuery="handleSuperQuery"></j-super-query>
-    <!--  <a-dropdown v-if="selectedRowKeys.length > 0">
+      <a-dropdown v-if="selectedRowKeys.length > 0">
         <a-menu slot="overlay">
           <a-menu-item key="1" @click="batchDel"><a-icon type="delete"/>删除</a-menu-item>
         </a-menu>
         <a-button style="margin-left: 8px"> 批量操作 <a-icon type="down" /></a-button>
-      </a-dropdown> -->
+      </a-dropdown>
     </div>
 
     <!-- table区域-begin -->
@@ -67,10 +67,12 @@
           </a-button>
         </template>
 
-<!--        <span slot="action" slot-scope="text, record">
-        <a @click="handleEdit(record)">编辑</a>
+        <span slot="action" slot-scope="text, record">
+          <a @click="handleEdit(record)">编辑</a>
+
           <a-divider type="vertical" />
-          <a @click="handleNext(record)">模型下发</a>
+          <a @click="startTrain(record)">开始训练</a>
+          
           <a-divider type="vertical" />
           <a-dropdown>
             <a class="ant-dropdown-link">更多 <a-icon type="down" /></a>
@@ -85,12 +87,12 @@
               </a-menu-item>
             </a-menu>
           </a-dropdown>
-        </span> -->
+        </span>
 
       </a-table>
     </div>
 
-    <tab-ai-model-modal ref="modalForm" @ok="modalFormOk"></tab-ai-model-modal>
+    <tab-szr-video-modal ref="modalForm" @ok="modalFormOk"></tab-szr-video-modal>
   </a-card>
 </template>
 
@@ -99,20 +101,21 @@
   import '@/assets/less/TableExpand.less'
   import { mixinDevice } from '@/utils/mixin'
   import { JeecgListMixin } from '@/mixins/JeecgListMixin'
-  import TabAiModelModal from './modules/TabAiModelModal'
+  import TabSzrVideoModal from './modules/TabSzrVideoModal'
   import {
     httpAction,
-    getAction
+    getAction,
+    uploadAction 
   } from '@/api/manage'
   export default {
-    name: 'TabAiModelList',
+    name: 'TabSzrVideoList',
     mixins:[JeecgListMixin, mixinDevice],
     components: {
-      TabAiModelModal
+      TabSzrVideoModal
     },
     data () {
       return {
-        description: 'AI模型管理页面',
+        description: '数字人管理页面',
         // 表头
         columns: [
           {
@@ -126,33 +129,61 @@
             }
           },
           {
-            title:'AI模型名称',
+            title:'数字人名称',
             align:"center",
-            dataIndex: 'aiName'
+            dataIndex: 'szrName'
           },
           {
-            title:'AI模型类型',
+            title:'数字人图片',
             align:"center",
-            dataIndex: 'spareOne_dictText'
+            dataIndex: 'szrIcon',
+            scopedSlots: {customRender: 'imgSlot'}
           },
-          // {
-          //   title:'AI权重文件',
-          //   align:"center",
-          //   dataIndex: 'aiWeights',
-          //   scopedSlots: {customRender: 'fileSlot'}
-          // },
-          // {
-          //   title:'AI配置文件',
-          //   align:"center",
-          //   dataIndex: 'aiConfig',
-          //   scopedSlots: {customRender: 'fileSlot'}
-          // },
-          // {
-          //   title:'AIName文件',
-          //   align:"center",
-          //   dataIndex: 'aiNameName',
-          //   scopedSlots: {customRender: 'fileSlot'}
-          // },
+          {
+            title:'数字人视频',
+            align:"center",
+            dataIndex: 'szrVideo',
+            scopedSlots: {customRender: 'fileSlot'}
+          },
+          {
+            title:'数字人简介',
+            align:"center",
+            dataIndex: 'szrText'
+          },
+          {
+            title:'备注',
+            align:"center",
+            dataIndex: 'szrOther'
+          },
+          {
+            title:'数字人目录',
+            align:"center",
+            dataIndex: 'szrPath'
+          },
+          {
+            title:'训练状态',
+            align:"center",
+            dataIndex: 'starFlag',
+            customRender:function (t,r,index) {
+              console.log("t,r",t,r)
+              if(t==null||t==0){
+                return '未在训练'
+              }
+              return '训练中'
+            }
+          },
+          {
+            title:'是否可用',
+            align:"center",
+            dataIndex: 'isOk',
+            customRender:function (t,r,index) {
+              console.log("t,r",t,r)
+              if(t==null||t==0){
+                return '不可用'
+              }
+              return '可用'
+            }
+          },
           {
             title: '操作',
             dataIndex: 'action',
@@ -163,12 +194,12 @@
           }
         ],
         url: {
-          list: "/tab/tabAiModel/list",
-          delete: "/tab/tabAiModel/delete",
-          deleteBatch: "/tab/tabAiModel/deleteBatch",
-          exportXlsUrl: "/tab/tabAiModel/exportXls",
-          importExcelUrl: "tab/tabAiModel/importExcel",
-          nextUrl:"/tab/tabAiModel/nextModel"
+          list: "/szr/tabSzrVideo/list",
+          delete: "/szr/tabSzrVideo/delete",
+          deleteBatch: "/szr/tabSzrVideo/deleteBatch",
+          exportXlsUrl: "/szr/tabSzrVideo/exportXls",
+          importExcelUrl: "szr/tabSzrVideo/importExcel",
+          
         },
         dictOptions:{},
         superFieldList:[],
@@ -185,40 +216,41 @@
     methods: {
       initDictConfig(){
       },
-      handleNext(info){
-        console.log("info", this.url);
-        let that = this;
-        this.$confirm({
-          title: "确认下发模型吗",
-          content: "模型会下发到模型列表中所有地址！",
-          onOk: function() {
-            let httpurl = '';
-            let method = '';
-            //  debugger;
-            httpurl += that.url.nextUrl;
-            method = 'post';
-        
-            httpAction(httpurl, info, method).then((res) => {
-              if (res.success) {
-                that.$message.success(res.message);
-                that.$emit('ok');
-              } else {
-                that.$message.warning(res.message);
-              }
-            }).finally(() => {
-              that.confirmLoading = false;
-            })
-        
-          }
-        });
-      },
       getSuperFieldList(){
         let fieldList=[];
-        fieldList.push({type:'string',value:'aiName',text:'AI模型名称',dictCode:''})
-        fieldList.push({type:'string',value:'aiWeights',text:'AI权重文件',dictCode:''})
-        fieldList.push({type:'string',value:'aiConfig',text:'AI配置文件',dictCode:''})
-        fieldList.push({type:'string',value:'aiNameName',text:'AIName文件',dictCode:''})
+        fieldList.push({type:'string',value:'szrName',text:'数字人名称',dictCode:''})
+        fieldList.push({type:'string',value:'szrIcon',text:'数字人图片',dictCode:''})
+        fieldList.push({type:'string',value:'szrVideo',text:'数字人视频',dictCode:''})
+        fieldList.push({type:'string',value:'szrText',text:'数字人简介',dictCode:''})
+        fieldList.push({type:'string',value:'szrOther',text:'备注',dictCode:''})
+        fieldList.push({type:'string',value:'szrPath',text:'数字人目录',dictCode:''})
+        fieldList.push({type:'int',value:'starFlag',text:'训练状态',dictCode:''})
+        fieldList.push({type:'int',value:'isOk',text:'是否可用',dictCode:''})
         this.superFieldList = fieldList
+      },
+      startTrain(record){
+        let that=this;
+        getAction("/szr/tabSzrPython/startPy", {id:record.id}).then((res) => {
+          if (res.success) {
+        
+             that.$message.success("开始训练");
+          
+          } else {
+           thast.$message.warning("训练失败");
+          }
+        })
+      },
+      startTest(record){
+        let that=this;
+        getAction("/szr/tabSzrPython/testStar", {id:record.id}).then((res) => {
+          if (res.success) {
+        
+             that.$message.success("开始训练");
+          
+          } else {
+           thast.$message.warning("训练失败");
+          }
+        })
       }
     }
   }
