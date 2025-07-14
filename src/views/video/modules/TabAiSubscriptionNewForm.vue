@@ -38,11 +38,16 @@
               <a-input v-model="model.indexCode" placeholder="请输入设备编号"  ></a-input>
             </a-form-model-item>
           </a-col>
-        <!--  <a-col :span="24">
+          <a-col :span="24">
+            
+              <div style="color: red;text-align: center;"> 报警间隔需要大于录像时间，不然可能会导致报警无录像</div>
+            
+           </a-col> 
+         <a-col :span="24">
             <a-form-model-item label="同类型报警间隔" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="eventNumber">
               <a-input v-model="model.eventNumber" placeholder="请输入同类型报警间隔"  ></a-input>
             </a-form-model-item>
-          </a-col> -->
+          </a-col> 
         <!--  <a-col :span="24">
             <a-form-model-item label="报警消息" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="eventInfo">
               <a-input v-model="model.eventInfo" placeholder="请输入报警消息"  ></a-input>
@@ -191,6 +196,9 @@
            isRecording  : [
               { required: true, message: '请选择是否开启报警录像!'},
            ],
+           eventNumber  : [
+              { required: true, message: '请输入同类型报警间隔!'},
+           ]
         },
         url: {
           add: "/video/tabAiSubscriptionNew/add",

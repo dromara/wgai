@@ -154,11 +154,11 @@
             align:"center",
             dataIndex: 'indexCode'
           },
-          // {
-          //   title:'同类型报警间隔',
-          //   align:"center",
-          //   dataIndex: 'eventNumber'
-          // },
+          {
+            title:'同类型报警间隔(S/秒)',
+            align:"center",
+            dataIndex: 'eventNumber'
+          },
           // {
           //   title:'报警消息',
           //   align:"center",

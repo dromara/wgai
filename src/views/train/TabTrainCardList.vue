@@ -1,15 +1,17 @@
 <template>
   <a-card style="margin-top: 24px" :bordered="false" title="模型列表">
     <div slot="extra">
+    <a-button type="primary"  style="margin-right:20px" @click="startMakeNum()" > <a-icon type="snippets" />更新标记数</a-button>
+     
       <a-radio-group @change="handleClickRadio" :value="status">
         <a-radio-button value="">全部</a-radio-button>
         <a-radio-button value="1">已有模型</a-radio-button>
         <a-radio-button value="0">未有模型</a-radio-button>
       </a-radio-group>
-
-    <!--  <j-dict-select-tag @change="handleChange" type="select" style="margin-left: 16px; width: 272px;"
+          
+  <!-- <j-dict-select-tag @change="handleChange" type="select" style="margin-left: 16px; width: 272px;"
         :value="deviceType" :triggerChange="true" placeholder="选择设备类型" dictCode="b_production,prod_name,id" /> -->
-      <!--      <a-input-search style="margin-left: 16px; width: 272px;" />-->
+      <!--      <a-input-search style="margin-left: 16px; width: 272px;" /> -->
 
     </div>
     <a-list :grid="{gutter: 24, lg: 4, md: 2, sm: 1, xs: 1}" :dataSource="dataSource" :pagination="pagination">
@@ -215,6 +217,27 @@
 
     },
     methods: {
+      startMakeNum(){
+            let that = this;
+        this.$confirm({
+          title: '提示',
+          content: "确认更新标记数吗？",
+          onOk() {
+            getAction("/train/tabModelTry/startMakeNum").then((res) => {
+              if (res.success) {
+        
+                that.$message.success("更新成功");
+        
+              } else {
+                that.$message.warning("更新失败");
+              }
+            }).finally(() => {
+              that.reloadData();
+            })
+          },
+      
+        });
+      },
       getDevices(condition) {
         let that = this;
         console.log(condition);

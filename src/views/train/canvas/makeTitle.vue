@@ -1,46 +1,44 @@
 <template>
   <div class="container">
     <!-- 左侧：图片选择列表 -->
-    <div class="left-panel">
+    <div class="left-panel" style="width: 33%;">
       <div style="100%">
         <j-search-select-tag placeholder="请做出你的选择" @change="handleSelection" v-model="formData.searchValue"
           :dictOptions="searchOptions">
         </j-search-select-tag>
       </div>
-
-
-
-
-
-
       <h3>标注图片列表 ∨</h3>
       <div class="image-list">
-        <div v-for="(image, index) in imageList" :key="index" :style="{ backgroundColor: isSelected(image) ? '#00ff2f' : '#ccc' }"  class="image-item" @click="selectImage(image)">
+        <div v-for="(image, index) in imageList" :key="index"
+          :style="{ backgroundColor: isSelected(image) ? '#00ff2f' : '#ccc' }" class="image-item"
+          @click="selectImage(image)">
           <img :src="image.src" :alt="image.name" />
           <p style="font-size: 13px;">{{ image.name }}</p>
           <span v-if="isSelected(image)||image.markFlat=='Y'" class="selected-indicator">{{markIcon}}</span>
         </div>
-       
       </div>
+      <!-- 分页组件 -->
+      <a-pagination :current="currentPage" :total="total" :pageSize="pageSize" @change="handlePageChange"
+        style="margin-top: 10px; text-align: center" />
     </div>
 
     <!-- 右侧：画布和标注操作区域 -->
-    <div class="center-panel">
+    <div class="center-panel" style="width: 44%;">
       <div class="canvas-container">
         <canvas ref="canvas" :width="canvasWidth" :height="canvasHeight" @mousedown="startDraw" @mousemove="drawing"
           @mouseup="endDraw"></canvas>
       </div>
 
     </div>
-    <div class="right-panel">
+    <div class="right-panel" style="width: 21%;">
       <div class="header2">
         <h3 style="float: left;">标注结果:</h3>
         <!-- 保存按钮居右 -->
-        <a-button style="float:right;p" type="danger" @click="deleteAnnotations">删除</a-button> 
-        
-        
+        <a-button style="float:right;p" type="danger" @click="deleteAnnotations">删除</a-button>
+
+
         <a-button style="float:right;margin-right:5%" type="primary" @click="saveAnnotations">保存</a-button>
-    
+
       </div>
       <br /><br />
       <div v-if="rectangles.length">
@@ -58,8 +56,16 @@
     </div>
 
     <!-- 使用 Ant Design Vue 的 Modal 弹框输入标签 -->
-    <a-modal v-model="isModalVisible" title="请输入标注名称"    @ok="handleOk" @cancel="handleCancel">
-      <a-input    ref="inputRef" v-model="currentLabel" placeholder="输入标注名称"  @keydown.enter="handleOk" />
+    <a-modal v-model="isModalVisible" title="请输入标注名称" @ok="handleOk" @cancel="handleCancel">
+      <a-input ref="inputRef" v-model="currentLabel" placeholder="输入标注名称" @keydown.enter="handleOk" />
+      <div v-if="labelHistory.length" style="margin-top: 10px;">
+        <a-button type="link" @click="clearAllHistory">清空历史</a-button>
+        <span>历史记录：</span>
+        <a-tag v-for="item in labelHistory" :key="item" color="blue" closable
+          style="cursor: pointer; margin: 4px 4px 0 0;" @click="selectHistory(item)" @close="removeHistory(item)">
+          {{ item }}
+        </a-tag>
+      </div>
     </a-modal>
 
   </div>
@@ -88,6 +94,10 @@
   export default {
     data() {
       return {
+        currentPage: 1,
+        pageSize: 25, // 每页显示 8 张图片
+        total: 0,
+        modelid: '',
         formData: {},
         searchOptions: [{
           text: "选项一",
@@ -107,8 +117,8 @@
           },
 
         ],
-        markIcon:"✔",
-        markText:"暂无标注结果",
+        markIcon: "✔",
+        markText: "暂无标注结果",
         currentImage: null,
         canvasWidth: 700,
         canvasHeight: 700,
@@ -118,20 +128,21 @@
         rectangles: [],
         label: '',
         currentLabel: '', // 当前输入的标签
+        labelHistory: [],
         isModalVisible: false, // 控制 Modal 显示与隐藏
         image: new Image(),
         selectedImage: null
       };
     },
-     watch: {
-        isModalVisible(newVal) {
-          if (newVal) {
-            this.$nextTick(() => {
-              this.$refs.inputRef.focus(); // 聚焦到输入框
-            });
-          }
+    watch: {
+      isModalVisible(newVal) {
+        if (newVal) {
+          this.$nextTick(() => {
+            this.$refs.inputRef.focus(); // 聚焦到输入框
+          });
         }
-      },
+      }
+    },
     created() {
       this.getModelList();
       const value = this.$route.query.id;
@@ -146,31 +157,58 @@
 
 
     },
+    computed: {
+
+    },
+    mounted() {
+      const saved = localStorage.getItem('labelHistory');
+      if (saved) {
+        this.labelHistory = JSON.parse(saved);
+      }
+    },
     methods: {
-     
+      //清空历史信息
+      clearAllHistory() {
+        this.labelHistory = [];
+        localStorage.removeItem('labelHistory');
+      },
+      removeHistory(item) {
+        this.labelHistory = this.labelHistory.filter(i => i !== item);
+        localStorage.setItem('labelHistory', JSON.stringify(this.labelHistory));
+      },
+      handlePageChange(page) {
+        this.currentPage = page;
+        console.log(this.modelid, "当前页", this.currentPage);
+
+        this.getImageList(this.formData.searchValue)
+      },
       handleSelection(value) {
         this.formData.searchValue = value;
         this.getImageList(value)
       },
       getImageList(id) {
 
+
+
         this.ImageUrl = `${window._CONFIG['domianURL']}/sys/common/static/`;
 
         let that = this;
         getAction("/train/tabModelTry/listPic", {
-          id: id
+          id: id,
+          pageNo: that.currentPage,
+          pageSize: that.pageSize
         }).then((res) => {
           if (res.success) {
             console.log("xxxxxxxxxxxxx", res)
-
+            that.total = res.result.total;
             that.imageList = [];
-            for (let i of res.result) {
+            for (let i of res.result.records) {
               that.imageList.push({
                 id: i.id,
                 name: i.picName,
                 src: that.ImageUrl + i.picUrl,
-                markFlat:i.markType,
-                markFeature:i.markFeature
+                markFlat: i.markType,
+                markFeature: i.markFeature
               })
             }
 
@@ -208,7 +246,7 @@
 
       },
       isSelected(image) {
-            return this.selectedImage === image;
+        return this.selectedImage === image;
       },
       // 标注图片
       selectImage(image) {
@@ -216,11 +254,12 @@
         this.image.src = image.src;
         console.log("图片宽度", this.image.width);
         console.log("图片长度", this.image.height);
-        if(this.currentImage.markFlat=="Y"){
-          this.markText=(this.currentImage.markFeature==null?"标注图":this.currentImage.markFeature)+":已完成标注/需要重新标注请重新绘制"
-        }else{
-          this.markText="暂无标注";
-  
+        if (this.currentImage.markFlat == "Y") {
+          this.markText = (this.currentImage.markFeature == null ? "标注图" : this.currentImage.markFeature) +
+            ":已完成标注/需要重新标注请重新绘制"
+        } else {
+          this.markText = "暂无标注";
+
         }
         if (this.selectedImage === image) {
           // Deselect if the same image is clicked again
@@ -236,7 +275,7 @@
           console.error('Image failed to load');
         };
         //清空绘制
-        this.rectangles=[]
+        this.rectangles = []
       },
 
       // 绘制图片到 canvas
@@ -321,19 +360,28 @@
       // 弹出 Modal 输入标签
       showModal(rect) {
         this.isModalVisible = true;
-        this.currentLabel = rect.label; // 预填充当前标签
+        //   this.currentLabel = rect.label; // 预填充当前标签
         this.currentRect = rect; // 保存当前矩形，稍后更新
       },
-      handleKeyDown(event){
+      handleKeyDown(event) {
         alert("event")
+      },
+      selectHistory(item) {
+        this.currentLabel = item;
+        // 也可以立即关闭弹窗或直接触发 handleOk()
       },
       // Modal 确认按钮
       handleOk() {
         if (this.currentLabel) {
+          const trimmed = this.currentLabel.trim();
+          if (trimmed && !this.labelHistory.includes(trimmed)) {
+            this.labelHistory.push(trimmed);
+            localStorage.setItem('labelHistory', JSON.stringify(this.labelHistory));
+          }
           this.currentRect.label = this.currentLabel;
           this.drawImage(); // 重新绘制图片和标注框，显示标签
           this.isModalVisible = false; // 关闭 Modal
-        }else{
+        } else {
           this.$message.warning("当前未标注不可提交");
         }
       },
@@ -376,20 +424,20 @@
 
         console.log("annotations", annotations);
         console.log("picXmlList", picXmlList);
-        if(picXmlList.length==0){
-          if(this.currentImage){
-              let picId=this.currentImage.id;
-              if(picId){
-                picXmlList.push({
-                  picId: picId,
-                })
-              }else{
-                 this.$message.warn(`请先选择图片再进行保存`) 
-                 return;
-              }
-          }else{
-                this.$message.warn(`请先选择图片再进行保存`)
-                return;
+        if (picXmlList.length == 0) {
+          if (this.currentImage) {
+            let picId = this.currentImage.id;
+            if (picId) {
+              picXmlList.push({
+                picId: picId,
+              })
+            } else {
+              this.$message.warn(`请先选择图片再进行保存`)
+              return;
+            }
+          } else {
+            this.$message.warn(`请先选择图片再进行保存`)
+            return;
           }
         }
         postAction("/train/tabModelTry/addMarkPic", picXmlList).then(res => {
@@ -438,31 +486,33 @@
         //   a.click();
         //   URL.revokeObjectURL(url);
       },
-      deleteAnnotations(){
-       
-         console.log(this.currentImage);
-         let picId=this.currentImage.id;
-         let that=this;
-         if(picId){
-           this.$confirm({
-             title: "确认删除图片吗？",
-             content: "图片删除不可恢复！",
-             onOk: function() {
-          
-               deleteAction("/easy/tabEasyPic/delete", {id: picId}).then((res) => {
-                 if (res.success) {
-                   //重新计算分页问题
-                  
-                   that.$message.success(res.message);
+      deleteAnnotations() {
+
+        console.log(this.currentImage);
+        let picId = this.currentImage.id;
+        let that = this;
+        if (picId) {
+          this.$confirm({
+            title: "确认删除图片吗？",
+            content: "图片删除不可恢复！",
+            onOk: function() {
+
+              deleteAction("/easy/tabEasyPic/delete", {
+                id: picId
+              }).then((res) => {
+                if (res.success) {
+                  //重新计算分页问题
+
+                  that.$message.success(res.message);
                   that.getImageList(that.formData.searchValue)
-                 } else {
-                   that.$message.warning(res.message);
-                 }
-               });
-               
-             }
-           });
-         }
+                } else {
+                  that.$message.warning(res.message);
+                }
+              });
+
+            }
+          });
+        }
       }
     },
   };
@@ -470,7 +520,7 @@
 <style scoped>
   .container {
     display: flex;
-    height: 100vh;
+    height: 750px;
   }
 
   .left-panel {
@@ -483,6 +533,10 @@
   .image-list {
     display: flex;
     flex-wrap: wrap;
+
+    gap: 10px;
+    max-height: 600px;
+    overflow-y: auto;
   }
 
   .image-item {
@@ -523,6 +577,7 @@
   .controls {
     margin-top: 20px;
   }
+
   .image-item {
     padding: 5px;
     border: 1px solid #ccc;
@@ -530,12 +585,14 @@
     position: relative;
     cursor: pointer;
   }
-  
+
   .selected {
-    border: 2px solid #00f; /* Highlight selected item */
-    background-color: #f0f8ff; /* Optional background color for selected item */
+    border: 2px solid #00f;
+    /* Highlight selected item */
+    background-color: #f0f8ff;
+    /* Optional background color for selected item */
   }
-  
+
   .selected-indicator {
     position: absolute;
     top: 5px;
