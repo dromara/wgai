@@ -1,29 +1,29 @@
 <template>
-  <a-card :bordered="false">
+  <a-card class="contablelist" :bordered="false">
     <!-- 查询区域 -->
-    <div class="table-page-search-wrapper">
+    <!-- <div class="table-page-search-wrapper">
       <a-form layout="inline" @keyup.enter.native="searchQuery">
         <a-row :gutter="24">
         </a-row>
       </a-form>
-    </div>
+    </div> -->
     <!-- 查询区域-END -->
 
+ <div class="contable">
     <!-- 操作按钮区域 -->
     <div class="table-operator">
-      <a-button @click="handleAdd" type="primary" icon="plus">新增</a-button>
-      <a-button type="primary" icon="download" @click="handleExportXls('AI模型')">导出</a-button>
+      <a-button @click="handleAdd" type="primary" class="xz" icon="plus">新增</a-button>
+      <a-button type="primary" icon="download" class="dc" @click="handleExportXls('AI模型')">导出</a-button>
       <a-upload name="file" :showUploadList="false" :multiple="false" :headers="tokenHeader" :action="importExcelUrl" @change="handleImportExcel">
-        <a-button type="primary" icon="import">导入</a-button>
+        <a-button type="primary" class="dr" icon="import">导入</a-button>
       </a-upload>
       <!-- 高级查询区域 -->
-      <j-super-query :fieldList="superFieldList" ref="superQueryModal" @handleSuperQuery="handleSuperQuery"></j-super-query>
-    <!--  <a-dropdown v-if="selectedRowKeys.length > 0">
+      <a-dropdown v-if="selectedRowKeys.length > 0">
         <a-menu slot="overlay">
           <a-menu-item key="1" @click="batchDel"><a-icon type="delete"/>删除</a-menu-item>
         </a-menu>
         <a-button style="margin-left: 8px"> 批量操作 <a-icon type="down" /></a-button>
-      </a-dropdown> -->
+      </a-dropdown>
     </div>
 
     <!-- table区域-begin -->
@@ -36,7 +36,7 @@
       <a-table
         ref="table"
         size="middle"
-        :scroll="{x:true}"
+        :scroll="{x:auto}"
         bordered
         rowKey="id"
         :columns="columns"
@@ -45,6 +45,7 @@
         :loading="loading"
         :rowSelection="{selectedRowKeys: selectedRowKeys, onChange: onSelectChange}"
         class="j-table-force-nowrap"
+		
         @change="handleTableChange">
 
         <template slot="htmlSlot" slot-scope="text">
@@ -67,30 +68,31 @@
           </a-button>
         </template>
 
-       <span slot="action" slot-scope="text, record">
-        <a @click="handleEdit(record)">编辑</a>
-          <a-divider type="vertical" />
-          <a @click="handleNext(record)">模型下发</a>
-          <a-divider type="vertical" />
-          <a-dropdown>
-            <a class="ant-dropdown-link">更多 <a-icon type="down" /></a>
-            <a-menu slot="overlay">
-              <a-menu-item>
-                <a @click="handleDetail(record)">详情</a>
-              </a-menu-item>
-              <a-menu-item>
-                <a-popconfirm title="确定删除吗?" @confirm="() => handleDelete(record.id)">
-                  <a>删除</a>
-                </a-popconfirm>
-              </a-menu-item>
-            </a-menu>
-          </a-dropdown>
-        </span>
+        <span slot="action" slot-scope="text, record">
+		<a @click="handleEdit(record)">编辑</a>
+		  <a-divider type="vertical" />
+		  <a @click="handleNext(record)">模型下发</a>
+		  <a-divider type="vertical" />
+		  <a-dropdown>
+			<a class="ant-dropdown-link">更多 <a-icon type="down" /></a>
+			<a-menu slot="overlay">
+			  <a-menu-item>
+				<a @click="handleDetail(record)">详情</a>
+			  </a-menu-item>
+			  <a-menu-item>
+				<a-popconfirm title="确定删除吗?" @confirm="() => handleDelete(record.id)">
+				  <a>删除</a>
+				</a-popconfirm>
+			  </a-menu-item>
+			</a-menu>
+		  </a-dropdown>
+		</span>
 
       </a-table>
     </div>
 
-    <tab-ai-model-modal ref="modalForm" @ok="modalFormOk"></tab-ai-model-modal>
+    <tab-ai-model-modal class="contc" :width="1200" ref="modalForm" @ok="modalFormOk"></tab-ai-model-modal>
+    </div>
   </a-card>
 </template>
 
@@ -158,7 +160,7 @@
             dataIndex: 'action',
             align:"center",
             fixed:"right",
-            width:147,
+            width:200,
             scopedSlots: { customRender: 'action' }
           }
         ],
@@ -223,6 +225,8 @@
     }
   }
 </script>
+<style src="@assets/zwyStyle/css/main.css"></style>
 <style scoped>
   @import '~@assets/less/common.less';
+  /deep/ .ant-table-scroll{height: calc(100vh - 337px);}
 </style>

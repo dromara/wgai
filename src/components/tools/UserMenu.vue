@@ -33,9 +33,9 @@
     </span>
     <header-notice class="action"/>
     <a-dropdown>
-      <span class="action action-full ant-dropdown-link user-dropdown-menu">
+      <span class="action action-full ant-dropdown-link user-dropdown-menu" style="position: relative;top: -5px;">
         <a-avatar class="avatar" size="small" :src="getAvatar()"/>
-        <span v-if="isDesktop()">欢迎您，{{ nickname() }}</span>
+        <span v-if="isDesktop()">{{ nickname() }}</span>
       </span>
       <a-menu slot="overlay" class="user-dropdown-menu-wrapper">
          <!--   <a-menu-item key="0">
@@ -79,10 +79,11 @@
         </a-menu-item>-->
       </a-menu>
     </a-dropdown>
-    <span class="action">
+    <span class="action tuichu">
       <a class="logout_title" href="javascript:;" @click="handleLogout">
-        <a-icon type="logout"/>
-        <span v-if="isDesktop()">&nbsp;退出登录</span>
+        <!-- <a-icon type="logout" style="font-size: 24px;transform: rotate(-90deg);"/> -->
+		<img src="~@assets/zwyStyle/img/a-4.png">
+        <!-- <span v-if="isDesktop()">&nbsp;退出登录</span> -->
       </a>
     </span>
     <user-password ref="userPassword"></user-password>
@@ -284,4 +285,6 @@
     color: inherit;
     text-decoration: none;
   }
+  .tuichu{height:70px!important;width: 70px!important;position: relative;background: #498fff;position: relative;top:0;text-align: center;top: -12px;right: -12px;}
+  .tuichu a{position: relative;top: 9px;}
 </style>

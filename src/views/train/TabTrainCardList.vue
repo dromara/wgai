@@ -1,12 +1,12 @@
 <template>
-  <a-card style="margin-top: 24px" :bordered="false" title="模型列表">
+  <a-card class="concard" :bordered="false" title="模型列表">
     <div slot="extra">
     <a-button type="primary"  style="margin-right:20px" @click="startMakeNum()" > <a-icon type="snippets" />更新标记数</a-button>
      
       <a-radio-group @change="handleClickRadio" :value="status">
-        <a-radio-button value="">全部</a-radio-button>
-        <a-radio-button value="1">已有模型</a-radio-button>
-        <a-radio-button value="0">未有模型</a-radio-button>
+        <a-radio-button value="">●&nbsp;全部</a-radio-button>
+        <a-radio-button value="1">●&nbsp;已有模型</a-radio-button>
+        <a-radio-button value="0">●&nbsp;未有模型</a-radio-button>
       </a-radio-group>
           
   <!-- <j-dict-select-tag @change="handleChange" type="select" style="margin-left: 16px; width: 272px;"
@@ -29,74 +29,68 @@
           <a-card :hoverable="true">
             <a-card-meta @click="goDeviceInfo(item.id)">
               <div style="margin-bottom: 2px;" slot="title">
-                <img class="card-avatar" v-if="item.modelPic!=null" :src="imgPath+item.modelPic" />
-                <img class="card-avatar" v-if="item.modelPic==null" src="/logo.png" />
-                <span style="margin-left: 15px;font-size: 20px;color:#1890FF ;">
-                  {{ item.modelName }}
-                </span>
+                <!-- <img class="card-avatar" v-if="item.modelPic!=null" :src="imgPath+item.modelPic" />
+                <img class="card-avatar" v-if="item.modelPic==null" src="/logo.png" /> -->
+               <div class="title">
+				   <span class="span" style="">
+				     {{ item.modelName }}
+				   </span>
+				   <span class="span2">创建时间<span>{{item.createTime !=null?item.createTime:'????-??-?? ??:??:??' }}</span></span>
+			   </div>
 
-                <hr class="custom-hr">
-
-                <div>
-                  <span
+                <div class="txt">
+                  <!-- <span
                     style="font-size: 12px;color:#878484 ;  word-wrap: break-word; word-break: break-all; white-space: normal;width: 100%;">
                     {{ item.ramerk }}
-                  </span>
-                  </br>
-                  <a-icon style="color: #2292DD;" type="share-alt" />
-                  <span style="font-size: 14px;color:#1890FF ;">模型状态:</span>
-                  <span v-if="item.onnxIsok==1" style="margin-left: 10px"
-                    class="ant-badge-status-dot ant-badge-status-success"></span>
-                  <span v-if="item.onnxIsok==0" style="margin-left: 10px"
-                    class="ant-badge-status-dot ant-badge-status-error"></span>
-                  <span style="font-size: 12px"> {{item.onnxIsok==1?'已有模型':'未有模型'}}</span>
-                  <!--             </br> -->
-                  <a-icon style="margin-left: 15px;color: #2292DD;" type="share-alt" />
-                  <span style=" font-size: 14px;color:#1890FF ;">运行状态:</span>
-                  <span v-if="item.runState==1" style="margin-left: 10px"
-                    class="ant-badge-status-dot ant-badge-status-success"></span>
-                  <span v-if="item.runState==0" style="margin-left: 10px"
-                    class="ant-badge-status-dot ant-badge-status-error"></span>
-                  <span style="margin-left: 5px;font-size: 12px">{{item.runState==0?'未在训练':'正在训练'}}</span>
-                  </br>
+                  </span> -->
                   <div style="width: 49%;float:left">
+					  <span style="font-size: 14px;color:#51617b ;">模型状态:</span>
+					  <span v-if="item.onnxIsok==1" class="yy">已有模型</span>
+					  <span v-if="item.onnxIsok==0" class="wy">未有模型</span>
+					  <!-- <span style="font-size: 12px"> {{item.onnxIsok==1?'已有模型':'未有模型'}}</span> -->
+                              <!-- </br> -->
+                  </div>
+                  <div style="width: 49%;float:left">
+					  <span style=" font-size: 14px;color:#51617b ;">运行状态:</span>
+					  <span v-if="item.runState==1" class="yy">正在训练</span>
+					  <span v-if="item.runState==0" class="wy">未在训练</span>
+					  <!-- <span style="margin-left: 5px;font-size: 12px">{{item.runState==0?'未在训练':'正在训练'}}</span> -->
+                  </div>
+                  <div style="width: 49%;float:left">
+                    <span style=" font-size: 14px;color:#51617b ;">图片数:</span>
+                    <span style="margin-left: 5px;font-size: 12px;color:#0364ff ;">{{item.picNumber}}</span>
+                  </div>
+                  <div style="width: 49%;float:left">
+                    <span style=" font-size: 14px;color:#51617b ;">标记数:</span>
+                    <span style="margin-left: 5px;font-size: 12px;color:#0364ff ;">{{item.makeNumber==null?0:item.makeNumber}}</span>
+                  </div>
+                  <div style="width: 49%;float:left">
+                    <span style=" font-size: 14px;color:#51617b ;">未标记数:</span>
+                    <span style="margin-left: 5px;font-size: 12px;color:#0364ff ;">{{item.picNumber-item.makeNumber}}</span>
+                  </div>
+                  <div style="width: 49%;float:left">
+                    <span style=" font-size: 14px;color:#51617b ;">图片总大小:</span>
+                    <span style="margin-left: 5px;font-size: 12px;color:#0364ff ;">{{item.fileSize==null?'0':item.fileSize}}MB</span>
+                  </div>
+                  <div style="width: 100%;float:left">
+                    <span style=" font-size: 14px;color:#51617b ;">标注进度:</span>
+                    <div style="display: block; width: 100%;height: 19px;">
+						<span style="margin-left: 5px;font-size: 12px;color:#0364ff ;position: relative;top: -6px;"> <a-progress
+						    :percent="item.makeNumber/item.picNumber*100" style="width: 100%" /></span>
+					</div>
+                  </div>
+                  <div style="width: 100%;float:left">
+                    <span style=" font-size: 14px;color:#51617b ;">模型标签:</span>
+                    <div style="display: block; width: 100%;height: 19px;">
+						<span style="margin-left: 5px;font-size: 12px;color:#0364ff ;position: relative;top: -6px;"> {{item.txtInfo }}</span>
+					  </div>
+                  </div>
+                  <!-- <div style="width: 100%;float:left">
                     <a-icon style="color: #2292DD;" type="file-jpg" />
-                    <span style=" font-size: 14px;color:#1890FF ;">图片数:</span>
-                    <span style="margin-left: 5px;font-size: 12px">{{item.picNumber}}</span>
-                  </div>
-                  <div style="width: 49%;float:left">
-                    <a-icon style="color: #2292DD;" type="tags" />
-                    <span style=" font-size: 14px;color:#1890FF ;">标记数:</span>
-                    <span style="margin-left: 5px;font-size: 12px">{{item.makeNumber==null?0:item.makeNumber}}</span>
-                  </div>
-                  <div style="width: 49%;float:left">
-                    <a-icon style="color: #2292DD;" type="tag" />
-                    <span style=" font-size: 14px;color:#1890FF ;">未标记数:</span>
-                    <span style="margin-left: 5px;font-size: 12px">{{item.picNumber-item.makeNumber}}</span>
-                  </div>
-                  <div style="width: 49%;float:left">
-                    <a-icon style="color: #2292DD;" type="save" />
-                    <span style=" font-size: 14px;color:#1890FF ;">图片总大小:</span>
-                    <span style="margin-left: 5px;font-size: 12px">{{item.fileSize==null?'0':item.fileSize}}MB</span>
-                  </div>
-                  <div style="width: 100%;float:left">
-                    <a-icon style="color: #2292DD;" type="box-plot" />
-                    <span style=" font-size: 14px;color:#1890FF ;">标注进度:</span>
-                    <span style="margin-left: 5px;font-size: 12px"> <a-progress
-                        :percent="item.makeNumber/item.picNumber*100" style="width: 100%" /></span>
-                  </div>
-                  <div style="width: 100%;float:left">
-                    <a-icon style="color: #2292DD;" type="file" />
-                    <span style=" font-size: 14px;color:#1890FF ;">模型标签:</span>
-                    <span
-                      style="margin-left: 5px;font-size: 12px">{{item.txtInfo }}</span>
-                  </div>
-                  <div style="width: 100%;float:left">
-                    <a-icon style="color: #2292DD;" type="file-jpg" />
-                    <span style=" font-size: 14px;color:#1890FF ;">创建时间:</span>
+                    <span style=" font-size: 14px;color:#0364ff ;">创建时间:</span>
                     <span
                       style="margin-left: 5px;font-size: 12px">{{item.createTime !=null?item.createTime:'????-??-?? ??:??:??' }}</span>
-                  </div>
+                  </div> -->
                 </div>
 
               </div>
@@ -117,27 +111,27 @@
             <template class="ant-card-actions" slot="actions">
               <div>
                 <a @click="startTrain(item)" style="color: red;">
-                  <a-icon type="radar-chart" /> 训练模型
+                  训练模型
                 </a>
               </div>
               <div>
                 <a @click="handleMake(item)" style="color: #0c18d7;">
-                  <a-icon type="tags" />图片标注
+                  图片标注
                 </a>
               </div>
               <div v-if="item.onnxIsok==1">
                 <a @click="showResult(item)" style="color: #c919e4;">
-                  <a-icon type="snippets" />训练结果
+                  训练结果
                 </a>
               </div>
               <div v-if="item.onnxIsok==1">
                 <a @click="showLog(item)" style="color: #f26c0b;">
-                  <a-icon type="snippets" />训练日志
+                  训练日志
                 </a>
               </div>
               <div v-if="item.onnxIsok==1">
                 <a @click="showSendView(item.modelOnnx)" style="color: green;">
-                  <a-icon type="download" />模型下载
+                  模型下载
                 </a>
               </div>
               <!--  <a> -->
@@ -445,7 +439,7 @@
         width: 100%;
 
         &:hover {
-          color: #1890ff;
+          color: #0364ff;
         }
       }
     }
@@ -453,7 +447,7 @@
 
   .custom-hr {
     border: none;
-    border-top: 1px solid #1890FF;
+    border-top: 1px solid #0364ff;
     /* 设置分割线的颜色和厚度 */
     width: 100%;
     /* 设置分割线的宽度为100% */
@@ -503,4 +497,44 @@
 
     }
   }
+</style>
+
+<style  lang="less">
+	.concard{
+		background: none!important;
+		.ant-card-head{
+			border: none;
+			.ant-card-head-wrapper{height: 44px;}
+			.ant-card-head-title{background:18px 35px url(~@assets/zwyStyle/img/bg-05.png) no-repeat;padding:10px 0!important;}
+			.ant-card-extra{padding:0;
+				>div{display: flex;flex-direction: row;justify-content: center;align-items: center;}
+				.ant-btn.ant-btn-primary{border-radius: 100px;}
+				.ant-radio-group{border-radius: 100px;border: 1px solid #dcdcdc;padding: 2px;background: #eff3f8;overflow: hidden;}
+				.ant-radio-button-wrapper{background: none;border: none;color: #a0a6b1;border-radius: 100px;}
+				.ant-radio-button-wrapper-checked{border-radius: 100px;background: #0364ff;color: #fff;}
+				.ant-radio-button-wrapper::before{display: none;}
+			}
+		}
+		.ant-card-body{padding:15px 10px;overflow: hidden;
+			.ant-card{background:#fff top url(~@assets/zwyStyle/img/bg-06.png) no-repeat;background-size: 100%;box-shadow: 0 0 10px rgba(3,100,255,0.1);border: none;border-radius: 10px;overflow: hidden;}
+			
+			.title{display: flow-root;height: 30px;background:left center url(~@assets/zwyStyle/img/a-5.png) no-repeat;background-size: 20px;}
+			.span{margin-left:23px;font-size:14px;color:#0364ff;line-height: 30px;float: left;}
+			.span2{font-size: 12px;color: #606e85;float: right;line-height: 30px;}
+			.ant-card-actions{background: none;}
+			.txt{background: #eff3f8;display: inline-block;width: 100%;padding: 5px;border-radius: 10px;margin-top:0px;}
+			.txt>div{margin: 2px 0;}
+			.ant-progress-inner{background: #dde2e8;}
+			.ant-progress-status-success .ant-progress-bg{background-color:#80c269 !important;}
+			.anticon{color:#80c269 !important;}
+			.ant-card-actions > li{margin: 5px 0;border: none!important;position: relative;}
+			.ant-card-actions > li:before{content: '';position: absolute;width: 1px;height: 15px;background: #adb2bb;right: 0;top: calc(50% - 7.5px);}
+			.ant-card-actions > li:last-child:before{display: none;}
+			.ant-card-actions > li>span>div{height: 34px;}
+			.ant-card-actions > li>span>div>a{line-height: 34px;}
+		}
+	}
+	.ant-card-actions > li > span a:not(.ant-btn), .ant-card-actions > li > span > .anticon{white-space:nowrap; text-overflow:ellipsis; -o-text-overflow:ellipsis; overflow: hidden; }
+	.yy{margin-left: 10px;font-size: 12px;color: #80c269;border: 1px solid #80c269;background: #eaf5e7;padding: 0 3px;border-radius: 4px;}
+	.wy{margin-left: 10px;font-size: 12px;color: #eb6877;border: 1px solid #eb6877;background: #f5e4e4;padding: 0 3px;border-radius: 4px;}
 </style>

@@ -1,12 +1,12 @@
 <template>
-  <a-layout-sider
+  <a-layout-sider class="menuStylediv"
     :class="['sider', isDesktop() ? null : 'shadow', theme, fixSiderbar ? 'ant-fixed-sidemenu' : null ]"
     width="208px"
     :collapsible="collapsible"
     v-model="collapsed"
     :trigger="null">
     <logo />
-    <s-menu
+    <s-menu class="menuStyle"
       :collapsed="collapsed"
       :menu="menus"
       :theme="theme"
@@ -59,7 +59,7 @@
       smenuStyle() {
         let style = { 'padding': '0' }
         if (this.fixSiderbar) {
-          style['height'] = 'calc(100% - 59px)'
+          style['height'] = 'calc(100% - 70px)'
           style['overflow'] = 'auto'
           style['overflow-x'] = 'hidden'
         }
@@ -177,5 +177,20 @@
       }
     }
   }
+</style>
+<style>
+	.menuStylediv{background: linear-gradient(to bottom, #ffffff, #eef6ff)!important;}
+	.menuStyle{background: none!important;color: #6b7b94!important;height: calc(100vh - 70px);overflow: auto;}
+	.ant-menu-vertical > .ant-menu-item, .ant-menu-vertical-left > .ant-menu-item, .ant-menu-vertical-right > .ant-menu-item, .ant-menu-inline > .ant-menu-item, .ant-menu-vertical > .ant-menu-submenu > .ant-menu-submenu-title, .ant-menu-vertical-left > .ant-menu-submenu > .ant-menu-submenu-title, .ant-menu-vertical-right > .ant-menu-submenu > .ant-menu-submenu-title, .ant-menu-inline > .ant-menu-submenu > .ant-menu-submenu-title{font-size:15px !important;padding: 0 14px !important;}
+	.ant-menu-inline .ant-menu-submenu-title{width:calc(100% - 20px)!important;margin: 0 auto;}
+	.menuStyle > li{position: relative;}
+	.menuStyle > li.ant-menu-submenu-selected:before{content: '';position: absolute;width: 3px;height: 35px;background:#0364ff;right: 0;top:3px;border-radius: 10px;}
+	.menuStyle li ul li{width: calc(100% - 30px) !important;float: right;}
+	.ant-menu-submenu-selected .ant-menu-submenu-title{background: #deebff;border-radius: 5px;color: #0364ff!important;}
+	.ant-menu-item-selected > a, .ant-menu-item-selected > a:hover{color: #0364ff!important;}
+	.ant-menu:not(.ant-menu-horizontal) .ant-menu-item-selected{color: #0364ff;background: none !important;}
+	.ant-menu-submenu > .ant-menu{background: none!important;position: relative;}
+	.ant-menu-submenu > .ant-menu:before{content: '';position: absolute;width: 2px;height: 100%;background: #0364ff;left: 30px;top: -5px;}
+	.ant-menu-vertical .ant-menu-item:after, .ant-menu-vertical-left .ant-menu-item:after, .ant-menu-vertical-right .ant-menu-item:after, .ant-menu-inline .ant-menu-item:after{border-right:none!important;}
 </style>
 <!-- update_end author:sunjianlei date:20190530 for: 选中首页的时候不显示背景颜色 -->

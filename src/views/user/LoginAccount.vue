@@ -2,21 +2,24 @@
     <div>
       <a-form-model ref="form" :model="model" :rules="validatorRules">
         <a-form-model-item required prop="username">
-          <a-input v-model="model.username" size="large" placeholder="请输入帐户名 ">
-            <a-icon slot="prefix" type="user" :style="{ color: 'rgba(0,0,0,.25)' }"/>
+          <a-input class="inputon" v-model="model.username" size="large" placeholder="请输入帐户名">
+            <!-- <a-icon slot="prefix" type="user" :style="{ color: 'rgba(0,0,0,.25)' }"/> -->
+			<a-icon slot="prefix" class="conimg1"/>
           </a-input>
         </a-form-model-item>
         <a-form-model-item required prop="password">
-          <a-input v-model="model.password" size="large" type="password" autocomplete="false" placeholder="请输入密码 ">
-            <a-icon slot="prefix" type="lock" :style="{ color: 'rgba(0,0,0,.25)' }"/>
+          <a-input class="inputon" v-model="model.password" size="large" type="password" autocomplete="false" placeholder="请输入密码">
+            <!-- <a-icon slot="prefix" type="lock" :style="{ color: 'rgba(0,0,0,.25)' }"/> -->
+			<a-icon slot="prefix" class="conimg2"/>
           </a-input>
         </a-form-model-item>
 
         <a-row :gutter="0">
           <a-col :span="16">
             <a-form-model-item required prop="inputCode">
-              <a-input v-model="model.inputCode" size="large" type="text" placeholder="请输入验证码">
-                <a-icon slot="prefix" type="smile" :style="{ color: 'rgba(0,0,0,.25)' }"/>
+              <a-input class="inputon" v-model="model.inputCode" size="large" type="text" placeholder="请输入验证码">
+                <!-- <a-icon slot="prefix" type="smile" :style="{ color: 'rgba(0,0,0,.25)' }"/> -->
+			<a-icon slot="prefix" class="conimg3"/>
               </a-input>
             </a-form-model-item>
           </a-col>
@@ -43,6 +46,8 @@
         currdatetime: '',
         loginType: 0,
         model:{
+          // username: 'admin',
+          // password: 'Ailelon123.',
           username: '',
           password: '',
           inputCode: ''
@@ -155,6 +160,9 @@
   }
 </script>
 
-<style scoped>
-
+<style>
+.inputon .ant-input{background: #e7f1ff;border: 1px solid #e7f1ff;}
+.conimg1{background: url(~@/assets/zwyStyle/img/a-1.png);width: 20px;height: 20px; background-size: 100% 100%;margin-left: -4px;margin-top: 3px;}
+.conimg2{background: url(~@/assets/zwyStyle/img/a-2.png);width: 20px;height: 20px; background-size: 100% 100%;margin-left: -4px;margin-top: 3px;}
+.conimg3{background: url(~@/assets/zwyStyle/img/a-3.png);width: 20px;height: 20px; background-size: 100% 100%;margin-left: -4px;margin-top: 3px;}
 </style>

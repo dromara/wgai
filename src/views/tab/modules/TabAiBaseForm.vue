@@ -24,7 +24,7 @@
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="示例图片" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="sendUrl">
+            <a-form-model-item label="示例图片" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="sendUrl" style="margin-bottom: 0;">
               <j-image-upload isMultiple  v-model="model.sendUrl" ></j-image-upload>
             </a-form-model-item>
           </a-col>

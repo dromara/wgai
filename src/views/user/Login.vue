@@ -2,7 +2,7 @@
   <div class="main">
     <a-form-model class="user-layout-login" @keyup.enter.native="handleSubmit">
       <a-tabs :activeKey="customActiveKey" :tabBarStyle="{ textAlign: 'center', borderBottom: 'unset' }"  @change="handleTabClick">
-        <a-tab-pane key="tab1" tab="账号密码登录">
+        <a-tab-pane key="tab1" tab="">
           <login-account ref="alogin" @validateFail="validateFail" @success="requestSuccess" @fail="requestFailed"></login-account>
         </a-tab-pane>
 
@@ -229,7 +229,7 @@ export default {
         transition: color .3s;
 
       &:hover {
-          color: #1890ff;
+          color: #0364ff;
         }
       }
 

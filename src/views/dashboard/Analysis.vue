@@ -1,32 +1,33 @@
 <template>
-  <a-skeleton active :loading="loading" :paragraph="{rows: 17}">
+  <a-skeleton class="conbody" active :loading="loading" :paragraph="{rows: 17}">
     <a-card>
       <!-- Redis 信息实时监控 -->
       <a-row :gutter="8">
-        <a-col :sm="24" :xl="8">
+        <a-col class="conlist" :sm="24" :xl="8">
           <area-chart-ty v-bind="memory"/>
         </a-col>
-        <a-col :sm="24" :xl="8">
+        <a-col class="conlist" :sm="24" :xl="8">
           <area-chart-ty v-bind="key"/>
         </a-col>
-         <a-col :sm="24" :xl="8">
-            <h3>服务器CPU使用率</h3>
-        <a-alert type="info" :showIcon="true">
+        <a-col class="conlist" :sm="24" :xl="8">
+            <h4>服务器CPU使用率</h4>
+            <a @click="handleClickUpdate" class="messagegx">立即更新</a>
+        <a-alert type="info" :showIcon="true" class="messagediv">
           <div slot="message">
-            上次更新时间：{{ this.time }}
+            上次更新时间：<span class="span">{{ this.time }}</span>
             <a-divider type="vertical"/>
-            <a @click="handleClickUpdate">立即更新</a>
           </div>
         </a-alert>
         
-        <a-table
+        <a-table class="contable"
           rowKey="id"
           size="middle"
           :columns="columnsSystem"
           :dataSource="dataSourceSystem"
           :pagination="false"
           :loading="tableLoading"
-          style="margin-top: 20px;">
+			:scroll="{ y: 268 }"
+          style="margin-top: 10px;">
         
           <template slot="param" slot-scope="text, record">
             <a-tag :color="textInfoSystem[record.param].color">{{ text }}</a-tag>
@@ -44,38 +45,43 @@
            </a-col>
       </a-row>
         
-      <h3>JVM 详细信息</h3>
-     <a-alert type="info" :showIcon="true">
-       <div slot="message">
-         上次更新时间：{{ this.time }}
-         <a-divider type="vertical"/>
-         <a @click="handleClickUpdate">立即更新</a>
-       </div>
-     </a-alert>
-     
-     <a-table
-       rowKey="id"
-       size="middle"
-       :columns="columns"
-       :dataSource="dataSource"
-       :pagination="false"
-       :loading="tableLoading"
-       style="margin-top: 20px;">
-     
-       <template slot="param" slot-scope="text, record">
-         <a-tag :color="textInfo[record.param].color">{{ text }}</a-tag>
-       </template>
-     
-       <template slot="text" slot-scope="text, record">
-         {{ textInfo[record.param].text }}
-       </template>
-     
-       <template slot="value" slot-scope="text, record">
-         {{ text }} {{ textInfo[record.param].unit }}
-       </template>
-     
-     </a-table>
+    <a-row :gutter="8">
+        <a-col class="conlist on" :sm="24" :xl="24">
+		  <h3>JVM 详细信息</h3>
+			 <a @click="handleClickUpdate" class="messagegx">立即更新</a>
+		 <a-alert type="info" :showIcon="true" class="messagediv on">
+		   <div slot="message">
+			 上次更新时间：<span class="span">{{ this.time }}</span>
+			 <a-divider type="vertical"/>
+		   </div>
+		 </a-alert>
+		 
+		 <a-table class="contable"
+		   rowKey="id"
+		   size="middle"
+		   :columns="columns"
+		   :dataSource="dataSource"
+		   :pagination="false"
+		   :loading="tableLoading"
+			:scroll="{ y: 205}"
+		   style="margin-top: 20px;">
+		 
+		   <template slot="param" slot-scope="text, record">
+			 <a-tag :color="textInfo[record.param].color">{{ text }}</a-tag>
+		   </template>
+		 
+		   <template slot="text" slot-scope="text, record">
+			 {{ textInfo[record.param].text }}
+		   </template>
+		 
+		   <template slot="value" slot-scope="text, record">
+			 {{ text }} {{ textInfo[record.param].unit }}
+		   </template>
+		 
+		 </a-table>
 
+      </a-col>
+      </a-row>
     </a-card>
   </a-skeleton>
 </template>
@@ -392,4 +398,16 @@
     }
   }
 </script>
-<style></style>
+<style>
+	.conbody{background: none!important;border:none!important;}
+	.conbody .ant-card-body{padding: 5px;}
+	.conbody h4{color:#0364ff;}
+	.conlist{margin:5px;background: linear-gradient(to top, #ffffff, #eef6ff) !important;box-shadow:0 0 10px rgba(3,100,255,0.1);border-radius: 10px;width: calc(33.3% - 10px);padding: 10px !important;}
+	.conlist.on{width: calc(100% - 10px)!important;}
+	.messagediv{font-size: 12px;background: url(~@assets/zwyStyle/img/bg-03.png) no-repeat;background-size: 100% 100%;border: none!important;color: #51565c!important;}
+	.messagediv.on{background: url(~@assets/zwyStyle/img/bg-04.png) no-repeat;background-size: 100% 100%;}
+	.messagegx{position: absolute; top: 10px;right: 10px;background: #0364ff;color: #fff;border-radius: 5px;padding: 0 10px;font-size: 12px;height: 21px;line-height:21px;display: block;}
+	.messagegx:hover{color: #fff;}
+	.messagediv .span{color: #0364ff;}
+	.contable .ant-table-tbody{background: #f6f8fb;}
+</style>

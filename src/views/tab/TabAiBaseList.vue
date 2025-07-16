@@ -1,5 +1,5 @@
 <template>
-  <a-card :bordered="false">
+  <a-card class="contablelist" :bordered="false">
     <!-- 查询区域 -->
  <div class="table-page-search-wrapper">
    <a-form layout="inline" @keyup.enter.native="searchQuery">
@@ -16,43 +16,43 @@
        </a-col>
        <a-col :xl="6" :lg="7" :md="8" :sm="24">
          <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
-           <a-button type="primary" @click="searchQuery" icon="search">查询</a-button>
-           <a-button type="primary" @click="searchReset" icon="reload" style="margin-left: 8px">重置</a-button>
-           <a @click="handleToggleSearch" style="margin-left: 8px">
+           <a-button type="primary" @click="searchQuery" class="cx" icon="search">查询</a-button>
+           <a-button type="primary" @click="searchReset" class="cz" icon="reload" style="margin-left: 8px">重置</a-button>
+           <!-- <a @click="handleToggleSearch" style="margin-left: 8px">
              {{ toggleSearchStatus ? '收起' : '展开' }}
              <a-icon :type="toggleSearchStatus ? 'up' : 'down'"/>
-           </a>
+           </a> -->
          </span>
        </a-col>
      </a-row>
    </a-form>
  </div>
     <!-- 查询区域-END -->
-
+ <div class="contable">
     <!-- 操作按钮区域 -->
     <div class="table-operator">
-      <a-button @click="handleAdd" type="primary" icon="plus">新增</a-button>
-      <a-button type="primary" icon="download" @click="handleExportXls('AI基础信息')">导出</a-button>
+      <a-button @click="handleAdd" type="primary" class="xz" icon="plus">新增</a-button>
+      <a-button type="primary" icon="download" class="dc" @click="handleExportXls('AI基础信息')">导出</a-button>
       <a-upload name="file" :showUploadList="false" :multiple="false" :headers="tokenHeader" :action="importExcelUrl" @change="handleImportExcel">
-        <a-button type="primary" icon="import">导入</a-button>
+        <a-button type="primary" class="dr" icon="import">导入</a-button>
       </a-upload>
       <!-- 高级查询区域 -->
-      <j-super-query :fieldList="superFieldList" ref="superQueryModal" @handleSuperQuery="handleSuperQuery"></j-super-query>
       <a-dropdown v-if="selectedRowKeys.length > 0">
         <a-menu slot="overlay">
           <a-menu-item key="1" @click="batchDel"><a-icon type="delete"/>删除</a-menu-item>
         </a-menu>
         <a-button style="margin-left: 8px"> 批量操作 <a-icon type="down" /></a-button>
       </a-dropdown>
+     <!-- <j-super-query :fieldList="superFieldList" ref="superQueryModal" @handleSuperQuery="handleSuperQuery"></j-super-query>
       
-         <a-button @click="SendRedis" type="primary" icon="plus">刷新缓存</a-button>
+         <a-button @click="SendRedis" type="primary" icon="plus">刷新缓存</a-button> -->
     </div>
 
     <!-- table区域-begin -->
     <div>
       <div class="ant-alert ant-alert-info" style="margin-bottom: 16px;">
-        <i class="anticon anticon-info-circle ant-alert-icon"></i> 已选择 <a style="font-weight: 600">{{ selectedRowKeys.length }}</a>项
-        <a style="margin-left: 24px" @click="onClearSelected">清空</a>
+        <i class="anticon anticon-info-circle ant-alert-icon"></i> 已选择 <a style="font-weight: 600">{{ selectedRowKeys.length }}项</a>
+        <a class="btn" style="margin-left: 24px" @click="onClearSelected">清空</a>
       </div>
 
       <a-table
@@ -90,28 +90,29 @@
         </template>
 
         <span slot="action" slot-scope="text, record">
-          <a @click="handleEdit(record)">编辑</a>
+		  <a @click="handleEdit(record)">编辑</a>
 
-          <a-divider type="vertical" />
-          <a-dropdown>
-            <a class="ant-dropdown-link">更多 <a-icon type="down" /></a>
-            <a-menu slot="overlay">
-              <a-menu-item>
-                <a @click="handleDetail(record)">详情</a>
-              </a-menu-item>
-              <a-menu-item>
-                <a-popconfirm title="确定删除吗?" @confirm="() => handleDelete(record.id)">
-                  <a>删除</a>
-                </a-popconfirm>
-              </a-menu-item>
-            </a-menu>
-          </a-dropdown>
-        </span>
+		  <a-divider type="vertical" />
+		  <a-dropdown>
+			<a class="ant-dropdown-link">更多 <a-icon type="down" /></a>
+			<a-menu slot="overlay">
+			  <a-menu-item>
+				<a @click="handleDetail(record)">详情</a>
+			  </a-menu-item>
+			  <a-menu-item>
+				<a-popconfirm title="确定删除吗?" @confirm="() => handleDelete(record.id)">
+				  <a>删除</a>
+				</a-popconfirm>
+			  </a-menu-item>
+			</a-menu>
+		  </a-dropdown>
+		</span>
 
       </a-table>
     </div>
 
-    <tab-ai-base-modal ref="modalForm" @ok="modalFormOk"></tab-ai-base-modal>
+    <tab-ai-base-modal class="contc" :width="1200" ref="modalForm" @ok="modalFormOk"></tab-ai-base-modal>
+	</div>
   </a-card>
 </template>
 
@@ -196,7 +197,7 @@
             dataIndex: 'action',
             align:"center",
             fixed:"right",
-            width:147,
+            width:200,
             scopedSlots: { customRender: 'action' }
           }
         ],
@@ -263,6 +264,10 @@
     }
   }
 </script>
+<style src="@assets/zwyStyle/css/main.css"></style>
 <style scoped>
   @import '~@assets/less/common.less';
+  /deep/ .ant-table-scroll{height:calc(100vh - 431px);}
 </style>
+
+

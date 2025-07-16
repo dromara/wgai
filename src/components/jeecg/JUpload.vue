@@ -27,10 +27,13 @@
       <template>
         <div v-if="isImageComp">
           <a-icon type="plus" />
-          <div class="ant-upload-text">{{ text }}</div>
+          <!-- <div class="ant-upload-text">{{ text }}</div> -->
         </div>
-        <a-button v-else-if="buttonVisible">
-         <a-icon type="upload" />{{ text }}
+        <a-button class="conscbtn" v-else-if="buttonVisible">
+			<img src="~@assets/zwyStyle/img/a-7.png">
+			<div style="color:#49505b;font-size: 12px;">将文件拖到此区域，或<span style="color:#0364ff;">点击上传</span></div>
+			<div style="color:#9fa5ac;font-size: 11px;">每次仅可上传一个附件，大小不超过2G</div>
+         <!-- <a-icon type="upload" />{{ text }} -->
         </a-button>
       </template>
     </a-upload>
@@ -465,4 +468,8 @@
     line-height: 28px;
   }
   //---------------------------- end 图片左右换位置 -------------------------------------
+</style>
+<style scoped>
+	.conscbtn{width: 220px;height: 102px;border:1px dashed #d9d9d9;background:#eff3f8;}
+	.conscbtn:hover{border:1px dashed #0364ff!important;background:#eff3f8;}
 </style>

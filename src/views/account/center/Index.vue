@@ -268,7 +268,7 @@
           }
           &:hover {
             span {
-              color: #1890ff;
+              color: #0364ff;
             }
           }
         }

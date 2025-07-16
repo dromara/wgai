@@ -173,7 +173,7 @@
 <style lang="less" scoped>
   /* update_begin author:scott date:20190220 for: 缩小首页布局顶部的高度*/
 
-  @height: 59px;
+  @height: 70px;
 
   .layout {
 
@@ -199,7 +199,7 @@
       z-index: 2;
       color: white;
       height: @height;
-      background-color: @primary-color;
+      background-color: @primary-color!important;
       transition: background 300ms;
 
       /* dark 样式 */

@@ -110,6 +110,6 @@
   }
 
   .clName .ant-tree li .ant-tree-node-content-wrapper.ant-tree-node-selected {
-    background-color: #1890FF !important;
+    background-color: #0364ff !important;
   }
 </style>

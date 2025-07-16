@@ -15,11 +15,14 @@
       @change="handleChange"
       @preview="handlePreview"
       :class="[!isMultiple?'imgupload':'', (!isMultiple && picUrl)?'image-upload-single-over':'' ]">
-      <div>
+      <div style="width: 220px;">
         <!--<img v-if="!isMultiple && picUrl" :src="getAvatarView()" style="width:100%;height:100%"/>-->
         <div class="iconp">
-          <a-icon :type="uploadLoading ? 'loading' : 'plus'" />
-          <div class="ant-upload-text">{{ text }}</div>
+			<img src="~@assets/zwyStyle/img/a-7.png">
+			<div style="color:#49505b;font-size: 12px;">将文件拖到此区域，或<span style="color:#0364ff;">点击上传</span></div>
+			<div style="color:#9fa5ac;font-size: 11px;">每次仅可上传一个附件，大小不超过2G</div>
+         <!-- <a-icon :type="uploadLoading ? 'loading' : 'plus'" />
+          <div class="ant-upload-text">{{ text }}</div> -->
         </div>
       </div>
       <a-modal :visible="previewVisible" :footer="null" @cancel="handleCancel()">
@@ -236,4 +239,5 @@
   /* update--end--autor:lvdandan-----date:20201016------for：j-image-upload图片组件单张图片详情回显空白*/
 
   /deep/ .image-upload-single-over .ant-upload-select{display: none}
+  .ant-upload{background:#eff3f8;}
 </style>

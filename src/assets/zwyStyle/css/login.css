@@ -1,0 +1,6 @@
+.loginin{width: 1240px;height: 100vh;margin: 0 auto;position: relative;}
+.loginin:before{content: '';position: absolute;width: 960px;height: 100%;background: -20px center url('../img/bg-02.png') no-repeat; background-size: 100%;}
+.conlogin{background: #fff;width: 400px; position: absolute;right:0px;top:calc(50% - 265px);border-radius: 10px;padding:25px 10px 10px;box-sizing: border-box;box-shadow: 0 0 20px rgb(48 89 196 / 30%);}
+
+
+

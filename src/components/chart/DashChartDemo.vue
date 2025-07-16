@@ -17,7 +17,7 @@
         gemo="point"
         position="value*1"
         shape="pointer"
-        color="#1890FF"
+        color="#0364ff"
         :active="false"
       ></v-series>
       <v-guide
@@ -171,7 +171,7 @@
         },
         arcGuide2Start: [0, 0.945],
         arcGuide2Style: {
-          stroke: '#1890FF',
+          stroke: '#0364ff',
           lineWidth: 18,
         },
         htmlGuidePosition: ['50%', '100%'],

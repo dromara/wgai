@@ -108,7 +108,7 @@ export default {
   transition: color .3s;
 
 &  :hover {
-  color: #1890ff;
+  color: #0364ff;
 }
 }
 .register {

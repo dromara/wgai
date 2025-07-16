@@ -7,7 +7,7 @@
       @contextmenu.native="e => onContextmenu(e)"
       v-if="multipage"
       :active-key="activePage"
-      class="tab-layout-tabs"
+      class="tab-layout-tabs contabs"
       style="height:52px"
       :hide-add="true"
       type="editable-card"
@@ -15,10 +15,13 @@
       @tabClick="tabCallBack"
       @edit="editPage">
       <a-tab-pane :id="page.fullPath" :key="page.fullPath" v-for="page in pageList" :closable="!(page.meta.title=='首页')">
-        <span slot="tab" :pagekey="page.fullPath">{{ page.meta.title }}</span>
+        <span slot="tab" :pagekey="page.fullPath">
+			<span v-if="page.meta.title=='首页'">{{ page.meta.title }}</span>
+			<span v-if="page.meta.title!='首页'">/&nbsp;&nbsp;{{ page.meta.title }}</span>
+		</span>
       </a-tab-pane>
     </a-tabs>
-    <div style="margin: 12px 12px 0;">
+    <div style="margin: 12px 12px 0px;height: calc(100vh - 145px);overflow: auto;">
       <!-- update-begin-author:taoyan date:20201221 for:此处删掉transition标签 不知道为什么加上后 页面路由切换的时候即1及菜单切到2及菜单的时候 两个菜单页面会同时出现300-500秒左右 -->
       <keep-alive v-if="multipage">
         <router-view v-if="reloadFlag"/>
@@ -407,9 +410,9 @@
 
   /* 修改 ant-tabs 样式 */
   .tab-layout-tabs.ant-tabs {
-    border-bottom: 1px solid #ccc;
-    border-left: 1px solid #ccc;
-    background-color: white;
+    // border-bottom: 1px solid #ccc;
+    // border-left: 1px solid #ccc;
+    // background-color: white;
     padding: 0 20px;
 
     .ant-tabs-bar {
@@ -423,7 +426,7 @@
 
     &.ant-tabs-card .ant-tabs-tab {
 
-      padding: 0 24px !important;
+      padding:0 !important;
       background-color: white !important;
       margin-right: 10px !important;
 
@@ -456,6 +459,12 @@
       border-color: @primary-color!important;
     }
   }
-
-
+.ant-tabs.ant-tabs-card > .ant-tabs-bar .ant-tabs-tab-active,.tab-layout-tabs.ant-tabs.ant-tabs-card > .ant-tabs-bar .ant-tabs-tab{background:none !important;}
+.tab-layout-tabs.ant-tabs.ant-tabs-card > .ant-tabs-bar .ant-tabs-tab{color:#7a8089;}
+.ant-tabs.ant-tabs-card > .ant-tabs-bar .ant-tabs-tab-active{color: #0364ff!important;}
+.tab-layout-tabs.ant-tabs.ant-tabs-card .ant-tabs-tab .ant-tabs-close-x{font-size: 9px!important;}
+</style>
+<style>
+	.contabs .ant-tabs-close-x{display: contents;}
+	.contabs .ant-tabs-close-x svg{margin-left: 4px;}
 </style>
