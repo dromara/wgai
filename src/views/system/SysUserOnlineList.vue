@@ -1,5 +1,5 @@
 <template>
-  <a-card :bordered="false">
+  <a-card class="contablelist" :bordered="false">
     <!-- 查询区域 -->
     <div class="table-page-search-wrapper">
       <a-form layout="inline" @keyup.enter.native="searchQuery">
@@ -11,8 +11,8 @@
           </a-col>
           <a-col :md="6" :sm="8">
             <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
-              <a-button type="primary" @click="searchQuery" icon="search">查询</a-button>
-              <a-button type="primary" @click="searchReset" icon="reload" style="margin-left: 8px">重置</a-button>
+              <a-button type="primary" @click="searchQuery" icon="search" class="cx">查询</a-button>
+              <a-button type="primary" @click="searchReset" icon="reload" class="cz" style="margin-left: 8px">重置</a-button>
             </span>
           </a-col>
         </a-row>
@@ -20,6 +20,7 @@
     </div>
     <!-- 查询区域-END -->
 
+ <div class="contable">
     <!-- table区域-begin -->
     <div>
       <div class="ant-alert ant-alert-info" style="margin-bottom: 16px;">
@@ -54,6 +55,7 @@
         </span>
 
       </a-table>
+    </div>
     </div>
 
   </a-card>
@@ -161,6 +163,8 @@
     }
   }
 </script>
+<style src="@assets/zwyStyle/css/main.css"></style>
 <style scoped>
   @import '~@assets/less/common.less';
+  /deep/ .ant-table-scroll{height: calc(100vh - 383px);}
 </style>

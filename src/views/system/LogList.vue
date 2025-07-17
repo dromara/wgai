@@ -1,5 +1,5 @@
 <template>
-  <a-card :bordered="false">
+  <a-card class="contablelist" :bordered="false">
     <!--导航区域-->
     <div>
       <a-tabs defaultActiveKey="1" @change="callback">
@@ -36,18 +36,18 @@
               <j-dict-select-tag v-model="queryParam.operateType" placeholder="请选择操作类型" dictCode="operate_type"/>
             </a-form-item>
           </a-col>
-
-          <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
-            <a-col :md="6" :sm="24" >
-                <a-button type="primary"  style="left: 10px" @click="searchQuery" icon="search">查询</a-button>
-                <a-button type="primary"  @click="searchReset" icon="reload" style="margin-left: 8px;left: 10px">重置</a-button>
-            </a-col>
-          </span>
+          <a-col :xl="6" :lg="7" :md="8" :sm="24">
+            <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
+              <a-button type="primary" class="cx" @click="searchQuery" icon="search">查询</a-button>
+              <a-button type="primary" class="cz" @click="searchReset" icon="reload" style="margin-left: 8px">重置</a-button>
+            </span>
+          </a-col>
 
         </a-row>
       </a-form>
     </div>
 
+ <div class="contable">
     <!-- table区域-begin -->
     <a-table
       ref="table"
@@ -57,6 +57,8 @@
       :dataSource="dataSource"
       :pagination="ipagination"
       :loading="loading"
+        :rowSelection="{selectedRowKeys: selectedRowKeys, onChange: onSelectChange}"
+        class="j-table-force-nowrap"
       @change="handleTableChange">
 
       <template v-if="queryParam.logType==='2'" #expandedRowRender="record">
@@ -72,6 +74,7 @@
         </span>
     </a-table>
     <!-- table区域-end -->
+        </div>
   </a-card>
 </template>
 
@@ -233,6 +236,8 @@
     }
   }
 </script>
+<style src="@assets/zwyStyle/css/main.css"></style>
 <style scoped>
-  @import '~@assets/less/common.less'
+  @import '~@assets/less/common.less';
+  /deep/ .ant-table{height: calc(100vh - 394px);}
 </style>

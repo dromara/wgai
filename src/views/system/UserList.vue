@@ -1,6 +1,5 @@
 <template>
-  <a-card :bordered="false">
-
+  <a-card class="contablelist" :bordered="false">
     <!-- 查询区域 -->
     <div class="table-page-search-wrapper">
       <a-form layout="inline" @keyup.enter.native="searchQuery">
@@ -50,12 +49,8 @@
 
           <a-col :md="6" :sm="8">
             <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
-              <a-button type="primary" @click="searchQuery" icon="search">查询</a-button>
-              <a-button type="primary" @click="searchReset" icon="reload" style="margin-left: 8px">重置</a-button>
-              <a @click="handleToggleSearch" style="margin-left: 8px">
-                {{ toggleSearchStatus ? '收起' : '展开' }}
-                <a-icon :type="toggleSearchStatus ? 'up' : 'down'"/>
-              </a>
+              <a-button type="primary" class="cx" @click="searchQuery" icon="search">查询</a-button>
+              <a-button type="primary" class="cz" @click="searchReset" icon="reload" style="margin-left: 8px">重置</a-button>
             </span>
           </a-col>
 
@@ -63,14 +58,14 @@
       </a-form>
     </div>
 
+ <div class="contable">
     <!-- 操作按钮区域 -->
     <div class="table-operator" style="border-top: 5px">
-      <a-button @click="handleAdd" type="primary" icon="plus" >添加用户</a-button>
-      <a-button type="primary" icon="download" @click="handleExportXls('用户信息')">导出</a-button>
+      <a-button @click="handleAdd" type="primary" class="xz" icon="plus" >添加用户</a-button>
+      <a-button type="primary" icon="download" class="dc" @click="handleExportXls('用户信息')">导出</a-button>
       <a-upload name="file" :showUploadList="false" :multiple="false" :headers="tokenHeader" :action="importExcelUrl" @change="handleImportExcel">
-        <a-button type="primary" icon="import">导入</a-button>
+        <a-button type="primary" class="dr" icon="import">导入</a-button>
       </a-upload>
-      <j-third-app-button biz-type="user" :selected-row-keys="selectedRowKeys" syncToApp syncToLocal @sync-finally="onSyncFinally"/>
       <a-button type="primary" icon="hdd" @click="recycleBinVisible=true">回收站</a-button>
       <a-dropdown v-if="selectedRowKeys.length > 0">
         <a-menu slot="overlay" @click="handleMenuClick">
@@ -101,17 +96,19 @@
         <i class="anticon anticon-info-circle ant-alert-icon"></i>已选择&nbsp;<a style="font-weight: 600">{{ selectedRowKeys.length }}</a>项&nbsp;&nbsp;
         <a style="margin-left: 24px" @click="onClearSelected">清空</a>
       </div>
-
       <a-table
         ref="table"
-        bordered
         size="middle"
+        :scroll="{x:auto}"
+        bordered
         rowKey="id"
         :columns="columns"
         :dataSource="dataSource"
         :pagination="ipagination"
         :loading="loading"
         :rowSelection="{selectedRowKeys: selectedRowKeys, onChange: onSelectChange}"
+        class="j-table-force-nowrap"
+		
         @change="handleTableChange">
 
         <template slot="avatarslot" slot-scope="text, record, index">
@@ -165,15 +162,16 @@
     </div>
     <!-- table区域-end -->
 
-    <user-modal ref="modalForm" @ok="modalFormOk"></user-modal>
+    <user-modal class="contc" :width="1200" ref="modalForm" @ok="modalFormOk"></user-modal>
 
-    <password-modal ref="passwordmodal" @ok="passwordModalOk"></password-modal>
+    <password-modal class="contc" :width="1200" ref="passwordmodal" @ok="passwordModalOk"></password-modal>
 
-    <sys-user-agent-modal ref="sysUserAgentModal"></sys-user-agent-modal>
+    <sys-user-agent-modal class="contc" :width="1200" ref="sysUserAgentModal"></sys-user-agent-modal>
 
     <!-- 用户回收站 -->
-    <user-recycle-bin-modal :visible.sync="recycleBinVisible" @ok="modalFormOk"/>
+    <user-recycle-bin-modal class="contc" :width="1200" :visible.sync="recycleBinVisible" @ok="modalFormOk"/>
 
+    </div>
   </a-card>
 </template>
 
@@ -387,6 +385,8 @@
 
   }
 </script>
+<style src="@assets/zwyStyle/css/main.css"></style>
 <style scoped>
-  @import '~@assets/less/common.less'
+  @import '~@assets/less/common.less';
+  /deep/ .ant-table-content{height: calc(100vh - 431px);}
 </style>

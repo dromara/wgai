@@ -1,5 +1,5 @@
 <template>
-  <a-card :bordered="false">
+  <a-card class="contablelist" :bordered="false">
 
     <!-- 查询区域 -->
     <div class="table-page-search-wrapper">
@@ -23,8 +23,8 @@
 
           <a-col :md="6" :sm="10" >
             <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
-              <a-button type="primary" @click="searchQuery" icon="search">查询</a-button>
-              <a-button type="primary" @click="searchReset" icon="reload" style="margin-left: 8px">重置</a-button>
+              <a-button type="primary" @click="searchQuery" class="cx" icon="search">查询</a-button>
+              <a-button type="primary" @click="searchReset" class="cz" icon="reload" style="margin-left: 8px">重置</a-button>
             </span>
           </a-col>
 
@@ -32,12 +32,13 @@
       </a-form-model>
     </div>
 
+ <div class="contable">
     <!-- 操作按钮区域 -->
     <div class="table-operator">
-      <a-button @click="handleAdd" type="primary" icon="plus">新增</a-button>
-      <a-button type="primary" icon="download" @click="handleExportXls('定时任务信息')">导出</a-button>
+      <a-button @click="handleAdd" type="primary" class="xz" icon="plus">新增</a-button>
+      <a-button type="primary" icon="download" class="dc" @click="handleExportXls('定时任务信息')">导出</a-button>
       <a-upload name="file" :showUploadList="false" :multiple="false" :headers="tokenHeader" :action="importExcelUrl" @change="handleImportExcel">
-        <a-button type="primary" icon="import">导入</a-button>
+        <a-button type="primary" class="dr" icon="import">导入</a-button>
       </a-upload>
       <a-dropdown v-if="selectedRowKeys.length > 0">
         <a-menu slot="overlay">
@@ -105,7 +106,8 @@
     <!-- table区域-end -->
 
     <!-- 表单区域 -->
-    <quartzJob-modal ref="modalForm" @ok="modalFormOk"></quartzJob-modal>
+    <quartzJob-modal class="contc" :width="1200" ref="modalForm" @ok="modalFormOk"></quartzJob-modal>
+    </div>
   </a-card>
 </template>
 
@@ -285,6 +287,8 @@
     }
   }
 </script>
+<style src="@assets/zwyStyle/css/main.css"></style>
 <style scoped>
-  @import '~@assets/less/common.less'
+  @import '~@assets/less/common.less';
+  /deep/ .ant-table-scroll{height: calc(100vh - 431px);}
 </style>

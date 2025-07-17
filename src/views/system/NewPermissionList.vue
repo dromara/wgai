@@ -1,9 +1,10 @@
 <template>
-  <a-card :bordered="false">
+  <a-card class="contablelist" :bordered="false">
 
+ <div class="contable">
     <!-- 操作按钮区域 -->
     <div class="table-operator">
-      <a-button @click="handleAdd" type="primary" icon="plus">新增</a-button>
+      <a-button @click="handleAdd" type="primary" class="xz" icon="plus">新增</a-button>
       <a-button
         @click="batchDel"
         v-if="selectedRowKeys.length > 0"
@@ -31,6 +32,7 @@
         @expand="expandSubmenu"
         :expandedRowKeys="expandedRowKeys"
         :rowSelection="{selectedRowKeys: selectedRowKeys, onChange: onSelectChange}"
+        class="j-table-force-nowrap"
         @expandedRowsChange="handleExpandedRowsChange">
 
         <span slot="action" slot-scope="text, record">
@@ -73,8 +75,9 @@
     </div>
     <!-- table区域-end -->
 
-    <permission-modal ref="modalForm" @ok="modalFormOk"></permission-modal>
-    <permission-data-rule-list ref="PermissionDataRuleList" @ok="modalFormOk"></permission-data-rule-list>
+    <permission-modal class="contc" :width="1200" ref="modalForm" @ok="modalFormOk"></permission-modal>
+    <permission-data-rule-list class="contc" :width="1200" ref="PermissionDataRuleList" @ok="modalFormOk"></permission-data-rule-list>
+    </div>
 
   </a-card>
 </template>
@@ -223,6 +226,8 @@
     }
   }
 </script>
+<style src="@assets/zwyStyle/css/main.css"></style>
 <style scoped>
   @import '~@assets/less/common.less';
+  /deep/ .ant-table-scroll{height: calc(100vh - 337px);}
 </style>

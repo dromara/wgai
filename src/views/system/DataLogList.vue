@@ -1,5 +1,5 @@
 <template>
-  <a-card :bordered="false">
+  <a-card class="contablelist" :bordered="false">
     <!-- 查询区域 -->
     <div class="table-page-search-wrapper">
       <a-form layout="inline" @keyup.enter.native="searchQuery">
@@ -15,16 +15,18 @@
             </a-form-item>
           </a-col>
 
-          <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
                <a-col :md="6" :sm="24">
-                  <a-button type="primary" @click="searchQuery">查询</a-button>
-                  <a-button style="margin-left: 8px" @click="searchReset">重置</a-button>
-               </a-col>
+          <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
+                  <a-button type="primary" @click="searchQuery" class="cx">查询</a-button>
+                  <a-button style="margin-left: 8px" @click="searchReset" class="cz">重置</a-button>
             </span>
+               </a-col>
         </a-row>
       </a-form>
     </div>
 
+
+ <div class="contable">
     <!-- 操作按钮区域 -->
     <div class="table-operator">
       <a-button @click="handleCompare()" type="primary" icon="plus">数据比较</a-button>
@@ -47,6 +49,7 @@
         :pagination="ipagination"
         :loading="loading"
         :rowSelection="{selectedRowKeys: selectedRowKeys,onChange: onSelectChange}"
+        class="j-table-force-nowrap"
         @change="handleTableChange"
       >
         <!-- 字符串超长截取省略号显示-->
@@ -55,7 +58,8 @@
         </span>
       </a-table>
     </div>
-    <data-log-modal ref="modalForm" @ok="modalFormOk"></data-log-modal>
+    <data-log-modal class="contc" :width="1200" ref="modalForm" @ok="modalFormOk"></data-log-modal>
+    </div>
   </a-card>
 </template>
 
@@ -133,6 +137,8 @@
   }
 
 </script>
+<style src="@assets/zwyStyle/css/main.css"></style>
 <style scoped>
-  @import '~@assets/less/common.less'
+  @import '~@assets/less/common.less';
+  /deep/ .ant-table{height: calc(100vh - 431px);}
 </style>

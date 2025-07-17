@@ -1,7 +1,7 @@
 <template>
   <a-row :gutter="10">
-    <a-col :md="leftColMd" :sm="24" style="margin-bottom: 20px">
-      <a-card :bordered="false">
+    <a-col :md="leftColMd" :sm="24">
+		<a-card class="contablelist" :bordered="false">
         <!-- 查询区域 -->
         <div class="table-page-search-wrapper">
           <!-- 搜索区域 -->
@@ -21,23 +21,24 @@
                 </a-form-item>
               </a-col>
               -->
-              <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
             <a-col :md="12" :sm="24">
-               <a-button type="primary" @click="searchQuery" icon="search" style="margin-left: 21px">查询</a-button>
-              <a-button type="primary" @click="searchReset" icon="reload" style="margin-left: 8px">重置</a-button>
+              <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
+               <a-button type="primary" class="cx" @click="searchQuery" icon="search" style="margin-left: 21px">查询</a-button>
+               <a-button type="primary" class="cz" @click="searchReset" icon="reload" style="margin-left: 8px">重置</a-button>
+				</span>
             </a-col>
-          </span>
             </a-row>
           </a-form>
         </div>
+ <div class="contable">
         <!-- 操作按钮区域 -->
         <div class="table-operator" style="margin: 5px 0 10px 2px">
-          <a-button @click="handleAdd" type="primary" icon="plus">新建角色</a-button>
+          <a-button @click="handleAdd" class="xz" type="primary" icon="plus">新建角色</a-button>
           <!--<a-button @click="handleEdit(model1)" type="primary" icon="plus">角色编辑</a-button>-->
           <a-upload name="file" :showUploadList="false" :multiple="false" :headers="tokenHeader" :action="importExcelUrl" @change="handleImportExcel">
-            <a-button type="primary" icon="import">导入</a-button>
+            <a-button type="primary" class="dr" icon="import">导入</a-button>
           </a-upload>
-          <a-button type="primary" icon="download" @click="handleExportXls('角色管理')">导出</a-button>
+          <a-button type="primary" class="dc" icon="download" @click="handleExportXls('角色管理')">导出</a-button>
         </div>
 
         <div class="ant-alert ant-alert-info" style="margin-bottom: 16px;">
@@ -58,6 +59,8 @@
             :pagination="ipagination"
             :loading="loading"
             :rowSelection="{selectedRowKeys: selectedRowKeys1, onChange: onSelectChange1, type:'radio'}"
+        class="j-table-force-nowrap"
+		
             @change="handleTableChange">
           <span slot="action" slot-scope="text, record">
             <a @click="handleOpen(record)">用户</a>
@@ -87,10 +90,11 @@
         <!-- 右侧的角色权限配置 -->
         <user-role-modal ref="modalUserRole"></user-role-modal>
         <role-modal ref="modalForm" @ok="modalFormOk"></role-modal>
+        </div>
       </a-card>
     </a-col>
     <a-col :md="rightColMd" :sm="24" v-if="this.rightcolval == 1">
-      <a-card :bordered="false">
+  <a-card class="contablelist" :bordered="false">
         <div style="text-align: right;">
           <a-icon type="close-circle" @click="hideUserList" />
         </div>
@@ -106,19 +110,20 @@
               </a-col>
               <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
             <a-col :md="9" :sm="24">
-             <a-button type="primary" @click="searchQuery2" icon="search" style="margin-left: 21px">查询</a-button>
-              <a-button type="primary" @click="searchReset2" icon="reload" style="margin-left: 8px">重置</a-button>
+             <a-button type="primary" class="cx" @click="searchQuery2" icon="search" style="margin-left: 21px">查询</a-button>
+              <a-button type="primary" class="cz" @click="searchReset2" icon="reload" style="margin-left: 8px">重置</a-button>
 
             </a-col>
           </span>
             </a-row>
           </a-form>
         </div>
+ <div class="contable">
         <!-- 操作按钮区域 -->
         <div class="table-operator" :md="24" :sm="24">
-          <a-button @click="handleAdd2" type="primary" icon="plus" style="margin-top: 16px">新增用户</a-button>
+          <a-button @click="handleAdd2" type="primary" class="xz" icon="plus" style="margin-top: 16px">新增用户</a-button>
           <!--<a-button @click="handleEdit2" type="primary" icon="edit" style="margin-top: 16px">用户编辑</a-button>-->
-          <a-button @click="handleAddUserRole" type="primary" icon="plus" style="margin-top: 16px">已有用户</a-button>
+          <a-button @click="handleAddUserRole" class="dc" type="primary" icon="plus" style="margin-top: 16px">已有用户</a-button>
 
           <a-dropdown v-if="selectedRowKeys2.length > 0">
             <a-menu slot="overlay">
@@ -150,6 +155,8 @@
             :pagination="ipagination2"
             :loading="loading2"
             :rowSelection="{selectedRowKeys: selectedRowKeys2, onChange: onSelectChange2}"
+        class="j-table-force-nowrap"
+		
             @change="handleTableChange2">
            <span slot="action" slot-scope="text, record">
            <a @click="handleEdit2(record)">编辑</a>
@@ -170,9 +177,10 @@
           </a-table>
         </div>
         <!-- 表单区域 -->
-        <role-modal ref="modalForm" @ok="modalFormOk"></role-modal>
-        <user-modal ref="modalForm2" @ok="modalFormOk2"></user-modal>
-        <Select-User-Modal ref="selectUserModal" @selectFinished="selectOK"></Select-User-Modal>
+        <role-modal class="contc" :width="1200" ref="modalForm" @ok="modalFormOk"></role-modal>
+        <user-modal class="contc" :width="1200" ref="modalForm2" @ok="modalFormOk2"></user-modal>
+        <Select-User-Modal class="contc" :width="1200" ref="selectUserModal" @selectFinished="selectOK"></Select-User-Modal>
+        </div>
       </a-card>
     </a-col>
   </a-row>
@@ -536,10 +544,12 @@
     }
   }
 </script>
+<style src="@assets/zwyStyle/css/main.css"></style>
 <style scoped>
 @import '~@assets/less/common.less';
   /** Button按钮间距 */
   .ant-btn {
     margin-left: 8px
   }
+  /deep/ .ant-table-scroll{height: calc(100vh - 337px);}
 </style>

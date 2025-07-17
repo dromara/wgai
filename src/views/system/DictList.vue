@@ -1,6 +1,5 @@
 <template>
-  <a-card :bordered="false">
-
+  <a-card class="contablelist" :bordered="false">
     <!-- 左侧面板 -->
     <div class="table-page-search-wrapper">
       <a-form layout="inline" @keyup.enter.native="searchQuery">
@@ -17,18 +16,20 @@
           </a-col>
           <a-col :md="7" :sm="8">
             <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
-              <a-button type="primary" @click="searchQuery" icon="search">查询</a-button>
-              <a-button type="primary" @click="searchReset" icon="reload" style="margin-left: 8px">重置</a-button>
+              <a-button type="primary" @click="searchQuery" class="cx" icon="search">查询</a-button>
+              <a-button type="primary" @click="searchReset" class="cz" icon="reload" style="margin-left: 8px">重置</a-button>
             </span>
           </a-col>
         </a-row>
       </a-form>
+    </div>
 
+	<div class="contable">
       <div class="table-operator" style="border-top: 5px">
-        <a-button @click="handleAdd" type="primary" icon="plus">添加</a-button>
-        <a-button type="primary" icon="download" @click="handleExportXls('字典信息')">导出</a-button>
+        <a-button @click="handleAdd" type="primary" class="xz" icon="plus">添加</a-button>
+        <a-button type="primary" icon="download" class="dc" @click="handleExportXls('字典信息')">导出</a-button>
         <a-upload name="file" :showUploadList="false" :multiple="false" :headers="tokenHeader" :action="importExcelUrl" @change="handleImportExcel">
-          <a-button type="primary" icon="import">导入</a-button>
+          <a-button type="primary" class="dr" icon="import">导入</a-button>
         </a-upload>
         <a-button type="primary" icon="sync" @click="refleshCache()">刷新缓存</a-button>
 
@@ -37,12 +38,16 @@
 
       <a-table
         ref="table"
-        rowKey="id"
         size="middle"
+        :scroll="{x:auto}"
+        bordered
+        rowKey="id"
         :columns="columns"
         :dataSource="dataSource"
         :pagination="ipagination"
         :loading="loading"
+        :rowSelection="{selectedRowKeys: selectedRowKeys, onChange: onSelectChange}"
+        class="j-table-force-nowrap"
         @change="handleTableChange">
         <span slot="action" slot-scope="text, record">
           <a @click="handleEdit(record)">
@@ -58,10 +63,10 @@
         </span>
       </a-table>
 
+    <dict-modal class="contc" :width="1200" ref="modalForm" @ok="modalFormOk"></dict-modal>  <!-- 字典类型 -->
+    <dict-item-list class="contc" :width="1200" ref="dictItemList"></dict-item-list>
+    <dict-delete-list class="contc" :width="1200" ref="dictDeleteList" @refresh="() =>loadData()"></dict-delete-list>
     </div>
-    <dict-modal ref="modalForm" @ok="modalFormOk"></dict-modal>  <!-- 字典类型 -->
-    <dict-item-list ref="dictItemList"></dict-item-list>
-    <dict-delete-list ref="dictDeleteList" @refresh="() =>loadData()"></dict-delete-list>
   </a-card>
 </template>
 
@@ -203,6 +208,8 @@
     },
   }
 </script>
+<style src="@assets/zwyStyle/css/main.css"></style>
 <style scoped>
-  @import '~@assets/less/common.less'
+  @import '~@assets/less/common.less';
+  /deep/ .ant-table{height: calc(100vh - 388px);}
 </style>

@@ -1,8 +1,9 @@
 <template>
-  <a-card :bordered="false">
+  <a-card class="contablelist" :bordered="false">
+ <div class="contable">
     <!-- 操作按钮区域 -->
     <div class="table-operator">
-      <a-button @click="showModal(null)" type="primary" icon="plus">新增</a-button>
+      <a-button @click="showModal(null)" type="primary" class="xz" icon="plus">新增</a-button>
     </div>
     <div>
       <a-table
@@ -15,6 +16,7 @@
         :dataSource="dataSource"
         :pagination="false"
         :loading="loading"
+        :rowSelection="{selectedRowKeys: selectedRowKeys, onChange: onSelectChange}"
         class="j-table-force-nowrap"
         @change="handleTableChange">
          <span slot="status" slot-scope="text, record, index">
@@ -40,6 +42,7 @@
       </a-table>
     </div>
     <gate-way-route-modal ref="modalForm" @ok="modalFormOk"></gate-way-route-modal>
+    </div>
   </a-card>
 </template>
 
@@ -106,6 +109,8 @@
     }
   }
 </script>
+<style src="@assets/zwyStyle/css/main.css"></style>
 <style scoped>
   @import '~@assets/less/common.less';
+  /deep/ .ant-table-scroll{height: calc(100vh - 227px);}
 </style>
