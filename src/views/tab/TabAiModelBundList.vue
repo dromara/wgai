@@ -1,12 +1,11 @@
 <template>
   <a-card class="contablelist" :bordered="false">
     <!-- 查询区域 -->
-    <!-- <div class="table-page-search-wrapper">
+   <div class="table-page-search-wrapper">
       <a-form layout="inline" @keyup.enter.native="searchQuery">
-        <a-row :gutter="24">
-        </a-row>
+      
       </a-form>
-    </div> -->
+    </div> 
     <!-- 查询区域-END -->
 
  <div class="contable">
@@ -109,7 +108,7 @@
     JeecgListMixin
   } from '@/mixins/JeecgListMixin'
   import TabAiModelBundModal from './modules/TabAiModelBundModal'
-
+import { filterObj } from '@/utils/util';
   export default {
     name: 'TabAiModelBundList',
     mixins: [JeecgListMixin, mixinDevice],
@@ -205,6 +204,7 @@
       }
     },
     created() {
+  
       this.getSuperFieldList();
     },
     computed: {
@@ -213,6 +213,7 @@
       },
     },
     methods: {
+        
       initDictConfig() {},
       getSuperFieldList() {
         let fieldList = [];

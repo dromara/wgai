@@ -108,13 +108,26 @@
                 placeholder="是否开启报警录像" />
             </a-form-model-item>
           </a-col>
-          <a-col :span="24" v-if="model.isRecording==0">
+          <a-col :span="24">
+            
+              <div style="color: red;text-align: center;"> 分析录像会使上传延后上传，需等待分析结果完成后上传</div>
+            
+           </a-col> 
+          <a-col :span="24"  v-if="model.isRecording==0">
+              <a-form-model-item label="是否分析录像" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="isBegin">
+                <j-dict-select-tag type="list" v-model="model.isBegin" dictCode="push_static"
+                  placeholder="是否分析录像" />
+              </a-form-model-item>
+            </a-col>
+      
+              
+          <a-col :span="24">
             <a-form-model-item label="是否本地保存录像" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="saveRecord">
     <!--          <j-switch v-model="model.saveRecord"  ></j-switch> -->
               <j-dict-select-tag type="list" v-model="model.saveRecord" dictCode="push_static"
                 placeholder="是否本地保存录像" />
             </a-form-model-item>
-          </a-col>  
+          </a-col>
           <a-col :span="24" v-if="model.isRecording==0">
             <a-form-model-item label="报警录像时间(秒/S)" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="recordTime">
               <a-input-number v-model="model.recordTime" placeholder="请输入报警录像时间" style="width: 100%" />
@@ -125,10 +138,7 @@
             <a-form-model-item label="是否保存图片" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="savePic">
               <j-switch v-model="model.savePic"  ></j-switch>
             </a-form-model-item>
-          </a-col>
-       
-    
-        -->
+          </a-col>  -->
           
           <a-col :span="24">
             <a-form-model-item label="备注" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="remake">
@@ -198,6 +208,12 @@
            ],
            eventNumber  : [
               { required: true, message: '请输入同类型报警间隔!'},
+           ],
+           pushStatic:[
+             { required: true, message: '请选择是否推送!'},
+           ],
+           isBegin:[
+              { required: true, message: '请选择是否分析录像!'},
            ]
         },
         url: {

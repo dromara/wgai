@@ -140,6 +140,11 @@
             dataIndex: 'pyType_dictText'
           },
           {
+            title:'是否分析录像',
+            align:"center",
+            dataIndex: 'isBegin_dictText'
+          },
+          {
             title:'解码方式',
             align:"center",
             dataIndex: 'eventTypes_dictText'

@@ -1,12 +1,33 @@
 <template>
   <a-card class="contablelist" :bordered="false">
     <!-- 查询区域 -->
-    <!-- <div class="table-page-search-wrapper">
-      <a-form layout="inline" @keyup.enter.native="searchQuery">
-        <a-row :gutter="24">
-        </a-row>
-      </a-form>
-    </div> -->
+ <div class="table-page-search-wrapper">
+       <a-form layout="inline" @keyup.enter.native="searchQuery">
+         <a-row :gutter="24">
+           <a-col :xl="6" :lg="7" :md="8" :sm="24">
+             <a-form-item label="模型名称">
+               <a-input placeholder="模型名称" v-model="queryParam.aiName"></a-input>
+             </a-form-item>
+           </a-col>
+           <a-col :xl="6" :lg="7" :md="8" :sm="24">
+             <a-form-item label="模型类型">
+                <j-dict-select-tag  v-model="queryParam.spareOne" placeholder="请选择模型类型"
+                                              dictCode="model_type"/>
+             </a-form-item>
+           </a-col>
+           <a-col :xl="6" :lg="7" :md="8" :sm="24">
+             <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
+               <a-button type="primary" @click="searchQuery" class="cx" icon="search">查询</a-button>
+               <a-button type="primary" @click="searchReset" class="cz" icon="reload" style="margin-left: 8px">重置</a-button>
+               <!-- <a @click="handleToggleSearch" style="margin-left: 8px">
+                 {{ toggleSearchStatus ? '收起' : '展开' }}
+                 <a-icon :type="toggleSearchStatus ? 'up' : 'down'"/>
+               </a> -->
+             </span>
+           </a-col>
+         </a-row>
+       </a-form>
+     </div>
     <!-- 查询区域-END -->
 
  <div class="contable">
