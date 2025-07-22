@@ -1,5 +1,5 @@
 <template>
-  <a-card class="j-address-list-right-card-box" :bordered="false">
+  <a-card class="j-address-list-right-card-box conthreelistri" :bordered="false">
     <div class="ceshi" style="width: 100%;height:50px;display: none;"> <input type="text" v-model="url">
       <button @click="geturl()">播放</button>
       <button @click="closeurl()">销毁</button>
@@ -72,7 +72,7 @@
         </a-col>
    
        <a-col :span="24">
-       <a-button type="primary" style="    margin: 8px;
+       <a-button type="primary" style="margin: 8px;
     margin-left: 35%;" @click="startRecording" >确认配置</a-button>
        <a-button type="danger" @click="stopRecording" >取消配置</a-button>
        </a-col> 
@@ -85,13 +85,14 @@
             @mousemove="draw"
           ></canvas>
    </div>
-    <div v-if="rectangle" style="color:green">
-          <br/>
-      
-          <p>Coordinates:{{ rectangle}}</p>
-          <p>Start: ({{ rectangle.startX }}, {{ rectangle.startY }})</p>
-          <p>End: ({{ rectangle.endX }}, {{ rectangle.endY }})</p>
-           <p>计算结果:{{ resultRect}}</p>
+    <div class="conthreelistdw" v-if="rectangle">
+        <div>入侵区域范围<label>:</label></div> 
+		<div>
+			<p>Coordinates:{{ rectangle}}</p>
+			<p>Start: ({{ rectangle.startX }}, {{ rectangle.startY }})</p>
+			<p>End: ({{ rectangle.endX }}, {{ rectangle.endY }})</p>
+			 <p>计算结果:{{ resultRect}}</p>
+		</div>
     </div>
   </a-card>
 </template>
@@ -541,15 +542,11 @@
 </script>
 
 <style scoped>
-  .j-address-list-right-card-box {
-    height: 100%;
-    min-height: 800px;
-  }
-
   .ant-card-body {
     height: 100%;
-    min-height: 800px;
-
+    min-height: 740px;
+	padding: 10px;
+	box-sizing: border-box;
   }
 
   #buttonsBox {
@@ -561,7 +558,7 @@
   }
   #buttonsText{
     float: left;
-    width:42%
+    width:calc(100% - 640px)
   }
   .video-container {
     position: relative;
@@ -570,8 +567,21 @@
     position: absolute;
     top: 0;
     left: 0;
-    border: 1px solid #080808;
+    background: #4c4c4c;
   }
   
 
+</style>
+<style>
+.conthreelistri{margin:10px 0;box-shadow: 0 0 10px rgba(3, 100, 255, 0.1);border-radius: 10px;background: linear-gradient(to top, #ffffff, #f5faff) !important;height:calc(100vh - 173px);min-height: 740px!important;border-radius: 10px!important;overflow: hidden;}
+.conthreelistri .ant-card-body{padding: 10px;height: 100%;box-sizing: border-box;}
+.conthreelistri #buttonsText .ant-form-item-label,.conthreelistdw div:nth-child(1){width: 120px;float: left;}
+.conthreelistri #buttonsText .ant-form-item-control-wrapper,.conthreelistdw div:nth-child(2){width: calc(100% - 120px);float: left;}
+.conthreelistri #buttonsText .ant-select-selection{background-color: #f5f5f5;}
+.conthreelistdw div:nth-child(1){text-align: right;color:#000;}
+.conthreelistdw div:nth-child(1) label{content: ':';position: relative;top: -0.5px;margin: 0 8px 0 2px;}
+.conthreelistdw div:nth-child(2){color:#0364ff;}
+.conthreelistri .ant-btn-primary{background-color: #2f51ff;border-color: #2f51ff;}
+.conthreelistri .ant-btn-danger{color: #ff4d4f;border-color: #ff4d4f;}
+.conthreelistdw{width: calc(100% - 640px);float: left;padding: 10px;box-sizing: border-box;}
 </style>

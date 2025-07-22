@@ -402,7 +402,7 @@
 	.conbody{background: none!important;border:none!important;}
 	.conbody .ant-card-body{padding: 5px;}
 	.conbody h4{color:#0364ff;}
-	.conlist{margin:5px;background: linear-gradient(to top, #ffffff, #eef6ff) !important;box-shadow:0 0 10px rgba(3,100,255,0.1);border-radius: 10px;width: calc(33.3% - 10px);padding: 10px !important;}
+	.conlist{margin:5px;background: linear-gradient(to top, #ffffff, #eef6ff) !important;box-shadow:0 0 10px rgba(3,100,255,0.1);border-radius: 10px;width: calc(33.3% - 10px);padding: 10px !important;height:406px;}
 	.conlist.on{width: calc(100% - 10px)!important;}
 	.messagediv{font-size: 12px;background: url(~@assets/zwyStyle/img/bg-03.png) no-repeat;background-size: 100% 100%;border: none!important;color: #51565c!important;}
 	.messagediv.on{background: url(~@assets/zwyStyle/img/bg-04.png) no-repeat;background-size: 100% 100%;}

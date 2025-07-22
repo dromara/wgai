@@ -1,5 +1,5 @@
 <template>
-  <a-row type="flex" :gutter="16">
+  <a-row class="videoList" type="flex" :gutter="16">
  
     <a-col :md="24" :sm="24">
       <test-video style="
@@ -53,4 +53,12 @@
  .ant-card-body {
    padding: 0 !important;
  }
+</style>
+<style>
+.videoList{padding: 10px;box-sizing: border-box;box-shadow: 0 0 10px rgba(3, 100, 255, 0.1);border-radius: 10px;background: linear-gradient(to top, #ffffff, #f5faff) !important;height:calc(100vh - 173px);min-height: 740px;border-radius: 10px!important;overflow: hidden;width:calc(100% - 20px);margin: 10px!important;}
+.videoList input{background: #eff3f8;border-radius:4px;border: 1px solid #d9d9d9;height: 32px;line-height: 32px;margin-right: 5px;}
+.videoList .ant-card{background: none!important;}
+.videoList button{height: 32px;margin-right: 5px;border-radius: 4px;color: #fff;cursor: pointer;}
+.videoList button:nth-child(2){background: #4CAF50;border: 1px solid #4CAF50;}
+.videoList button:nth-child(3){background: #ff9800;border: 1px solid #ff9800;}
 </style>

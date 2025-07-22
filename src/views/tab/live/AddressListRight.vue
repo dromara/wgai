@@ -1,16 +1,11 @@
 <template>
-  <a-card class="j-address-list-right-card-box" :bordered="false">
+  <a-card class="j-address-list-right-card-box conthreelistri" :bordered="false">
     <div class="ceshi" style="width: 100%;height:50px;display: none;"> <input type="text" v-model="url">
       <button @click="geturl()">播放</button>
       <button @click="closeurl()">销毁</button>
     </div>
     </div>
-
-    <div class="buttons-box" id="buttonsBox">
-
-
-    </div>
-
+    <div class="buttons-box" id="buttonsBox"></div>
   </a-card>
 </template>
 
@@ -288,20 +283,19 @@
 </script>
 
 <style scoped>
-  .j-address-list-right-card-box {
-    height: 100%;
-    min-height: 800px;
-  }
 
   .ant-card-body {
     height: 100%;
-    min-height: 800px;
-
   }
 
   #buttonsBox {
     height: 100%;
-    min-height: 800px;
+    min-height: 740px;
     background-color: #080808
   }
+</style>
+
+<style>
+.conthreelistri{margin:10px 0;box-shadow: 0 0 10px rgba(3, 100, 255, 0.1);border-radius: 10px;background: linear-gradient(to top, #ffffff, #f5faff) !important;height:calc(100vh - 173px);min-height: 740px!important;border-radius: 10px!important;overflow: hidden;}
+.conthreelistri .ant-card-body{padding: 10px;height: 100%;box-sizing: border-box;}
 </style>

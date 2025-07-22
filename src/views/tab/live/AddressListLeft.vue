@@ -1,5 +1,5 @@
 <template>
-  <a-card :loading="cardLoading" :bordered="false" style="height: 100%;">
+  <a-card class="conthreelist" :loading="cardLoading" :bordered="false">
     <a-spin :spinning="loading">
       <a-input-search @search="handleSearch" style="width:100%;margin-top: 10px" placeholder="输入模型名称查询..."
         enterButton />
@@ -128,4 +128,19 @@
 
 <style scoped>
 
+</style>
+
+<style>
+.conthreelist{margin: 10px;box-shadow: 0 0 10px rgba(3, 100, 255, 0.1);border-radius: 10px;background: linear-gradient(to top, #ffffff, #f5faff) !important;height:calc(100vh - 173px);min-height: 740px;border-radius: 10px!important;overflow: hidden;}
+.conthreelist .ant-card-body{padding: 10px;height: 100%;box-sizing: border-box;}
+.conthreelist .ant-spin-nested-loading,.conthreelist .ant-spin-container{height: 100%;}
+.conthreelist .ant-input{background: #eff3f8;}
+.conthreelist .ant-btn-primary{background-color: #2176fe;border-color: #2176fe;}
+.conthreelist .ant-tree.ant-tree-show-line li span.ant-tree-switcher{background: none;}
+.conthreelist .ant-tree-treenode-switcher-close .anticon{background: url(~@assets/zwyStyle/img/a-10.png);}
+.conthreelist .ant-tree-treenode-selected .anticon{background: url(~@assets/zwyStyle/img/a-11.png)!important;}
+.conthreelist .ant-tree-treenode-selected{background: #deebff;border-radius: 5px;}
+.conthreelist .ant-tree li .ant-tree-node-content-wrapper.ant-tree-node-selected,.conthreelist .ant-tree li .ant-tree-node-content-wrapper:hover{background: none;}
+.conthreelist .ant-tree{margin-top: 10px;overflow: auto;height: calc(100% - 55px);}
+.conthreelist .ant-tree li .ant-tree-node-content-wrapper{color: #49505b;}
 </style>

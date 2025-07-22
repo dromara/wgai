@@ -1,16 +1,16 @@
 <template>
-  <div class="container">
+  <div class="containerOn">
     <!-- 左侧：图片选择列表 -->
-    <div class="left-panel" style="width: 33%;">
-      <div style="100%">
+    <div class="left-panel">
+      <div class="conearchselect" style="100%">
         <j-search-select-tag placeholder="请做出你的选择" @change="handleSelection" v-model="formData.searchValue"
           :dictOptions="searchOptions">
         </j-search-select-tag>
       </div>
-      <h3>标注图片列表 ∨</h3>
+      <h3><img src="~@assets/zwyStyle/img/a-8.png"/>标注图片列表</h3>
       <div class="image-list">
         <div v-for="(image, index) in imageList" :key="index"
-          :style="{ backgroundColor: isSelected(image) ? '#00ff2f' : '#ccc' }" class="image-item"
+          :style="{ backgroundColor: isSelected(image) ? '#6dbe52' : '#d2d2d2' }" class="image-item"
           @click="selectImage(image)">
           <img :src="image.src" :alt="image.name" />
           <p style="font-size: 13px;">{{ image.name }}</p>
@@ -19,20 +19,20 @@
       </div>
       <!-- 分页组件 -->
       <a-pagination :current="currentPage" :total="total" :pageSize="pageSize" @change="handlePageChange"
-        style="margin-top: 10px; text-align: center" />
+        style="margin-top: 10px; text-align: center;width: 100%;zoom: 0.8;" />
     </div>
 
     <!-- 右侧：画布和标注操作区域 -->
-    <div class="center-panel" style="width: 44%;">
+    <div class="center-panel">
       <div class="canvas-container">
         <canvas ref="canvas" :width="canvasWidth" :height="canvasHeight" @mousedown="startDraw" @mousemove="drawing"
           @mouseup="endDraw"></canvas>
       </div>
 
     </div>
-    <div class="right-panel" style="width: 21%;">
+    <div class="right-panel">
       <div class="header2">
-        <h3 style="float: left;">标注结果:</h3>
+        <h3 style="float: left;"><img src="~@assets/zwyStyle/img/a-9.png"/>标注结果:</h3>
         <!-- 保存按钮居右 -->
         <a-button style="float:right;p" type="danger" @click="deleteAnnotations">删除</a-button>
 
@@ -41,12 +41,11 @@
 
       </div>
       <br /><br />
-      <div v-if="rectangles.length">
+      <div v-if="rectangles.length" style="height: calc(100% - 42px);overflow: auto;">
         <ul>
           <li v-for="(rect, index) in rectangles" :key="index">
-            <p>标签: {{ rect.label }}</p>
-            <p>位置: ({{ rect.x }}, {{ rect.y }})</p>
-            <p>大小: {{ rect.width }} x {{ rect.height }}</p>
+            <p style="margin-bottom: 0px;">{{ rect.label }}<span style="margin: 0 5px;">( {{ rect.width }} x {{ rect.height }} )</span>:</p>
+            <p style="color: #0364ff;"><span style="margin-right:30px;">X<span style="margin: 0 4px;">:</span>{{ rect.x }}</span><span>Y<span style="margin: 0 4px;">:</span>{{ rect.y }}</span></p>
           </li>
         </ul>
       </div>
@@ -71,9 +70,6 @@
   </div>
 
 </template>
-
-
-
 
 <script>
   import JSearchSelectTag from '@/components/dict/JSearchSelectTag'
@@ -518,13 +514,23 @@
   };
 </script>
 <style scoped>
-  .container {
+  .containerOn {
     display: flex;
-    height: 750px;
+    height:calc(100vh - 145px);
+	min-height: 740px;
   }
-
+	.left-panel,.center-panel,.right-panel{box-shadow: 0 0 10px rgba(3, 100, 255, 0.1);border-radius: 10px;background: linear-gradient(to top, #ffffff, #f5faff) !important;}
+	.center-panel{width: 720px;padding: 10px;margin-top: 10px;margin-bottom: 10px;}
+	.left-panel{width: calc(60% - 380px);min-width: 390px;margin: 10px;}
+	.right-panel{width: calc(40% - 380px);min-width:280px;margin: 10px;}
+	
+	.left-panel h3{color:#49505b;font-size: 14px;margin-top: 10px;}
+	.left-panel h3 img{margin-right: 5px;}
+	
+	.right-panel h3{color:#49505b;font-size: 14px;line-height: 30px;}
+	.right-panel h3 img{margin-right: 5px;}
+	
   .left-panel {
-    width: 250px;
     padding: 10px;
     overflow-y: auto;
     border-right: 1px solid #ddd;
@@ -533,17 +539,14 @@
   .image-list {
     display: flex;
     flex-wrap: wrap;
-
-    gap: 10px;
-    max-height: 600px;
+    height: calc(100% - 110px);
     overflow-y: auto;
   }
 
   .image-item {
-    width: 80px;
     margin: 5px;
     text-align: center;
-    cursor: pointer;
+    cursor: pointer;width: calc(20% - 10px);
   }
 
   .image-item img {
@@ -551,10 +554,11 @@
     border: 1px solid #ddd;
     margin-bottom: 5px;
   }
+  .image-item p{margin-bottom: 0;}
 
   .right-panel {
     flex-grow: 1;
-    padding: 20px;
+    padding:10px;
   }
 
   /* .right-panel-right {
@@ -565,9 +569,7 @@
     margin-bottom: 20px;
   }
 
-  canvas {
-    border: 1px solid #000;
-  }
+  canvas {background: #4c4c4c;}
 
   img {
     object-fit: contain;
@@ -600,4 +602,15 @@
     color: green;
     font-size: 20px;
   }
+</style>
+<style>
+	.conearchselect .ant-select-selection{background: #eff3f8 !important;}
+	.containerOn .ant-pagination-item-active a,.containerOn .ant-pagination-item-active:focus a{color: #fff!important;background: #2f51ff;}
+	.containerOn .ant-pagination-item-active{border-color:#2f51ff;}
+	.containerOn .ant-pagination-item:hover{border-color:#2f51ff;}
+	.containerOn .ant-pagination-item:hover a{color:#2f51ff;}
+	.containerOn .ant-pagination-prev:focus .ant-pagination-item-link,.containerOn .ant-pagination-next:focus .ant-pagination-item-link,.containerOn .ant-pagination-prev:hover .ant-pagination-item-link, .containerOn .ant-pagination-next:hover .ant-pagination-item-link{border-color: #2f51ff!important;color: #2f51ff!important;}
+	
+	.containerOn .ant-btn-primary{background-color: #2f51ff;border-color: #2f51ff;}
+	.containerOn .ant-btn-danger{color: #ff4d4f;border-color: #ff4d4f;}
 </style>

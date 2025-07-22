@@ -1,5 +1,5 @@
 <template>
-  <a-row type="flex" :gutter="16">
+  <a-row type="flex" :gutter="16" style="width: calc(100% - 0px);">
     <a-col :md="5" :sm="24">
       <address-list-left v-model="currentOrgCode"/>
     </a-col>
