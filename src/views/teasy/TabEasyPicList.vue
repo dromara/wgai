@@ -28,7 +28,11 @@
               <a-input placeholder="请输入图片地址" v-model="queryParam.picUrl"></a-input>
             </a-form-item>
           </a-col>
-          
+          <a-col :xl="6" :lg="7" :md="8" :sm="24">
+            <a-form-item label="标注标签">
+              <a-input placeholder="请输入标注标签" v-model="queryParam.markTitle"></a-input>
+            </a-form-item>
+          </a-col>
           <a-col :xl="6" :lg="7" :md="8" :sm="24">
             <a-form-item label="标注特征">
               <a-input placeholder="请输入标注特征" v-model="queryParam.markFeature"></a-input>

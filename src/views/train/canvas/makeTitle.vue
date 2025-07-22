@@ -34,10 +34,9 @@
       <div class="header2">
         <h3 style="float: left;"><img src="~@assets/zwyStyle/img/a-9.png"/>标注结果:</h3>
         <!-- 保存按钮居右 -->
-        <a-button style="float:right;p" type="danger" @click="deleteAnnotations">删除</a-button>
-
-
-        <a-button style="float:right;margin-right:5%" type="primary" @click="saveAnnotations">保存</a-button>
+   
+        <a-button style="float:right;" type="danger" @click="deleteAnnotations">删除图片</a-button>
+        <a-button style="float:right;margin-right:3%" type="primary" @click="saveAnnotations">保存标注</a-button>
 
       </div>
       <br /><br />
@@ -198,6 +197,7 @@
             console.log("xxxxxxxxxxxxx", res)
             that.total = res.result.total;
             that.imageList = [];
+            let a=0;
             for (let i of res.result.records) {
               that.imageList.push({
                 id: i.id,
@@ -206,6 +206,10 @@
                 markFlat: i.markType,
                 markFeature: i.markFeature
               })
+              if(a==0){
+                 that.selectImage(that.imageList[a]) 
+              }
+              a++;
             }
 
           } else {

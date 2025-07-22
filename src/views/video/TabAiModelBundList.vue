@@ -173,7 +173,7 @@
           }
         ],
         url: {
-          list: "/tab/tabAiModelBund/list",
+          list: "/tab/tabAiModelBund/listVideo", 
           delete: "/tab/tabAiModelBund/delete",
           deleteBatch: "/tab/tabAiModelBund/deleteBatch",
           exportXlsUrl: "/tab/tabAiModelBund/exportXls",
