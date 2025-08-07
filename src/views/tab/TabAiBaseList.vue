@@ -41,11 +41,12 @@
         <a-menu slot="overlay">
           <a-menu-item key="1" @click="batchDel"><a-icon type="delete"/>删除</a-menu-item>
         </a-menu>
+       
         <a-button style="margin-left: 8px"> 批量操作 <a-icon type="down" /></a-button>
       </a-dropdown>
-     <!-- <j-super-query :fieldList="superFieldList" ref="superQueryModal" @handleSuperQuery="handleSuperQuery"></j-super-query>
+    <j-super-query :fieldList="superFieldList" ref="superQueryModal" @handleSuperQuery="handleSuperQuery"></j-super-query>
       
-         <a-button @click="SendRedis" type="primary" icon="plus">刷新缓存</a-button> -->
+         <a-button @click="SendRedis" type="primary" icon="plus">刷新缓存</a-button> 
     </div>
 
     <!-- table区域-begin -->

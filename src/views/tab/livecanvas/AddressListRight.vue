@@ -114,8 +114,13 @@
     props: ['value'],
     data() {
       return {
-        model:{
-         },
+       model: {
+             canvasStartx: '',
+             canvasStarty: '',
+             canvasWidth: '',
+             canvasHeight: '',
+             videoId: ''
+           },
         description: '用户信息',
         strokeStyle:'red',
         cardLoading: true,
@@ -403,8 +408,8 @@
       // }else if(videoWidth<640&&videoHeight>=640){
        
       // }
- 
       let modelVal= this.calculateScaledDimensions(640, 640, startX, startY, endX, endY, videoWidth, videoHeight);
+      
       this.model.canvasStartx=modelVal.canvasStartx;
       this.model.canvasStarty=modelVal.canvasStarty;
       this.model.canvasWidth=modelVal.canvasWidth;
@@ -414,10 +419,10 @@
       let dataArray=[];
       let rectlist = {};
         rectlist.type = 'rect';
-        rectlist.x = this.resultRect.startX;
-        rectlist.y = this.resultRect.startY;
-        rectlist.width = this.resultRect.width;
-        rectlist.height = this.resultRect.height;
+        rectlist.x = modelVal.canvasStartx;
+        rectlist.y = modelVal.canvasStarty;
+        rectlist.width = modelVal.canvasWidth;
+        rectlist.height = modelVal.canvasHeight;
         rectlist.color ="green";
         dataArray.push(rectlist);
          
@@ -567,7 +572,7 @@
     position: absolute;
     top: 0;
     left: 0;
-    background: #4c4c4c;
+/*    background: #4c4c4c; */
   }
   
 

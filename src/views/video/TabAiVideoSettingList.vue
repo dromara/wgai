@@ -4,6 +4,27 @@
     <div class="table-page-search-wrapper">
       <a-form layout="inline" @keyup.enter.native="searchQuery">
         <a-row :gutter="24">
+          <a-col :xl="6" :lg="7" :md="8" :sm="24">
+            <a-form-item label="订阅名称">
+          <j-search-select-tag  v-model="queryParam.subId" dict="tab_ai_subscription_new,name,id" placeholder="请选择订阅ID" />
+      
+            </a-form-item>
+          </a-col>
+          <a-col :xl="6" :lg="7" :md="8" :sm="24">
+            <a-form-item label="后置模型">
+                <j-search-select-tag  v-model="queryParam.nextMode" dict="tab_ai_model,ai_name,id" placeholder="请选择后置模型" />
+            </a-form-item>
+          </a-col>
+          <a-col :xl="6" :lg="7" :md="8" :sm="24">
+            <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
+              <a-button type="primary" @click="searchQuery" class="cx" icon="search">查询</a-button>
+              <a-button type="primary" @click="searchReset" class="cz" icon="reload" style="margin-left: 8px">重置</a-button>
+              <!-- <a @click="handleToggleSearch" style="margin-left: 8px">
+                {{ toggleSearchStatus ? '收起' : '展开' }}
+                <a-icon :type="toggleSearchStatus ? 'up' : 'down'"/>
+              </a> -->
+            </span>
+          </a-col>
         </a-row>
       </a-form>
     </div>

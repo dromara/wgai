@@ -267,6 +267,7 @@
         let condition = {
           pageSize: 8,
           pageNo: 1,
+          onnxIsok :this.status,
           isActive: this.status,
           prodId: this.deviceType
         }

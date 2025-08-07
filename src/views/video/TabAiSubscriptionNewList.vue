@@ -4,6 +4,27 @@
     <div class="table-page-search-wrapper">
       <a-form layout="inline" @keyup.enter.native="searchQuery">
         <a-row :gutter="24">
+          <a-col :xl="6" :lg="7" :md="8" :sm="24">
+            <a-form-item label="订阅名称">
+              <a-input placeholder="订阅名称" v-model="queryParam.name"></a-input>
+            </a-form-item>
+          </a-col>
+          <a-col :xl="6" :lg="7" :md="8" :sm="24">
+            <a-form-item label="回调地址">
+              <a-input placeholder="回调地址" v-model="queryParam.eventUrl"></a-input>
+            </a-form-item>
+          </a-col>
+          <a-col :xl="6" :lg="7" :md="8" :sm="24">
+            <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
+              <a-button type="primary" @click="searchQuery" class="cx" icon="search">查询</a-button>
+              <a-button type="primary" @click="searchReset" class="cz" icon="reload" style="margin-left: 8px">重置</a-button>
+              <!-- <a @click="handleToggleSearch" style="margin-left: 8px">
+                {{ toggleSearchStatus ? '收起' : '展开' }}
+                <a-icon :type="toggleSearchStatus ? 'up' : 'down'"/>
+              </a> -->
+            </span>
+          </a-col>
+          
         </a-row>
       </a-form>
     </div>
@@ -21,7 +42,10 @@
       <a-dropdown v-if="selectedRowKeys.length > 0">
         <a-menu slot="overlay">
           <a-menu-item key="1" @click="batchDel"><a-icon type="delete"/>删除</a-menu-item>
+          <a-menu-item key="1" @click="batchStart('1')"><a-icon type="primary"/>批量启动</a-menu-item>
+          <a-menu-item key="1" @click="batchStart('0')"><a-icon type="primary"/>批量停止</a-menu-item>
         </a-menu>
+      
         <a-button style="margin-left: 8px"> 批量操作 <a-icon type="down" /></a-button>
       </a-dropdown>
     </div>
@@ -74,7 +98,7 @@
           <a-divider type="vertical"  v-if="record.runState==1"/>
           <a  v-if="record.runState==1"  @click="handleStop(record,0)">结束执行</a>
           <a-divider type="vertical" />
-          <a-divider type="vertical" />
+    
           <a-dropdown>
             <a class="ant-dropdown-link">更多 <a-icon type="down" /></a>
             <a-menu slot="overlay">
@@ -261,6 +285,7 @@
           importExcelUrl: "video/tabAiSubscriptionNew/importExcel",
           updateUrl:"video/tabAiSubscriptionNew/start",
           stopUrl:"video/tabAiSubscriptionNew/stop",
+           startBatch:"video/tabAiSubscriptionNew/startBatch",
         },
         dictOptions:{},
         superFieldList:[],
@@ -339,6 +364,38 @@
              // debugger;
             let url=that.url.stopUrl;
             record.runState=flag;
+            httpAction(url, record, "POST").then((res) => {
+              if (res.success) {
+                that.$message.success(res.message);
+                that.$emit('ok');
+              } else {
+                that.$message.warning(res.message);
+              }
+                  that.loadData();
+            }).finally(() => {
+              that.confirmLoading = false;
+            })
+        
+          }
+        });
+      },
+      batchStart(flag){
+        var ids = ''
+        for (var a = 0; a < this.selectedRowKeys.length; a++) {
+          ids += this.selectedRowKeys[a] + ','
+        }
+        console.log("ids",ids)
+        let that = this;
+        this.$confirm({
+          title: "确认批量操作吗？",
+          content: "批量操请谨慎使用！",
+          onOk: function() {
+              
+             // debugger;
+            let record={};
+            let url=that.url.startBatch;
+            record.runState=flag;
+            record.id=ids;
             httpAction(url, record, "POST").then((res) => {
               if (res.success) {
                 that.$message.success(res.message);

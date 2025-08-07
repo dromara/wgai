@@ -573,7 +573,7 @@
     margin-bottom: 20px;
   }
 
-  canvas {background: #4c4c4c;}
+  /* canvas {background: #4c4c4c;} */
 
   img {
     object-fit: contain;

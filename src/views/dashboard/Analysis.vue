@@ -286,9 +286,11 @@
             }
             more.forEach((item, idx) => {
               let param = value.name + item
-              let val = value.measurements[idx].value
+              let measurements=value.measurements[idx];
+              let val = value.measurements[idx].value;
+       
               if (param === 'system.cpu.usage' || param === 'process.cpu.usage') {
-                val = this.convert(val, Number)
+                val = (val*100).toFixed(3)
               }
               if (param === 'process.start.time') {
                 val = this.convert(val, Date)
@@ -296,6 +298,7 @@
               info.push({ id: param + id, param, text: 'false value', value: val })
             })
           })
+       
           this.dataSourceSystem = info
         }).catch((e) => {
           console.error(e)
