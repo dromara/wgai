@@ -64,7 +64,7 @@
       </a-table>
 
     <dict-modal class="contc" :width="1200" ref="modalForm" @ok="modalFormOk"></dict-modal>  <!-- 字典类型 -->
-    <dict-item-list class="contc" :width="1200" ref="dictItemList"></dict-item-list>
+    <!-- <dict-item-list class="contc" :width="1200" ref="dictItemList"></dict-item-list> -->
     <dict-delete-list class="contc" :width="1200" ref="dictDeleteList" @refresh="() =>loadData()"></dict-delete-list>
     </div>
   </a-card>
@@ -211,5 +211,10 @@
 <style src="@assets/zwyStyle/css/main.css"></style>
 <style scoped>
   @import '~@assets/less/common.less';
-  /deep/ .ant-table{height: calc(100vh - 388px);}
+.contable {
+	height:calc(74vh - 17px)!important;
+}
+/deep/.ant-table {
+	height:calc(70vh - 94px) !important;overflow: auto;
+}
 </style>

@@ -50,25 +50,21 @@
     </div>
 
     <!-- table区域-begin -->
-    <div>
+    <div class="datagrid-view">
       <div class="ant-alert ant-alert-info" style="margin-bottom: 16px;">
         <i class="anticon anticon-info-circle ant-alert-icon"></i> 已选择 <a style="font-weight: 600">{{ selectedRowKeys.length }}项</a>
         <a class="btn" style="margin-left: 24px" @click="onClearSelected">清空</a>
       </div>
 
-      <a-table
-        ref="table"
-        size="middle"
-        :scroll="{x:true}"
-        bordered
-        rowKey="id"
-        :columns="columns"
-        :dataSource="dataSource"
-        :pagination="ipagination"
-        :loading="loading"
-        :rowSelection="{selectedRowKeys: selectedRowKeys, onChange: onSelectChange}"
-        class="j-table-force-nowrap"
-        @change="handleTableChange">
+      <!-- <a-table ref="table" size="middle" :scroll="{x:true}" bordered
+        rowKey="id" :columns="columns" :dataSource="dataSource" :pagination="ipagination"
+        :loading="loading" :rowSelection="{selectedRowKeys: selectedRowKeys, onChange: onSelectChange}"
+        class="j-table-force-nowrap" @change="handleTableChange"> -->
+		
+		<a-table :rowClassName="rowClassName" ref="table" size="middle" :scroll="{ x: true }" bordered
+				:rowKey="record => record.key" :columns="columns" :dataSource="dataSource" :pagination="ipagination"
+				:loading="loading" :rowSelection="{ selectedRowKeys: selectedRowKeys, onChange: onSelectChange }"
+				@click.native="handleRowClick" class="j-table-force-nowrap" @change="handleTableChange">
 
         <template slot="htmlSlot" slot-scope="text">
           <div v-html="text"></div>
@@ -268,7 +264,13 @@
 <style src="@assets/zwyStyle/css/main.css"></style>
 <style scoped>
   @import '~@assets/less/common.less';
-  /deep/ .ant-table-scroll{height:calc(100vh - 431px);}
+  /* /deep/ .ant-table-scroll{height:calc(100vh - 431px);} */
+.datagrid-view {
+	height:66vh!important;
+}
+/deep/.ant-table {
+	height:calc(64vh - 90px) !important;overflow: auto;
+}
 </style>
 
 

@@ -1,11 +1,11 @@
 <template>
   <a-card class="contablelist" :bordered="false">
     <!-- 查询区域 -->
-   <div class="table-page-search-wrapper">
+   <!-- <div class="table-page-search-wrapper">
       <a-form layout="inline" @keyup.enter.native="searchQuery">
       
       </a-form>
-    </div> 
+    </div> -->
     <!-- 查询区域-END -->
 
  <div class="contable">
@@ -26,7 +26,7 @@
     </div>
 
     <!-- table区域-begin -->
-    <div>
+    <div class="datagrid-view">
       <div class="ant-alert ant-alert-info" style="margin-bottom: 16px;">
         <i class="anticon anticon-info-circle ant-alert-icon"></i> 已选择 <a
           style="font-weight: 600">{{ selectedRowKeys.length }}</a>项
@@ -307,5 +307,11 @@ import { filterObj } from '@/utils/util';
 <style src="@assets/zwyStyle/css/main.css"></style>
 <style scoped>
   @import '~@assets/less/common.less';
-  /deep/ .ant-table-scroll{height: calc(100vh - 337px);}
+  /* /deep/ .ant-table-scroll{height: calc(100vh - 337px);} */
+.datagrid-view {
+	height:76vh!important;
+}
+/deep/.ant-table {
+	height:calc(74vh - 91px) !important;overflow: auto;
+}
 </style>

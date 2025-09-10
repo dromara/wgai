@@ -50,7 +50,7 @@
     </div>
 
     <!-- table区域-begin -->
-    <div>
+    <div class="datagrid-view">
       <div class="ant-alert ant-alert-info" style="margin-bottom: 16px;">
         <i class="anticon anticon-info-circle ant-alert-icon"></i> 已选择 <a style="font-weight: 600">{{ selectedRowKeys.length }}</a>项
         <a style="margin-left: 24px" @click="onClearSelected">清空</a>
@@ -211,5 +211,11 @@
 <style src="@assets/zwyStyle/css/main.css"></style>
 <style scoped>
   @import '~@assets/less/common.less';
-  /deep/ .ant-table-scroll{height: calc(100vh - 431px);}
+  /* /deep/ .ant-table-scroll{height:calc(100vh - 431px);} */
+.datagrid-view {
+	height:66vh!important;
+}
+/deep/.ant-table {
+	height:calc(64vh - 90px) !important;overflow: auto;
+}
 </style>

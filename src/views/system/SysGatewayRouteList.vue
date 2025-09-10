@@ -5,7 +5,7 @@
     <div class="table-operator">
       <a-button @click="showModal(null)" type="primary" class="xz" icon="plus">新增</a-button>
     </div>
-    <div>
+    <div class="datagrid-view">
       <a-table
         ref="table"
         size="middle"
@@ -112,5 +112,11 @@
 <style src="@assets/zwyStyle/css/main.css"></style>
 <style scoped>
   @import '~@assets/less/common.less';
-  /deep/ .ant-table-scroll{height: calc(100vh - 227px);}
+  /* /deep/ .ant-table-scroll{height: calc(100vh - 227px);} */
+.datagrid-view {
+	height:76vh!important;
+}
+/deep/.ant-table {
+	height:calc(84vh - 91px) !important;overflow: auto;
+}
 </style>

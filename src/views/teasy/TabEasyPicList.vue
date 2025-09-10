@@ -74,7 +74,7 @@
     </div>
 
     <!-- table区域-begin -->
-    <div>
+    <div class="datagrid-view">
       <div class="ant-alert ant-alert-info" style="margin-bottom: 16px;">
         <i class="anticon anticon-info-circle ant-alert-icon"></i> 已选择 <a style="font-weight: 600">{{ selectedRowKeys.length }}</a>项
         <a style="margin-left: 24px" @click="onClearSelected">清空</a>
@@ -273,5 +273,11 @@ import { filterObj } from '@/utils/util';
 <style src="@assets/zwyStyle/css/main.css"></style>
 <style scoped>
   @import '~@assets/less/common.less';
-  /deep/ .ant-table-scroll{height: calc(100vh - 505px);}
+  /* /deep/ .ant-table-scroll{height: calc(100vh - 505px);} */
+.datagrid-view {
+	height:calc(58vh + 2px)!important;
+}
+/deep/.ant-table {
+	height:calc(50vh - 27px) !important;overflow: auto;
+}
 </style>

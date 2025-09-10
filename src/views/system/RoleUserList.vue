@@ -95,7 +95,7 @@
     </a-col>
     <a-col :md="rightColMd" :sm="24" v-if="this.rightcolval == 1">
   <a-card class="contablelist" :bordered="false">
-        <div style="text-align: right;">
+        <div style="text-align: right;position: absolute;right: 10px;">
           <a-icon type="close-circle" @click="hideUserList" />
         </div>
         <!-- 查询区域 -->
@@ -551,5 +551,8 @@
   .ant-btn {
     margin-left: 8px
   }
-  /deep/ .ant-table-scroll{height: calc(100vh - 337px);}
+  .contable{height:calc(108vh - 339px);}
+/deep/.ant-table {
+	height:calc(63vh - 88px) !important;overflow: auto;
+}
 </style>
