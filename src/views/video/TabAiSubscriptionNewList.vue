@@ -98,7 +98,8 @@
           <a-divider type="vertical"  v-if="record.runState==1"/>
           <a  v-if="record.runState==1"  @click="handleStop(record,0)">结束执行</a>
           <a-divider type="vertical" />
-    
+          <a @click="handleEditStart(record)">设置边界</a>
+          <a-divider type="vertical" />
           <a-dropdown>
             <a class="ant-dropdown-link">更多 <a-icon type="down" /></a>
             <a-menu slot="overlay">
@@ -118,6 +119,7 @@
     </div>
 
     <tab-ai-subscription-new-modal ref="modalForm" @ok="modalFormOk"></tab-ai-subscription-new-modal>
+    <pic-util class="contc" :width="1200" ref="modalForm2" @ok="modalFormOk"></pic-util>
   </a-card>
 </template>
 
@@ -132,11 +134,12 @@
     httpAction,
     getAction
   } from '@/api/manage'
+    import picUtil from './modules/picUtil'
   export default {
     name: 'TabAiSubscriptionNewList',
     mixins:[JeecgListMixin, mixinDevice],
     components: {
-      TabAiSubscriptionNewModal
+      TabAiSubscriptionNewModal,picUtil
     },
     data () {
       return {
@@ -264,6 +267,16 @@
         //   customRender: (text) => (text ? filterMultiDictText(this.dictOptions['push_static'], text) : ''),
           },
           {
+            title:'是否保存本地报警',
+            align:"center",
+            dataIndex: 'saveLocalhost_dictText',
+          },
+          {
+            title:'是否开启区域识别',
+            align:"center",
+            dataIndex: 'isBy_dictText',
+          },
+          {
             title:'备注',
             align:"center",
             dataIndex: 'remake'
@@ -303,6 +316,9 @@
       },
     },
     methods: {
+      handleEditStart(record){
+              this.$refs.modalForm2.edit(record);
+      },
       initDictConfig(){
       },
       getSuperFieldList(){

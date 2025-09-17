@@ -133,7 +133,20 @@
               <a-input-number v-model="model.recordTime" placeholder="请输入报警录像时间" style="width: 100%" />
             </a-form-model-item>
           </a-col>
+          
+        <a-col :span="24">
+          <a-form-model-item label="是否保存本地报警" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="saveLocalhost">
+            <!--          <j-switch v-model="model.saveRecord"  ></j-switch> -->
+            <j-dict-select-tag type="list" v-model="model.saveLocalhost" dictCode="push_static" placeholder="是否保存本地报警" />
+          </a-form-model-item>
+        </a-col>
         
+        <a-col :span="24">
+          <a-form-model-item label="是否开启区域识别" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="isBy">
+            <!--          <j-switch v-model="model.saveRecord"  ></j-switch> -->
+            <j-dict-select-tag type="list" v-model="model.isBy" dictCode="push_static" placeholder="是否开启区域识别" />
+          </a-form-model-item>
+        </a-col>
        <!--   <a-col :span="24">
             <a-form-model-item label="是否保存图片" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="savePic">
               <j-switch v-model="model.savePic"  ></j-switch>
