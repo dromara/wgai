@@ -201,7 +201,7 @@ export default {
       },
     {
         // id:'model', 
-        param:'open  door',
+        param:'open  windows',
         text:'69.56%',
       },{
         // id:'model', 
