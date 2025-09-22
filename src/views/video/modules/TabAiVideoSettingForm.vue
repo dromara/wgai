@@ -16,6 +16,9 @@
               placeholder="是否需要前置" />
             </a-form-model-item>
           </a-col>
+          
+         
+          
           <a-col :span="24"  v-if="model.isBefor==0">
             <a-form-model-item label="前置模型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="modelId">
               
@@ -25,12 +28,30 @@
           </a-col>
           <a-col :span="24"  v-if="model.isBefor==0">
             <a-form-model-item label="前置识别内容" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="modelTxt">
-         
+                   
               
-              <j-search-select-tag  v-model="model.modelTxt" dict="tab_ai_base,chain_name,chain_name" placeholder="请选择前置模型" />
+              <j-search-select-tag  v-model="model.modelTxt" dict="tab_ai_base,chain_name,chain_name" placeholder="前置识别内容" />
               
             </a-form-model-item>
           </a-col>
+           <a-col :span="24"  v-if="model.isBefor==0">
+                <div style="color: red;text-align: center;">跟随坐标,后置模型会在前置基础上识别内容，后置识别的坐标会在前置模型识别到的坐标加最大距离</div>
+            </a-col>
+            
+          <a-col :span="24"   v-if="model.isBefor==0">
+            <a-form-model-item label="是否跟随前置坐标" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="isFollow">
+            <j-dict-select-tag type="list" v-model="model.isFollow" dictCode="push_static"
+              placeholder="是否跟随前置坐标" />
+            </a-form-model-item>
+          </a-col>
+          
+          <a-col :span="24"   v-if="model.isFollow==0" >
+            <a-form-model-item label="跟随最大距离" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="followPosition">
+              <a-input-number  v-model="model.followPosition" placeholder="跟随最大距离"  style="width: 100%"  ></a-input-number>
+            </a-form-model-item>
+          </a-col>
+          
+       
           <a-col :span="24">
             <a-form-model-item label="后置模型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="nextMode">
 
@@ -39,6 +60,24 @@
               
             </a-form-model-item>
           </a-col>
+        
+          <a-col :span="24"  >
+            <a-form-model-item label="是否识别报警" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="warinngMethod">
+            <j-dict-select-tag type="list" v-model="model.warinngMethod" dictCode="push_static"
+              placeholder="预警方式" />
+            </a-form-model-item>
+          </a-col>
+           <a-col :span="24" >
+               <div style="color: red;text-align: center;">默认都是识别到报警，例外情况可以未识别到报警 需要填写未识别报警内容</div>
+           </a-col>
+          <a-col :span="24"  v-if="model.warinngMethod==1">
+            <a-form-model-item label="未识别到预警文本" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="noDifText">
+    
+              <j-search-select-tag  v-model="model.noDifText" dict="tab_ai_base,chain_name,chain_name" placeholder="前置识别内容" />
+      
+            </a-form-model-item>
+          </a-col>
+          
           <a-col :span="24">
             <a-form-model-item label="备用1" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="spareOne">
               <a-input v-model="model.spareOne" placeholder="请输入备用1"  ></a-input>
@@ -70,6 +109,8 @@
     data () {
       return {
         model:{
+          followPosition:0,
+          warinngMethod:0,
          },
         labelCol: {
           xs: { span: 24 },

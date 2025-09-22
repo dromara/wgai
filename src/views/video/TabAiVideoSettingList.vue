@@ -168,9 +168,25 @@
             dataIndex: 'nextMode_dictText'
           },
           {
-            title:'备用1',
+            title:'是否跟随前置坐标',
             align:"center",
-            dataIndex: 'spareOne'
+            dataIndex: 'isFollow_dictText'
+          },
+     
+          {
+            title:'跟随最大距离',
+            align:"center",
+            dataIndex: 'followPosition'
+          },
+          {
+            title:'是否识别报警',
+            align:"center",
+            dataIndex: 'warinngMethod_dictText'
+          },
+          {
+            title:'未识别到预警文本',
+            align:"center",
+            dataIndex: 'noDifText'
           },
           {
             title: '操作',

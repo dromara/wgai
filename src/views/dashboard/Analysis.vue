@@ -20,14 +20,14 @@
                 <a-col class="box-col-left" style=""> </a-col>
                 <a-col class="box-col-right">
                   <a-row><span>接入摄像头数</span></a-row>
-                  <a-row><span class="box-col-right-bf">256</span> 个</a-row>
+                  <a-row><span class="box-col-right-bf">{{cameraNumber}}</span> 个</a-row>
                 </a-col>
               </a-col>
               <a-col :span="11" class="box-col box-col-two">
                 <a-col class="box-col-left change-bg"></a-col>
                 <a-col class="box-col-right">
                   <a-row><span>接入模型数</span></a-row>
-                  <a-row><span class="box-col-right-bf change-color">256</span> 个</a-row>
+                  <a-row><span class="box-col-right-bf change-color">{{modelNumber}}</span> 个</a-row>
                 </a-col></a-col
               >
             </a-row>
@@ -73,17 +73,15 @@
                 :loading="tableLoading"
                 style="margin-top: 10px; max-height: 70%; overflow-y: scroll"
               >
-                <template slot="param" slot-scope="text, record">
-                  <a-tag :color="textInfoModel[record.param].color">{{ text }}</a-tag>
-                </template>
+               <template slot="param" slot-scope="text, record">
+                 <a-tag :color="getRandomColor()">{{ text }}</a-tag>
+               </template>
 
                 <!-- <template slot="text" slot-scope="text, record">
                   {{ textInfoSystem[record.param].text }}
                 </template> -->
 
-                <template slot="value" slot-scope="text, record">
-                  {{ text }} {{ textInfoModel[record.param].unit }}
-                </template>
+                
               </a-table>
             </a-col>
             <!-- 服务器CPU使用率 -->
@@ -184,6 +182,8 @@ export default {
   },
   data() {
     return {
+      cameraNumber:0,
+      modelNumber:0,
       dataSourceSystem: [],
       modelDataSource:[{
         // id:'model', 
@@ -346,6 +346,7 @@ export default {
     }
   },
   mounted() {
+    this. getCameraList();
     this.openTimer()
     this.loadTomcatInfo()
     setTimeout(() => {
@@ -356,10 +357,31 @@ export default {
     this.closeTimer()
   },
   methods: {
+     getRandomColor() {
+        const colors = ['magenta','red','volcano','orange','gold','lime','green','cyan','blue','geekblue','purple'];
+        return colors[Math.floor(Math.random() * colors.length)];
+      },
     handleClickUpdate() {
       this.loadTomcatInfo()
     },
-
+    getCameraList(){
+      let that=this;
+      getAction("/tab/tabAiModel/getIndexInfo", {}).then((res) => {
+        console.log("获取首页数据",res)
+        let result=res.result;
+        that.cameraNumber=result.cameraNumber;
+        that.modelNumber=result.modelNmber;
+        that.modelDataSource=[];
+        let tabAiModelList=result.tabAiModel;
+        for (var i = 0; i < tabAiModelList.length; i++) {
+            let modelDataSourceList={};
+              modelDataSourceList.param=tabAiModelList[i].aiName;
+              modelDataSourceList.text=(tabAiModelList[i].spareFour||90)+"%";
+            
+            that.modelDataSource.push(modelDataSourceList);
+        }
+      })
+    },
     loadTomcatInfo() {
       this.tableLoading = true
       this.time = moment().format('YYYY年MM月DD日 HH时mm分ss秒')

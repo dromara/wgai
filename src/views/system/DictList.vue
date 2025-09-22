@@ -1,5 +1,6 @@
 <template>
-  <a-card class="contablelist" :bordered="false">
+  <a-card :bordered="false">
+
     <!-- 左侧面板 -->
     <div class="table-page-search-wrapper">
       <a-form layout="inline" @keyup.enter.native="searchQuery">
@@ -16,20 +17,18 @@
           </a-col>
           <a-col :md="7" :sm="8">
             <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
-              <a-button type="primary" @click="searchQuery" class="cx" icon="search">查询</a-button>
-              <a-button type="primary" @click="searchReset" class="cz" icon="reload" style="margin-left: 8px">重置</a-button>
+              <a-button type="primary" @click="searchQuery" icon="search">查询</a-button>
+              <a-button type="primary" @click="searchReset" icon="reload" style="margin-left: 8px">重置</a-button>
             </span>
           </a-col>
         </a-row>
       </a-form>
-    </div>
 
-	<div class="contable">
       <div class="table-operator" style="border-top: 5px">
-        <a-button @click="handleAdd" type="primary" class="xz" icon="plus">添加</a-button>
-        <a-button type="primary" icon="download" class="dc" @click="handleExportXls('字典信息')">导出</a-button>
+        <a-button @click="handleAdd" type="primary" icon="plus">添加</a-button>
+        <a-button type="primary" icon="download" @click="handleExportXls('字典信息')">导出</a-button>
         <a-upload name="file" :showUploadList="false" :multiple="false" :headers="tokenHeader" :action="importExcelUrl" @change="handleImportExcel">
-          <a-button type="primary" class="dr" icon="import">导入</a-button>
+          <a-button type="primary" icon="import">导入</a-button>
         </a-upload>
         <a-button type="primary" icon="sync" @click="refleshCache()">刷新缓存</a-button>
 
@@ -38,16 +37,12 @@
 
       <a-table
         ref="table"
-        size="middle"
-        :scroll="{x:auto}"
-        bordered
         rowKey="id"
+        size="middle"
         :columns="columns"
         :dataSource="dataSource"
         :pagination="ipagination"
         :loading="loading"
-        :rowSelection="{selectedRowKeys: selectedRowKeys, onChange: onSelectChange}"
-        class="j-table-force-nowrap"
         @change="handleTableChange">
         <span slot="action" slot-scope="text, record">
           <a @click="handleEdit(record)">
@@ -63,158 +58,151 @@
         </span>
       </a-table>
 
-    <dict-modal class="contc" :width="1200" ref="modalForm" @ok="modalFormOk"></dict-modal>  <!-- 字典类型 -->
-    <!-- <dict-item-list class="contc" :width="1200" ref="dictItemList"></dict-item-list> -->
-    <dict-delete-list class="contc" :width="1200" ref="dictDeleteList" @refresh="() =>loadData()"></dict-delete-list>
     </div>
+    <dict-modal ref="modalForm" @ok="modalFormOk"></dict-modal>  <!-- 字典类型 -->
+    <dict-item-list ref="dictItemList"></dict-item-list>
+    <dict-delete-list ref="dictDeleteList" @refresh="() =>loadData()"></dict-delete-list>
   </a-card>
 </template>
 
 <script>
-  import { filterObj } from '@/utils/util';
-  import { JeecgListMixin } from '@/mixins/JeecgListMixin'
-  import DictModal from './modules/DictModal'
-  import DictItemList from './DictItemList'
-  import DictDeleteList from './DictDeleteList'
-  import { getAction } from '@/api/manage'
-  import { UI_CACHE_DB_DICT_DATA } from "@/store/mutation-types"
-  import Vue from 'vue'
+import { filterObj } from '@/utils/util';
+import { JeecgListMixin } from '@/mixins/JeecgListMixin'
+import DictModal from './modules/DictModal'
+import DictItemList from './DictItemList'
+import DictDeleteList from './DictDeleteList'
+import { getAction } from '@/api/manage'
+import { UI_CACHE_DB_DICT_DATA } from "@/store/mutation-types"
+import Vue from 'vue'
 
-  export default {
-    name: "DictList",
-    mixins:[JeecgListMixin],
-    components: {DictModal, DictItemList,DictDeleteList},
-    data() {
-      return {
-        description: '这是数据字典页面',
-        visible: false,
-        // 查询条件
-        queryParam: {
-          dictCode: "",
-          dictName: "",
-        },
-        // 表头
-        columns: [
-          {
-            title: '#',
-            dataIndex: '',
-            key: 'rowIndex',
-            width: 120,
-            align: "center",
-            customRender: function (t, r, index) {
-              return parseInt(index) + 1;
-            }
-          },
-          {
-            title: '字典名称',
-            align: "left",
-            dataIndex: 'dictName',
-          },
-          {
-            title: '字典编号',
-            align: "left",
-            dataIndex: 'dictCode',
-          },
-          {
-            title: '描述',
-            align: "left",
-            dataIndex: 'description',
-          },
-          {
-            title: '操作',
-            dataIndex: 'action',
-            align: "center",
-            scopedSlots: {customRender: 'action'},
+export default {
+  name: "DictList",
+  mixins:[JeecgListMixin],
+  components: {DictModal, DictItemList,DictDeleteList},
+  data() {
+    return {
+      description: '这是数据字典页面',
+      visible: false,
+      // 查询条件
+      queryParam: {
+        dictCode: "",
+        dictName: "",
+      },
+      // 表头
+      columns: [
+        {
+          title: '#',
+          dataIndex: '',
+          key: 'rowIndex',
+          width: 120,
+          align: "center",
+          customRender: function (t, r, index) {
+            return parseInt(index) + 1;
           }
-        ],
-        dict: "",
-        labelCol: {
-          xs: {span: 8},
-          sm: {span: 5},
         },
-        wrapperCol: {
-          xs: {span: 16},
-          sm: {span: 19},
+        {
+          title: '字典名称',
+          align: "left",
+          dataIndex: 'dictName',
         },
-        url: {
-          list: "/sys/dict/list",
-          delete: "/sys/dict/delete",
-          exportXlsUrl: "sys/dict/exportXls",
-          importExcelUrl: "sys/dict/importExcel",
-          refleshCache: "sys/dict/refleshCache",
-          queryAllDictItems: "sys/dict/queryAllDictItems",
+        {
+          title: '字典编号',
+          align: "left",
+          dataIndex: 'dictCode',
         },
-      }
-    },
-    computed: {
-      importExcelUrl: function () {
-        return `${window._CONFIG['domianURL']}/${this.url.importExcelUrl}`;
-      }
-    },
-    methods: {
-      getQueryParams() {
-        var param = Object.assign({}, this.queryParam, this.isorter);
-        param.field = this.getQueryField();
-        param.pageNo = this.ipagination.current;
-        param.pageSize = this.ipagination.pageSize;
-        if (this.superQueryParams) {
-          param['superQueryParams'] = encodeURI(this.superQueryParams)
-          param['superQueryMatchType'] = this.superQueryMatchType
+        {
+          title: '描述',
+          align: "left",
+          dataIndex: 'description',
+        },
+        {
+          title: '操作',
+          dataIndex: 'action',
+          align: "center",
+          scopedSlots: {customRender: 'action'},
         }
-        return filterObj(param);
+      ],
+      dict: "",
+      labelCol: {
+        xs: {span: 8},
+        sm: {span: 5},
       },
-      //取消选择
-      cancelDict() {
-        this.dict = "";
-        this.visible = false;
-        this.loadData();
+      wrapperCol: {
+        xs: {span: 16},
+        sm: {span: 19},
       },
-      //编辑字典数据
-      editDictItem(record) {
-        this.$refs.dictItemList.edit(record);
+      url: {
+        list: "/sys/dict/list",
+        delete: "/sys/dict/delete",
+        exportXlsUrl: "sys/dict/exportXls",
+        importExcelUrl: "sys/dict/importExcel",
+        refleshCache: "sys/dict/refleshCache",
+        queryAllDictItems: "sys/dict/queryAllDictItems",
       },
-      // 重置字典类型搜索框的内容
-      searchReset() {
-        var that = this;
-        that.queryParam.dictName = "";
-        that.queryParam.dictCode = "";
-        that.loadData(this.ipagination.current);
-      },
-      openDeleteList(){
-        this.$refs.dictDeleteList.show()
-      },
-      refleshCache(){
-        getAction(this.url.refleshCache).then((res) => {
-          if (res.success) {
-            //重新加载缓存
-            getAction(this.url.queryAllDictItems).then((res) => {
-              if (res.success) {
-                Vue.ls.remove(UI_CACHE_DB_DICT_DATA)
-                Vue.ls.set(UI_CACHE_DB_DICT_DATA, res.result, 7 * 24 * 60 * 60 * 1000)
-              }
-            })
-            this.$message.success("刷新缓存完成！");
-          }
-        }).catch(e=>{
-          this.$message.warn("刷新缓存失败！");
-          console.log("刷新失败",e)
-        })
+    }
+  },
+  computed: {
+    importExcelUrl: function () {
+      return `${window._CONFIG['domianURL']}/${this.url.importExcelUrl}`;
+    }
+  },
+  methods: {
+    getQueryParams() {
+      var param = Object.assign({}, this.queryParam, this.isorter);
+      param.field = this.getQueryField();
+      param.pageNo = this.ipagination.current;
+      param.pageSize = this.ipagination.pageSize;
+      if (this.superQueryParams) {
+        param['superQueryParams'] = encodeURI(this.superQueryParams)
+        param['superQueryMatchType'] = this.superQueryMatchType
       }
+      return filterObj(param);
     },
-    watch: {
-      openKeys(val) {
-        console.log('openKeys', val)
-      },
+    //取消选择
+    cancelDict() {
+      this.dict = "";
+      this.visible = false;
+      this.loadData();
     },
-  }
+    //编辑字典数据
+    editDictItem(record) {
+      this.$refs.dictItemList.edit(record);
+    },
+    // 重置字典类型搜索框的内容
+    searchReset() {
+      var that = this;
+      that.queryParam.dictName = "";
+      that.queryParam.dictCode = "";
+      that.loadData(this.ipagination.current);
+    },
+    openDeleteList(){
+      this.$refs.dictDeleteList.show()
+    },
+    refleshCache(){
+      getAction(this.url.refleshCache).then((res) => {
+        if (res.success) {
+          //重新加载缓存
+          getAction(this.url.queryAllDictItems).then((res) => {
+            if (res.success) {
+              Vue.ls.remove(UI_CACHE_DB_DICT_DATA)
+              Vue.ls.set(UI_CACHE_DB_DICT_DATA, res.result, 7 * 24 * 60 * 60 * 1000)
+            }
+          })
+          this.$message.success("刷新缓存完成！");
+        }
+      }).catch(e=>{
+        this.$message.warn("刷新缓存失败！");
+        console.log("刷新失败",e)
+      })
+    }
+  },
+  watch: {
+    openKeys(val) {
+      console.log('openKeys', val)
+    },
+  },
+}
 </script>
-<style src="@assets/zwyStyle/css/main.css"></style>
 <style scoped>
-  @import '~@assets/less/common.less';
-.contable {
-	height:calc(74vh - 17px)!important;
-}
-/deep/.ant-table {
-	height:calc(70vh - 94px) !important;overflow: auto;
-}
+@import '~@assets/less/common.less'
 </style>
