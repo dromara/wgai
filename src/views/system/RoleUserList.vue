@@ -7,7 +7,7 @@
           <!-- 搜索区域 -->
           <a-form layout="inline" @keyup.enter.native="searchQuery">
             <a-row :gutter="24">
-              <a-col :md="12" :sm="8">
+              <a-col :md="12" :sm="8" style="width: 250px;">
                 <a-form-item label="角色名称" :labelCol="{span: 5}" :wrapperCol="{span: 18, offset: 1}">
                   <a-input placeholder="" v-model="queryParam.roleName"></a-input>
                 </a-form-item>
