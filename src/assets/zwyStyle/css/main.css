@@ -55,7 +55,7 @@
 .ant-table-tbody > tr > td{border-bottom: 1px solid #ffffff!important;}
 
 
-.contc .ant-modal-content{background: url(../img/bg-08.png) no-repeat, linear-gradient(to top, #ffffff, #f5faff) !important;background-size: 100%,100%;}
+.contc .ant-modal-content{background:url(../img/bg-08.png) no-repeat center 0/100%,linear-gradient(to top, #ffffff, #f5faff);}
 .contc .ant-modal-header{background: 10px center url(../img/a-6.png) no-repeat !important;background-size:36px !important;border-bottom: none;padding-left: 52px;}
 .contc .j-modal-title-row .right .ant-modal-close{display:none;}
 .contc .ant-modal-close-x .anticon{color: #4d92f2;}
