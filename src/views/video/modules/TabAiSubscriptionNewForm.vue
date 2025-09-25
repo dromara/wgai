@@ -184,7 +184,16 @@
     data () {
       return {
         model:{
-         },
+        pathSave:"D://error//videoTest",
+        saveRecord:1,
+        isRecording:1,
+        pushStatic:1,
+        isBegin:1,
+        recordTime:10,
+        saveLocalhost:1,
+        isBy:1,
+        
+        },
         labelCol: {
           xs: { span: 24 },
           sm: { span: 5 },

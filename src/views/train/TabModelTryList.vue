@@ -21,8 +21,10 @@
       <a-dropdown v-if="selectedRowKeys.length > 0">
         <a-menu slot="overlay">
           <a-menu-item key="1" @click="batchDel"><a-icon type="delete"/>删除</a-menu-item>
+             <a-menu-item key="1" @click="batchStart()"><a-icon type="primary"/>批量恢复</a-menu-item>
         </a-menu>
         <a-button style="margin-left: 8px"> 批量操作 <a-icon type="down" /></a-button>
+        
       </a-dropdown>
     </div>
 
@@ -138,7 +140,7 @@
           {
             title:'模型类型',
             align:"center",
-            dataIndex: 'modelType'
+            dataIndex: 'modelType_dictText'
           },
           {
             title:'图片数量',
@@ -238,6 +240,37 @@
            thast.$message.warning("训练失败");
           }
         })
+      },
+      batchStart(){
+        var ids = ''
+        for (var a = 0; a < this.selectedRowKeys.length; a++) {
+          ids += this.selectedRowKeys[a] + ','
+        }
+        console.log("ids",ids)
+        let that = this;
+        this.$confirm({
+          title: "确认批量操作吗？",
+          content: "批量操请谨慎使用！",
+          onOk: function() {
+              
+             // debugger;
+
+            let url="/train/tabModelTry/getBatchPic?ids="+ids;
+
+            httpAction(url,{}, "GET").then((res) => {
+              if (res.success) {
+                that.$message.success(res.message);
+                that.$emit('ok');
+              } else {
+                that.$message.warning(res.message);
+              }
+                  that.loadData();
+            }).finally(() => {
+              that.confirmLoading = false;
+            })
+        
+          }
+        });
       }
     }
   }

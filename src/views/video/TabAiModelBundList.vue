@@ -98,7 +98,7 @@
 <script>
   import {
     httpAction,
-    getAction
+    getAction,getFileAccessHttpUrl
   } from '@/api/manage'
   import '@/assets/less/TableExpand.less'
   import {

@@ -2,17 +2,31 @@
   <div class="containerOn">
     <!-- 左侧：图片选择列表 -->
     <div class="left-panel">
-      <div class="conearchselect" style="100%">
-        <j-search-select-tag placeholder="请先选择需要标注的图片库" @change="handleSelection" v-model="formData.searchValue"
+      <div class="conearchselect" style="width: 100%">
+        <j-search-select-tag style="width: 50%" placeholder="请先选择需要标注的图片库" @change="handleSelection" v-model="formData.searchValue"
           :dictOptions="searchOptions">
         </j-search-select-tag>
+        <div style="width: 49%; float: right;font-size:20px">
+        自动标注进度：{{ autoNum }} : {{autoMarkNum}}   <a-button style="float:right;" type="primary" @click="autoLabelList">获取数据</a-button>
+        </div>
       </div>
       <h3><img src="~@assets/zwyStyle/img/a-8.png" />标注图片列表
+        <!-- 在标题左侧放 radio 组（也可以改为右侧） -->
+              <a-radio-group
+                v-model="mode"
+                @change="onModeChange"
+                class="mode-radio-group"
+                size="small"
+              >
+                <a-radio :value="'rect'">矩形标注</a-radio>
+                <a-radio :value="'polygon'">多边形标注</a-radio>
+                <a-radio :value="'control'">控制点</a-radio>
+              </a-radio-group>
         <a-button style="float:right;" type="primary" @click="autoLabel">自动标注</a-button>
       </h3>
       <div class="image-list">
         <div v-for="(image, index) in imageList" :key="index"
-          :style="{ backgroundColor: isSelected(image) ? '#6dbe52' : '#d2d2d2' }" class="image-item"
+          :style="{ backgroundColor: isSelected(image) ? '#6dbe52' : '#d2d2d2' ,height:'22%'} "  class="image-item"
           @click="selectImage(image)">
           <img :src="image.src" :alt="image.name" />
           <p style="font-size: 13px;">{{ image.name }}</p>
@@ -37,11 +51,11 @@
         <h3 style="float: left;"><img src="~@assets/zwyStyle/img/a-9.png" />标注结果:</h3>
         <!-- 保存按钮居右 -->
         <br /> <br />
-        <a-button style="float:right;color: white;" type="danger" @click="deleteAnnotations">删除图片</a-button>
+        <a-button style="float:right;color: white;width: 30%;" type="danger" @click="deleteAnnotations">删除图片</a-button>
 
-        <a-button style="float:right;margin-left:1%;margin-right: 1%;" type="primary"
+        <a-button style="float:right;margin-left:1%;margin-right: 1%;width: 30%;" type="primary"
           @click="saveAnnotations">保存标注</a-button>
-        <a-button style="float:right;" type="primary" @click="clearAnnotations">清除标记</a-button>
+        <a-button style="float:right;width: 30%;" type="primary" @click="clearAnnotations">清除标记</a-button>
       </div>
       <br /><br />
 
@@ -50,7 +64,17 @@
           <li v-for="(rect, index) in rectangles" :key="index"
             :style="{ backgroundColor: selectedRectIndex === index ? '#c2ffbb' : 'transparent', padding: '5px', cursor: 'pointer' }"
             @click="selectRect(index)">
-            <p style="margin-bottom: 0px;">{{ rect.label }}<span style="margin: 0 5px;">( {{ rect.width }} x
+            <p style="margin-bottom: 0px;">
+                <template v-if="editIndex === index">
+                  <a-input v-model="rect.label" size="small" style="width:120px;" @blur="finishEdit" @pressEnter="finishEdit" />
+                </template>
+                <template v-else>
+                  {{ rect.label }}
+                  <a-button type="link" size="small" @click.stop="editRect(index)">修改</a-button>
+                </template>
+                  
+            
+            <span style="margin: 0 5px;">( {{ rect.width }} x
                 {{ rect.height }} )</span>:
               <a-button type="link" size="small" @click.stop="deleteRect(index)" style="color: red;">删除</a-button>
             </p>
@@ -118,8 +142,11 @@
   export default {
     data() {
       return {
+          mode: "rect",
+        autoNum:"-",
+        autoMarkNum:"-",
         currentPage: 1,
-        pageSize: 25, // 每页显示 8 张图片
+        pageSize: 20, // 每页显示 8 张图片
         total: 0,
         modelid: '',
         autoParame: {
@@ -146,6 +173,7 @@
           },
 
         ],
+        editIndex:null,
         markIcon: "✔",
         markText: "暂无标注结果",
         currentImage: null,
@@ -193,12 +221,25 @@
 
     },
     mounted() {
+      //初始化websocket
+      this.initWebSocket();
       const saved = localStorage.getItem('labelHistory');
       if (saved) {
         this.labelHistory = JSON.parse(saved);
       }
     },
     methods: {
+        onModeChange(e) {
+            
+            // 这里把 mode 通过一个方法传给你的画布 / 标注逻辑
+         
+        },
+        finishEdit() {
+          this.editIndex = null; // 编辑完成
+        },
+        editRect(index) {
+          this.editIndex = index; // 进入编辑状态
+        },
       autoLabel() {
         console.log("自动识别")
         if (this.formData.searchValue) {
@@ -224,13 +265,23 @@
 
         this.getImageList(this.formData.searchValue)
       },
+      autoLabelList(){
+     
+        this.getImageList(this.formData.searchValue);
+      },
       handleSelection(value) {
         this.formData.searchValue = value;
         this.getImageList(value)
       },
+      getModelInfo(){
+          
+      },
       getImageList(id) {
 
-
+        if(id==null||id==""){
+           this.$message.warning("请先选择模型库");
+          return;
+        }
 
         this.ImageUrl = `${window._CONFIG['domianURL']}/sys/common/static/`;
 
@@ -694,7 +745,69 @@
             }
           });
         }
-      }
+      },
+      initWebSocket: function() {
+        // WebSocket与普通的请求所用协议有所不同，ws等同于http，wss等同于https
+        var userId = store.getters.userInfo.id;
+        var url = window._CONFIG['domianURL'].replace("https://", "wss://").replace("http://", "ws://") +
+          "/websocket/" + userId;
+        console.log(url);
+        //update-begin-author:taoyan date:2022-4-22 for:  v2.4.6 的 websocket 服务端，存在性能和安全问题。 #3278
+        let token = Vue.ls.get(ACCESS_TOKEN)
+        this.websock = new WebSocket(url, [token]);
+        this.websock.onopen = this.websocketonopen;
+        this.websock.onerror = this.websocketonerror;
+        this.websock.onmessage = this.websocketonmessage;
+        this.websock.onclose = this.websocketclose;
+      
+      },
+      websocketonopen: function() {
+        this.heartCheckFun();
+        console.log("WebSocket连接成功11111");
+      
+      },
+      websocketonerror: function(e) {
+        console.log("WebSocket连接发生错误111111");
+      },
+      websocketonmessage: function(e) {
+          var data = eval("(" + e.data + ")");
+      
+          console.log("收到消息makeTitle",data)
+          if(data.cmd=="auto"){
+            if(this.formData.searchValue==data.autoSaveMakeId){
+              this.autoNum=data.autoList;
+              this.autoMarkNum=data.autoNumber;
+            }
+         
+            if(data.autoList==data.autoNumber){
+               this.$message.success(data.autoName+"-自动标注完成");
+            }
+          }
+         
+      },
+      websocketclose: function(e) {
+        console.log("connection closed (" + e.code + ")");
+      },
+      
+      websocketSend(text) {
+        // 数据发送
+        try {
+          this.websock.send(text);
+        } catch (err) {
+          console.log("send failed (" + err.code + ")");
+        }
+      },
+      heartCheckFun() {
+        console.log("发送心跳")
+      
+        //心跳检测,每20s心跳一次
+        this.heartbeatInterval = setInterval(() => {
+          // 发送心跳消息
+          this.websocketSend("HeartBeat");
+        }, 20000); // 20秒
+      
+      
+      },
     },
   };
 </script>

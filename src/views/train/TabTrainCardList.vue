@@ -33,7 +33,7 @@
                 <img class="card-avatar" v-if="item.modelPic==null" src="/logo.png" /> -->
                <div class="title">
 				   <span class="span" style="">
-				     {{ item.modelName }}
+				     {{ item.modelType_dictText }}-{{ item.modelName }}				   
 				   </span>
 				   <span class="span2">创建时间<span>{{item.createTime !=null?item.createTime:'????-??-?? ??:??:??' }}</span></span>
 			   </div>
