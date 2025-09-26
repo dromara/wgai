@@ -29,7 +29,7 @@
           <a-icon type="plus" />
           <!-- <div class="ant-upload-text">{{ text }}</div> -->
         </div>
-        <a-button class="conscbtn" v-else-if="buttonVisible">
+        <a-button class="conscbtn" v-else-if="buttonVisible" style="width: 236px;">
 			<img src="~@assets/zwyStyle/img/a-7.png">
 			<div style="color:#49505b;font-size: 12px;">将文件拖到此区域，或<span style="color:#0364ff;">点击上传</span></div>
 			<div style="color:#9fa5ac;font-size: 11px;">每次仅可上传一个附件，大小不超过2G</div>

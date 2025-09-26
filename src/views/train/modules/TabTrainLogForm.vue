@@ -10,7 +10,8 @@
           </a-col>
           <a-col :span="24">
             <a-form-model-item label="日志内容" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="trainLog">
-              <a-input v-model="model.trainLog" placeholder="请输入日志内容"  ></a-input>
+              <!-- <a-input v-model="model.trainLog" placeholder="请输入日志内容"  ></a-input> -->
+			  <a-textarea v-model="model.trainLog" placeholder="请输入日志内容" :rows="6"></a-textarea>
             </a-form-model-item>
           </a-col>
         </a-row>

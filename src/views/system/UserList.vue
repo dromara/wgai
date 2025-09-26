@@ -389,4 +389,5 @@
 <style scoped>
   @import '~@assets/less/common.less';
   /deep/ .ant-table-content{height: calc(100vh - 431px);}
+  .anty-img-wrap{height: 32px;}
 </style>

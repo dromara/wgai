@@ -191,3 +191,6 @@
 </script>
 
 <style lang="less" scoped></style>
+<style scoped>
+  .anty-img-wrap{height: 33px;}
+</style>
