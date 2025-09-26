@@ -9,12 +9,8 @@
               <a-input placeholder="请输入脚本名称" v-model="queryParam.pyName"></a-input>
             </a-form-item>
           </a-col>
-          <a-col :xl="6" :lg="7" :md="8" :sm="24">
-            <a-form-item label="脚本文件">
-              <a-input placeholder="请输入脚本文件" v-model="queryParam.pyUrl"></a-input>
-            </a-form-item>
-          </a-col>
-          <template v-if="toggleSearchStatus">
+         
+          <template >
             <a-col :xl="6" :lg="7" :md="8" :sm="24">
               <a-form-item label="文件放置地址">
                 <a-input placeholder="请输入文件放置地址" v-model="queryParam.pyPath"></a-input>
@@ -180,6 +176,16 @@ import { filterObj } from '@/utils/util';
             dataIndex: 'pyPath'
           },
           {
+            title:'训练额外命令',
+            align:"center",
+            dataIndex: 'spareOne'
+          },
+          {
+            title:'导出额外命令',
+            align:"center",
+            dataIndex: 'spareTwo'
+          },
+          {
             title:'脚本备注',
             align:"center",
             dataIndex: 'pyRemake'
@@ -225,17 +231,17 @@ import { filterObj } from '@/utils/util';
       },
     },
     methods: {
-      getQueryParams() {
-        //获取查询条件
+      // getQueryParams() {
+      //   //获取查询条件
       
-        var param = Object.assign({},this.filters);
-        param.field = this.getQueryField();
-        param.pageNo = this.ipagination.current;
-        param.pageSize = this.ipagination.pageSize;
-        param.column="pySort";
-        param.order="asc";
-        return filterObj(param);
-      },
+      //   var param = Object.assign({},this.filters);
+      //   param.field = this.getQueryField();
+      //   param.pageNo = this.ipagination.current;
+      //   param.pageSize = this.ipagination.pageSize;
+      //   param.column="pySort";
+      //   param.order="asc";
+      //   return filterObj(param);
+      // },
       initDictConfig(){
       },
       getSuperFieldList(){

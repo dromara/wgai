@@ -171,9 +171,9 @@
             title: '预警时间',
             align: "center",
             dataIndex: 'warningTime',
-            customRender: function(text) {
-              return !text ? "" : (text.length > 10 ? text.substr(0, 10) : text)
-            }
+            // customRender: function(text) {
+            //   return !text ? "" : (text.length > 10 ? text.substr(0, 10) : text)
+            // }
           },
           {
             title: '预警状态',

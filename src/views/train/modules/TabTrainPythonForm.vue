@@ -19,6 +19,16 @@
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
+            <a-form-model-item label="训练额外命令" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="spareOne">
+           <a-input v-model="model.spareOne" placeholder="训练额外命令"  ></a-input>
+            </a-form-model-item>
+          </a-col>
+          <a-col :span="24">
+            <a-form-model-item label="导出额外命令" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="spareTwo">
+              <a-input v-model="model.spareTwo" placeholder="导出额外命令"  ></a-input>
+            </a-form-model-item>
+          </a-col>
+          <a-col :span="24">
             <a-form-model-item label="脚本备注" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="pyRemake">
               <a-input v-model="model.pyRemake" placeholder="请输入脚本备注"  ></a-input>
             </a-form-model-item>

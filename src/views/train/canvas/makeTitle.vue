@@ -3,30 +3,26 @@
     <!-- 左侧：图片选择列表 -->
     <div class="left-panel">
       <div class="conearchselect" style="width: 100%">
-        <j-search-select-tag style="width: 50%" placeholder="请先选择需要标注的图片库" @change="handleSelection" v-model="formData.searchValue"
-          :dictOptions="searchOptions">
+        <j-search-select-tag style="width: 50%" placeholder="请先选择需要标注的图片库" @change="handleSelection"
+          v-model="formData.searchValue" :dictOptions="searchOptions">
         </j-search-select-tag>
         <div style="width: 49%; float: right;font-size:20px">
-        自动标注进度：{{ autoNum }} : {{autoMarkNum}}   <a-button style="float:right;" type="primary" @click="autoLabelList">获取数据</a-button>
+          自动标注进度：{{ autoNum }} : {{autoMarkNum}} <a-button style="float:right;" type="primary"
+            @click="autoLabelList">获取数据</a-button>
         </div>
       </div>
       <h3><img src="~@assets/zwyStyle/img/a-8.png" />标注图片列表
         <!-- 在标题左侧放 radio 组（也可以改为右侧） -->
-              <a-radio-group
-                v-model="mode"
-                @change="onModeChange"
-                class="mode-radio-group"
-                size="small"
-              >
-                <a-radio :value="'rect'">矩形标注</a-radio>
-                <a-radio :value="'polygon'">多边形标注</a-radio>
-                <a-radio :value="'control'">控制点</a-radio>
-              </a-radio-group>
+        <a-radio-group v-model="mode" @change="onModeChange" class="mode-radio-group" size="small">
+          <a-radio :value="'rect'">矩形标注</a-radio>
+          <a-radio :value="'polygon'">多边形标注</a-radio>
+          <a-radio :value="'control'">控制点</a-radio>
+        </a-radio-group>
         <a-button style="float:right;" type="primary" @click="autoLabel">自动标注</a-button>
       </h3>
       <div class="image-list">
         <div v-for="(image, index) in imageList" :key="index"
-          :style="{ backgroundColor: isSelected(image) ? '#6dbe52' : '#d2d2d2' ,height:'22%'} "  class="image-item"
+          :style="{ backgroundColor: isSelected(image) ? '#6dbe52' : '#d2d2d2' ,height:'22%'} " class="image-item"
           @click="selectImage(image)">
           <img :src="image.src" :alt="image.name" />
           <p style="font-size: 13px;">{{ image.name }}</p>
@@ -41,8 +37,13 @@
     <!-- 右侧：画布和标注操作区域 -->
     <div class="center-panel">
       <div class="canvas-container">
-        <canvas ref="canvas" :width="canvasWidth" :height="canvasHeight" @mousedown="startDraw" @mousemove="drawing"
-          @mouseup="endDraw" @click="handleCanvasClick"></canvas>
+        <canvas ref="canvas" :width="canvasWidth" :height="canvasHeight" 
+        @mousedown="startDraw" 
+        @mousemove="drawing"
+        @mouseup="endDraw" 
+        @click="handleCanvasClick"
+        
+        ></canvas>
       </div>
 
     </div>
@@ -65,16 +66,17 @@
             :style="{ backgroundColor: selectedRectIndex === index ? '#c2ffbb' : 'transparent', padding: '5px', cursor: 'pointer' }"
             @click="selectRect(index)">
             <p style="margin-bottom: 0px;">
-                <template v-if="editIndex === index">
-                  <a-input v-model="rect.label" size="small" style="width:120px;" @blur="finishEdit" @pressEnter="finishEdit" />
-                </template>
-                <template v-else>
-                  {{ rect.label }}
-                  <a-button type="link" size="small" @click.stop="editRect(index)">修改</a-button>
-                </template>
-                  
-            
-            <span style="margin: 0 5px;">( {{ rect.width }} x
+              <template v-if="editIndex === index">
+                <a-input v-model="rect.label" size="small" style="width:120px;" @blur="finishEdit"
+                  @pressEnter="finishEdit" />
+              </template>
+              <template v-else>
+                {{ rect.label }}
+                <a-button type="link" size="small" @click.stop="editRect(index)">修改</a-button>
+              </template>
+
+
+              <span style="margin: 0 5px;">( {{ rect.width }} x
                 {{ rect.height }} )</span>:
               <a-button type="link" size="small" @click.stop="deleteRect(index)" style="color: red;">删除</a-button>
             </p>
@@ -142,38 +144,29 @@
   export default {
     data() {
       return {
-          mode: "rect",
-        autoNum:"-",
-        autoMarkNum:"-",
+        mode: "rect",
+        autoNum: "-",
+        autoMarkNum: "-",
         currentPage: 1,
         pageSize: 20, // 每页显示 8 张图片
         total: 0,
         modelid: '',
+        modelTry: {},
         autoParame: {
           modelId: '',
           aiModel: '',
           isMark: 1
         },
         formData: {},
-        searchOptions: [{
-          text: "选项一",
-          value: "1"
-        }, {
-          text: "选项二",
-          value: "2"
-        }, {
-          text: "选项三",
-          value: "3"
-        }],
+        searchOptions: [],
         ImageUrl: "",
         imageList: [{
             name: 'Image 1',
             src: 'image1.jpg',
             id: ""
           },
-
         ],
-        editIndex:null,
+        editIndex: null,
         markIcon: "✔",
         markText: "暂无标注结果",
         currentImage: null,
@@ -183,6 +176,9 @@
         startY: 0,
         isDrawing: false,
         hasMoved: false, // 新增：标记鼠标是否移动过
+        currentPolygon: null, // 临时存放正在绘制的多边形
+        polygons: [], // 多边形集合
+        controlPoints: [], // 控制点集合
         rectangles: [],
         selectedRectIndex: -1, // 新增：当前选中的框索引
         label: '',
@@ -229,17 +225,24 @@
       }
     },
     methods: {
-        onModeChange(e) {
-            
-            // 这里把 mode 通过一个方法传给你的画布 / 标注逻辑
-         
-        },
-        finishEdit() {
-          this.editIndex = null; // 编辑完成
-        },
-        editRect(index) {
-          this.editIndex = index; // 进入编辑状态
-        },
+      onModeChange(e) {
+        // 这里把 mode 通过一个方法传给你的画布 / 标注逻辑
+        console.log("选择！", e);
+        if (e != "rect") {
+          if (this.modelTry.modelType == "2") { //只能选择矩形
+            this.mode = "rect";
+            this.$message.warning("当前模型只能进行矩形标注！");
+            return;
+          }
+        }
+
+      },
+      finishEdit() {
+        this.editIndex = null; // 编辑完成
+      },
+      editRect(index) {
+        this.editIndex = index; // 进入编辑状态
+      },
       autoLabel() {
         console.log("自动识别")
         if (this.formData.searchValue) {
@@ -265,21 +268,31 @@
 
         this.getImageList(this.formData.searchValue)
       },
-      autoLabelList(){
-     
+      autoLabelList() {
         this.getImageList(this.formData.searchValue);
       },
       handleSelection(value) {
         this.formData.searchValue = value;
-        this.getImageList(value)
+        this.getImageList(value);
+        this.getModelInfo(value);
       },
-      getModelInfo(){
-          
+      getModelInfo(id) {
+        let that = this;
+        getAction("/train/tabModelTry/getTabModelTry", {
+          id: id,
+        }).then((res) => {
+          if (res.success) {
+            console.log("xxxxxxxxxxxxx", res)
+            that.modelTry = res.result;
+          } else {
+            that.$message.warning(res.message);
+          }
+        })
       },
       getImageList(id) {
 
-        if(id==null||id==""){
-           this.$message.warning("请先选择模型库");
+        if (id == null || id == "") {
+          this.$message.warning("请先选择模型库");
           return;
         }
 
@@ -437,8 +450,9 @@
           this.selectedImage = image;
         }
 
-        this.drawImage();
+      
         this.image.onload = () => {
+          this.drawImage();
           console.error('Image onload');
         };
 
@@ -497,14 +511,27 @@
 
       // 鼠标按下，开始绘制
       startDraw(event) {
+
         if (!this.currentImage) return;
         const canvas = this.$refs.canvas;
         const rect = canvas.getBoundingClientRect();
         this.startX = event.clientX - rect.left;
         this.startY = event.clientY - rect.top;
-        this.isDrawing = true;
-        this.hasMoved = false; // 重置移动标记
-        this.selectedRectIndex = -1; // 开始绘制时取消选中
+
+        if (this.mode == "rect") {
+          this.isDrawing = true;
+          this.hasMoved = false; // 重置移动标记
+          this.selectedRectIndex = -1; // 开始绘制时取消选中
+        } else if (this.mode === 'polygon') { //多边形
+          // 多边形标注：点击一次增加一个点
+
+
+        } else if (this.mode === 'control') { //控制点
+
+        }
+
+
+
       },
 
       // 鼠标移动，绘制中
@@ -759,36 +786,36 @@
         this.websock.onerror = this.websocketonerror;
         this.websock.onmessage = this.websocketonmessage;
         this.websock.onclose = this.websocketclose;
-      
+
       },
       websocketonopen: function() {
         this.heartCheckFun();
         console.log("WebSocket连接成功11111");
-      
+
       },
       websocketonerror: function(e) {
         console.log("WebSocket连接发生错误111111");
       },
       websocketonmessage: function(e) {
-          var data = eval("(" + e.data + ")");
-      
-          console.log("收到消息makeTitle",data)
-          if(data.cmd=="auto"){
-            if(this.formData.searchValue==data.autoSaveMakeId){
-              this.autoNum=data.autoList;
-              this.autoMarkNum=data.autoNumber;
-            }
-         
-            if(data.autoList==data.autoNumber){
-               this.$message.success(data.autoName+"-自动标注完成");
-            }
+        var data = eval("(" + e.data + ")");
+
+        console.log("收到消息makeTitle", data)
+        if (data.cmd == "auto") {
+          if (this.formData.searchValue == data.autoSaveMakeId) {
+            this.autoNum = data.autoList;
+            this.autoMarkNum = data.autoNumber;
           }
-         
+
+          if (data.autoList == data.autoNumber) {
+            this.$message.success(data.autoName + "-自动标注完成");
+          }
+        }
+
       },
       websocketclose: function(e) {
         console.log("connection closed (" + e.code + ")");
       },
-      
+
       websocketSend(text) {
         // 数据发送
         try {
@@ -799,14 +826,14 @@
       },
       heartCheckFun() {
         console.log("发送心跳")
-      
+
         //心跳检测,每20s心跳一次
         this.heartbeatInterval = setInterval(() => {
           // 发送心跳消息
           this.websocketSend("HeartBeat");
         }, 20000); // 20秒
-      
-      
+
+
       },
     },
   };
