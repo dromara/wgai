@@ -157,6 +157,16 @@
             align:"center",
             dataIndex: 'spareOne_dictText'
           },
+          {
+            title:'AI模型识别方式',
+            align:"center",
+            dataIndex: 'modelDifyType_dictText'
+          },
+          {
+            title:'AI模型识别类型',
+            align:"center",
+            dataIndex: 'modelDify_dictText'
+          },
           // {
           //   title:'AI权重文件',
           //   align:"center",

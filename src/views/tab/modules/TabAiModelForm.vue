@@ -29,6 +29,19 @@
                                dictCode="model_type"/>
             </a-form-model-item>
           </a-col>
+          
+          <a-col :span="24">
+            <a-form-model-item label="识别方式" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="modelDifyType">
+             <j-dict-select-tag  v-model="model.modelDifyType" placeholder="请选择识别类型"
+                               dictCode="model_type"/>
+            </a-form-model-item>
+          </a-col>
+          <a-col :span="24">
+            <a-form-model-item label="识别类型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="modelDify">
+             <j-dict-select-tag  v-model="model.modelDify" placeholder="请选择识别类型"
+                               dictCode="dify_type"/>
+            </a-form-model-item>
+          </a-col>
         </a-row>
       </a-form-model>
     </j-form-container>
