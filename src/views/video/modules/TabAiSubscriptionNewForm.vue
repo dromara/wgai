@@ -3,13 +3,13 @@
     <j-form-container :disabled="formDisabled">
       <a-form-model ref="form" :model="model" :rules="validatorRules" slot="detail">
         <a-row>
-          <a-col :span="24">
+          <a-col :span="12">
             <a-form-model-item label="解码脚本" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="pyType">
              <j-dict-select-tag type="list" v-model="model.pyType" dictCode="py_type"
                placeholder="解码脚本" />
             </a-form-model-item>
           </a-col>
-          <a-col :span="24">
+          <a-col :span="12">
             <a-form-model-item label="解码方式" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="eventTypes">
      <!--         <a-input v-model="model.eventTypes" placeholder="请输入解码方式"  ></a-input> -->
               
@@ -17,9 +17,28 @@
                 placeholder="解码脚本" />
             </a-form-model-item>
           </a-col>
-          <a-col :span="24">
+          
+          <a-col :span="12">
+            <a-form-model-item label="推理方式" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="modelJmType">
+             <j-dict-select-tag  v-model="model.modelJmType" placeholder="请选择推理方式"
+                               dictCode="model_type"/>
+            </a-form-model-item>
+          </a-col>
+          
+          <a-col :span="12">
             <a-form-model-item label="订阅名称" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="name">
               <a-input v-model="model.name" placeholder="订阅名称"  ></a-input>
+            </a-form-model-item>
+          </a-col>
+          <a-col :span="12">
+            <a-form-model-item label="是否推送" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="pushStatic" >
+              <j-dict-select-tag type="list" v-model="model.pushStatic" dictCode="push_static"
+                placeholder="请选择推送" />
+            </a-form-model-item>
+          </a-col>
+          <a-col :span="12">
+            <a-form-model-item label="解析目录" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="pathSave">
+              <a-input v-model="model.pathSave" placeholder="请输入解析目录"  ></a-input>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
@@ -90,17 +109,7 @@
               <a-input v-model="model.beginName" placeholder="请输入前置模型内容"  ></a-input>
             </a-form-model-item>
           </a-col> -->
-          <a-col :span="24">
-            <a-form-model-item label="是否推送" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="pushStatic" >
-              <j-dict-select-tag type="list" v-model="model.pushStatic" dictCode="push_static"
-                placeholder="请选择推送" />
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="解析目录" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="pathSave">
-              <a-input v-model="model.pathSave" placeholder="请输入解析目录"  ></a-input>
-            </a-form-model-item>
-          </a-col>
+          
           <a-col :span="24">
             <a-form-model-item label="是否开启报警录像" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="isRecording">
 <!--              <j-switch v-model="model.isRecording"  ></j-switch> -->

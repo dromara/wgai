@@ -167,6 +167,11 @@
             align:"center",
             dataIndex: 'modelDify_dictText'
           },
+          {
+            title:'AI解码方式',
+            align:"center",
+            dataIndex: 'modelJmType_dictText'
+          },
           // {
           //   title:'AI权重文件',
           //   align:"center",

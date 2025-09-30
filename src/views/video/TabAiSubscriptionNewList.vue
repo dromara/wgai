@@ -162,19 +162,30 @@
             dataIndex: 'name'
           },
           {
+            title:'执行状态',
+            align:"center",
+            dataIndex: 'runState_dictText'
+          },
+          {
             title:'解码脚本',
             align:"center",
             dataIndex: 'pyType_dictText'
           },
           {
-            title:'是否分析录像',
+            title:'推理方式',
             align:"center",
-            dataIndex: 'isBegin_dictText'
+            dataIndex: 'modelJmType_dictText'
           },
+        
           {
             title:'解码方式',
             align:"center",
             dataIndex: 'eventTypes_dictText'
+          },
+          {
+            title:'是否推送',
+            align:"center",
+            dataIndex: 'pushStatic_dictText'
           },
           {
             title:'订阅回调地址',
@@ -202,16 +213,13 @@
           //   align:"center",
           //   dataIndex: 'pushStatic'
           // }, 
+         
            {
-             title:'推送状态',
+             title:'是否分析录像',
              align:"center",
-             dataIndex: 'pushStatic_dictText'
+             dataIndex: 'isBegin_dictText'
            },
-          {
-            title:'执行状态',
-            align:"center",
-            dataIndex: 'runState_dictText'
-          },
+         
         
           // {
           //   title:'播报状态', 

@@ -42,6 +42,12 @@
                                dictCode="dify_type"/>
             </a-form-model-item>
           </a-col>
+          <a-col :span="24">
+            <a-form-model-item label="识别类型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="modelJmType">
+             <j-dict-select-tag  v-model="model.modelJmType" placeholder="请选择识别类型"
+                               dictCode="jm_type"/>
+            </a-form-model-item>
+          </a-col>
         </a-row>
       </a-form-model>
     </j-form-container>
