@@ -10,6 +10,13 @@
              
             </a-form-model-item>
           </a-col>
+          
+          <a-col :span="24">
+            <a-form-model-item label="识别方式" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="difyType">
+            <j-dict-select-tag type="list" v-model="model.difyType" dictCode="dify_type"
+              placeholder="识别方式" />
+            </a-form-model-item>
+          </a-col>
           <a-col :span="24">
             <a-form-model-item label="是否需要前置" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="isBefor">
             <j-dict-select-tag type="list" v-model="model.isBefor" dictCode="push_static"
@@ -51,6 +58,17 @@
             </a-form-model-item>
           </a-col>
           
+          <a-col :span="24"  v-if="model.isBefor==0">
+               <div style="color: red;text-align: center;">跟随前置放大再识别，针对小物品识别，需要开启跟随前置坐标</div>
+           </a-col>
+          <a-col :span="24"  v-if="model.isBefor==0">
+            <a-form-model-item label="是否跟随前置放大" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="isBeforZoom">
+                   
+              
+           <j-dict-select-tag type="list" v-model="model.isBeforZoom" dictCode="push_static"
+             placeholder="是否跟随前置放大" />
+            </a-form-model-item>
+          </a-col>
        
           <a-col :span="24">
             <a-form-model-item label="后置模型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="nextMode">
@@ -64,16 +82,23 @@
           <a-col :span="24"  >
             <a-form-model-item label="是否识别报警" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="warinngMethod">
             <j-dict-select-tag type="list" v-model="model.warinngMethod" dictCode="push_static"
-              placeholder="预警方式" />
+              placeholder="是否识别报警" />
             </a-form-model-item>
           </a-col>
-           <a-col :span="24" >
-               <div style="color: red;text-align: center;">默认都是识别到报警，例外情况可以未识别到报警 需要填写未识别报警内容</div>
+          
+          <a-col :span="24"  >
+            <a-form-model-item label="是否开启区域识别" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="isBy">
+            <j-dict-select-tag type="list" v-model="model.isBy" dictCode="push_static"
+              placeholder="是否开启区域识别" />
+            </a-form-model-item>
+          </a-col>
+           <a-col :span="24" v-if="model.warinngMethod==1" >
+               <div style="color: red;text-align: center;">默认都是识别到报警，例外情况可以未识别到报警，需要填写未识别报警内容</div>
            </a-col>
           <a-col :span="24"  v-if="model.warinngMethod==1">
             <a-form-model-item label="未识别到预警文本" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="noDifText">
     
-              <j-search-select-tag  v-model="model.noDifText" dict="tab_ai_base,chain_name,chain_name" placeholder="前置识别内容" />
+              <j-search-select-tag  v-model="model.noDifText" dict="tab_ai_base,chain_name,chain_name" placeholder="未识别到预警文本" />
       
             </a-form-model-item>
           </a-col>

@@ -98,8 +98,8 @@
           <a-divider type="vertical"  v-if="record.runState==1"/>
           <a  v-if="record.runState==1"  @click="handleStop(record,0)">结束执行</a>
           <a-divider type="vertical" />
-          <a @click="handleEditStart(record)">设置边界</a>
-          <a-divider type="vertical" />
+         <!-- <a @click="handleEditStart(record)">设置边界</a>
+          <a-divider type="vertical" /> -->
           <a-dropdown>
             <a class="ant-dropdown-link">更多 <a-icon type="down" /></a>
             <a-menu slot="overlay">
@@ -279,11 +279,11 @@
             align:"center",
             dataIndex: 'saveLocalhost_dictText',
           },
-          {
-            title:'是否开启区域识别',
-            align:"center",
-            dataIndex: 'isBy_dictText',
-          },
+          // {
+          //   title:'是否开启区域识别',
+          //   align:"center",
+          //   dataIndex: 'isBy_dictText',
+          // },
           {
             title:'备注',
             align:"center",

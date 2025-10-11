@@ -92,6 +92,8 @@
           <a @click="handleEdit(record)">编辑</a>
 
           <a-divider type="vertical" />
+          <a @click="handleEditStart(record)">设置边界</a>
+          <a-divider type="vertical" />
           <a-dropdown>
             <a class="ant-dropdown-link">更多 <a-icon type="down" /></a>
             <a-menu slot="overlay">
@@ -111,6 +113,7 @@
     </div>
 
     <tab-ai-video-setting-modal ref="modalForm" @ok="modalFormOk"></tab-ai-video-setting-modal>
+    <pic-util class="contc" :width="1200" ref="modalForm2" @ok="modalFormOk"></pic-util>
   </a-card>
 </template>
 
@@ -120,12 +123,12 @@
   import { mixinDevice } from '@/utils/mixin'
   import { JeecgListMixin } from '@/mixins/JeecgListMixin'
   import TabAiVideoSettingModal from './modules/TabAiVideoSettingModal'
-
+  import picUtil from './modules/picUtilSetting'
   export default {
     name: 'TabAiVideoSettingList',
     mixins:[JeecgListMixin, mixinDevice],
     components: {
-      TabAiVideoSettingModal
+      TabAiVideoSettingModal,picUtil
     },
     data () {
       return {
@@ -148,10 +151,16 @@
             dataIndex: 'subId_dictText'
           },
           {
+            title:'识别类型',
+            align:"center",
+            dataIndex: 'difyType_dictText'
+          },
+          {
             title:'是否需要前置',
             align:"center",
             dataIndex: 'isBefor_dictText'
           },
+         
           {
             title:'前置模型',
             align:"center",
@@ -179,15 +188,26 @@
             dataIndex: 'followPosition'
           },
           {
+            title:'是否跟随前置放大',
+            align:"center",
+            dataIndex: 'isBeforZoom_dictText'
+          },
+          {
             title:'是否识别报警',
             align:"center",
             dataIndex: 'warinngMethod_dictText'
+          },
+          {
+            title:'是否开启区域识别',
+            align:"center",
+            dataIndex: 'isBy_dictText',
           },
           {
             title:'未识别到预警文本',
             align:"center",
             dataIndex: 'noDifText'
           },
+          
           {
             title: '操作',
             dataIndex: 'action',
@@ -218,6 +238,9 @@
       },
     },
     methods: {
+      handleEditStart(record){
+              this.$refs.modalForm2.edit(record);
+      },
       initDictConfig(){
       },
       getSuperFieldList(){
