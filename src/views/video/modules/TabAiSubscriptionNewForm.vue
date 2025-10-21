@@ -30,10 +30,13 @@
               <a-input v-model="model.name" placeholder="订阅名称"  ></a-input>
             </a-form-model-item>
           </a-col>
+          
+          
+       
+          
           <a-col :span="12">
             <a-form-model-item label="是否推送" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="pushStatic" >
-              <j-dict-select-tag type="list" v-model="model.pushStatic" dictCode="push_static"
-                placeholder="请选择推送" />
+              <a-input v-model="model.name" placeholder="订阅名称"  ></a-input>
             </a-form-model-item>
           </a-col>
           <a-col :span="12">
@@ -41,6 +44,23 @@
               <a-input v-model="model.pathSave" placeholder="请输入解析目录"  ></a-input>
             </a-form-model-item>
           </a-col>
+          <a-col :span="24">
+            
+              <div style="color: red;text-align: center;"> 不设置时间将24h推送识别,设置开始时间-结束时间推送(24小时制)</div>
+            
+           </a-col> 
+          <a-col :span="12">
+            <a-form-model-item label="推开始时间" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="difyStartEnd">
+            <a-input-number  v-model="model.difyStartEnd" placeholder="推送开始时间"  style="width: 100%"></a-input-number>
+            </a-form-model-item>
+          </a-col>
+          
+          <a-col :span="12">
+            <a-form-model-item label="推结束时间" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="difyStartTime">
+             <a-input-number v-model="model.difyStartTime" placeholder="推送结束时间"  style="width: 100%"></a-input-number>
+            </a-form-model-item>
+          </a-col>
+       
           <a-col :span="24">
             <a-form-model-item label="订阅地址" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="beginEventTypes">
                <a-input v-model="model.beginEventTypes" placeholder="请输入订阅地址"  ></a-input>

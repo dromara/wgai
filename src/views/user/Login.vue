@@ -1,6 +1,6 @@
 <template>
   <div class="main">
-    <a-form-model class="user-layout-login" @keyup.enter.native="handleSubmit">
+    <a-form-model class="user-layout-login" >
       <a-tabs :activeKey="customActiveKey" :tabBarStyle="{ textAlign: 'center', borderBottom: 'unset' }"  @change="handleTabClick">
         <a-tab-pane key="tab1" tab="">
           <login-account ref="alogin" @validateFail="validateFail" @success="requestSuccess" @fail="requestFailed"></login-account>
@@ -159,13 +159,38 @@ export default {
       },
       //登录成功
       loginSuccess () {
-        this.$router.push({ path: "/dashboard/analysis" }).catch(()=>{
-          console.log('登录跳转首页出错,这个错误从哪里来的')
-        })
+        
+      
         this.$notification.success({
           message: '欢迎',
           description: `${timeFix()}，欢迎回来`,
         });
+          console.log("xxxxxx")
+          // 登录后，主动加载权限
+         this.$router.replace({ path: '/dashboard/analysis' }).catch(()=>{});
+          // this.$store.dispatch('GetPermissionList')
+          //   .then(() => {
+          //      console.log("yyy")
+          //     // 确保动态路由已经 addRoutes 完成后再跳转
+          //     this.$router.replace({ path: '/dashboard/analysis' }).catch((err)=>{
+          //          console.error('获取权限失败：', err);
+          //       });
+          //   })
+          //   .catch(err => {
+          //     console.error('获取权限失败：', err);
+          //     this.$router.replace({ path: '/user/login' }).catch(()=>{});
+          //   });
+         // 如果你在 Login 后没有立即请求权限，这里主动去请求并等待结果
+          // this.$store.dispatch('GetPermissionList').then(res => {
+          //   // 成功拿到权限并触发了 UpdateAppRouter -> router.addRoutes
+          //   // 这里使用 replace 防止多余历史记录
+          //   this.$router.replace({ path: '/dashboard/analysis' }).catch(()=>{});
+          // }).catch(err => {
+          //   console.error('获取权限失败：', err);
+          //   // 兜底跳转到登录页或提示
+          //   this.$router.replace({ path: '/user/login' }).catch(()=>{});
+          // });
+     
       },
 
       stepCaptchaSuccess () {

@@ -188,6 +188,11 @@
             dataIndex: 'pushStatic_dictText'
           },
           {
+            title:'订阅地址',
+            align:"center",
+            dataIndex: 'beginEventTypes'
+          },
+          {
             title:'订阅回调地址',
             align:"center",
             dataIndex: 'eventUrl'
