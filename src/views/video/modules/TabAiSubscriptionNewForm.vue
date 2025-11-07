@@ -36,7 +36,8 @@
           
           <a-col :span="12">
             <a-form-model-item label="是否推送" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="pushStatic" >
-              <a-input v-model="model.name" placeholder="订阅名称"  ></a-input>
+ <j-dict-select-tag type="list" v-model="model.pushStatic" dictCode="push_static"
+   placeholder="是否推送" />
             </a-form-model-item>
           </a-col>
           <a-col :span="12">

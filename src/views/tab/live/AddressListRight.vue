@@ -26,6 +26,9 @@
     props: ['value'],
     data() {
       return {
+            drawCache: [], // 缓存待绘制的数据
+            checkInterval: null, // 定时检查器
+        dts:0,
         description: '用户信息',
         cardLoading: true,
         positionInfo: {},
@@ -59,6 +62,9 @@
     destroyed: function() { // 离开页面生命周期函数
       this.websocketclose();
       this.closeurl();
+    },beforeDestroy() {
+      this.stopDrawCheck();
+      this.drawCache = [];
     },
     methods: {
 
@@ -77,9 +83,9 @@
           isFlv:true,
           useSIMD: true,
           useWCS: true,
-          useMThreading: true,
+          useMThreading: false,
           showBandwidth: true, // 显示网速
-          showPerformance: true, // 显示性能
+          showPerformance: false, // 显示性能
           operateBtns: {
             fullscreen: false,
             screenshot: false,
@@ -117,9 +123,24 @@
       },
       geturl() {
         // alert("xxx" + this.url)
+        let that=this;
         // jessibucaPlayer[this._uid].setNetworkDelayTime(10);
         jessibucaPlayer[this._uid].play(this.url).then(() => {
           console.log('play success')
+          jessibucaPlayer[this._uid].on("stats", function(s) {
+          
+          //   console.log("视频解码内容:" + JSON.stringify(data));
+              if(that.dts<s.ts){
+                that.dts=s.ts
+              }
+             console.log("[视频显示时间]:"+ that.dts)
+          //   //    jessibucaPlayer[this._uid].setNetworkDelayTime(Number(s));
+          //   if ((s.dts - data.number) > 5000) {
+          //     console.log("当前大于5秒抛弃不要", (s.dts - data.number))
+          //     return;
+          //   }
+          //   console.log("~~当前小于5秒要~~", (s.dts - data.number))
+           })
           // jessibucaPlayer[this._uid].on('currentPts', (ts) => {
 
           //   if (this.datalist.length > 0) {
@@ -199,61 +220,61 @@
       websocketonerror: function(e) {
         console.log("WebSocket连接发生错误111111");
       },
-      websocketonmessage: function(e) {
-        var data = eval("(" + e.data + ")");
-
-
-        //处理订阅信息
-        if (data.cmd == "video") {
-          // jessibucaPlayer[this._uid].on("stats", function(s) {
-          //   console.log("ts:视频显示时间(ms)", s.ts);
-          //   console.log("视频解码内容:" + JSON.stringify(data));
-          //   console.log("视频解码时间:" + s.dts + "下发视频解码时间:", data.number)
-          //   //    jessibucaPlayer[this._uid].setNetworkDelayTime(Number(s));
-          //   if ((s.dts - data.number) > 5000) {
-          //     console.log("当前大于5秒抛弃不要", (s.dts - data.number))
-          //     return;
-          //   }
-          //   console.log("~~当前小于5秒要~~", (s.dts - data.number))
-          // })s
-          if (this.number == 0 || this.number < data.number) {
-            //   this.datalist = [...this.datalist, ...data.list];;
-            this.number = data.number
-            //   console.log(this.datalist)
-            let datalist = data.list;
-            let dataArray = [];
-
-            for (let a = 0; a < datalist.length; a++) {
-
-              if (this.url == datalist[a].url) {
-                let rectlist = {};
-                rectlist.type = 'rect';
-                rectlist.x = datalist[a].x;
-                rectlist.y = datalist[a].y;
-                rectlist.width = datalist[a].width;
-                rectlist.height = datalist[a].height;
-                rectlist.color = datalist[a].color;
-                let namelist = {};
-                namelist.type = 'text';
-                namelist.text = datalist[a].name;
-                namelist.x = datalist[a].x;
-                namelist.y = datalist[a].y - 25;
-                namelist.width = datalist[a].width;
-                namelist.height = datalist[a].height;
-                namelist.color = datalist[a].color;
-                dataArray.push(rectlist);
-                dataArray.push(namelist);
-              }
-
-            }
-            jessibucaPlayer[this._uid].addContentToCanvas(dataArray)
-          } else {
-            console.log("跳跃移除", data.number)
-          }
-
-        }
-
-      },
+       websocketonmessage: function(e) {
+         var data = eval("(" + e.data + ")");
+         
+         if (data.cmd == "video") {
+           console.log(this.dts + "视频解码时间下发时间" + data.number)
+           
+           if (this.number == 0 || this.number <= data.number) {
+             this.number = data.number;
+             
+             let datalist = data.list;
+             let dataArray = [];
+             
+             for (let a = 0; a < datalist.length; a++) {
+               if (this.url == datalist[a].url) {
+                 let rectlist = {
+                   type: 'rect',
+                   x: datalist[a].x,
+                   y: datalist[a].y,
+                   width: datalist[a].width,
+                   height: datalist[a].height,
+                   color: datalist[a].color
+                 };
+                 
+                 let namelist = {
+                   type: 'text',
+                   text: datalist[a].name,
+                   x: datalist[a].x,
+                   y: datalist[a].y - 25,
+                   width: datalist[a].width,
+                   height: datalist[a].height,
+                   color: datalist[a].color
+                 };
+                 
+                 dataArray.push(rectlist);
+                 dataArray.push(namelist);
+               }
+             }
+             
+             // 将绘制数据和时间戳一起缓存
+             if (dataArray.length > 0) {
+               this.drawCache.push({
+                 timestamp: data.number, // 后台识别帧时间戳
+                 data: dataArray
+               });
+               
+               // 启动定时检查（如果还没启动）
+               if (!this.checkInterval) {
+                 this.startDrawCheck();
+               }
+             }
+           } else {
+             console.log("跳跃移除", data.number)
+           }
+         }
+       },
       websocketclose: function(e) {
         console.log("connection closed (" + e.code + ")");
       },
@@ -277,7 +298,48 @@
 
 
       },
-
+      // 定时检查并绘制
+        startDrawCheck() {
+          this.checkInterval = setInterval(() => {
+            if (this.drawCache.length === 0) return;
+            
+            // 获取当前视频播放时间（DTS）
+            const currentDts = this.dts || 0;
+            
+            // 遍历缓存队列
+            for (let i = this.drawCache.length - 1; i >= 0; i--) {
+              const item = this.drawCache[i];
+              const timeDiff = item.timestamp - currentDts;
+              
+              // 当视频时间接近或超过识别帧时间（1秒容差范围内）
+              if (timeDiff <= 500 && timeDiff >= -500) {
+                console.log(`绘制帧 - 后台时间:${item.timestamp}, 前端时间:${currentDts}, 差值:${timeDiff}ms`);
+                
+                // 执行绘制
+                jessibucaPlayer[this._uid].addContentToCanvas(item.data);
+                
+                // 从缓存中移除
+                this.drawCache.splice(i, 1);
+              }
+              // 如果数据太旧（超过500ms），也移除
+              else if (timeDiff < -500) {
+                console.log(`移除过期帧 - 后台时间:${item.timestamp}, 前端时间:${currentDts}`);
+                this.drawCache.splice(i, 1);
+              }
+            }
+            
+            // 如果缓存为空，停止定时器
+            if (this.drawCache.length === 0) {
+              this.stopDrawCheck();
+            }
+          }, 50); // 每100ms检查一次
+        },
+      stopDrawCheck() {
+        if (this.checkInterval) {
+          clearInterval(this.checkInterval);
+          this.checkInterval = null;
+        }
+      }
     }
   }
 </script>

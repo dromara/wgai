@@ -12,7 +12,7 @@
  <div class="contable">
     <!-- 操作按钮区域 -->
     <div class="table-operator">
-     <!-- <a-button type="primary"  @click="refresh()" icon="plus">刷新缓存</a-button> -->
+  <a-button type="primary"  @click="refresh()" icon="plus">刷新缓存</a-button> 
       <a-button @click="handleAdd" type="primary" class="xz" icon="plus">新增</a-button>
       <a-button type="primary" icon="download" class="dc" @click="handleExportXls('热词')">导出</a-button>
       <a-upload name="file" :showUploadList="false" :multiple="false" :headers="tokenHeader" :action="importExcelUrl" @change="handleImportExcel">

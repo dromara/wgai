@@ -83,7 +83,7 @@
       <a-table
         ref="table"
         size="middle"
-		:scroll="{ x: 'auto', y: 400 }"
+		    :scroll="{ x: 1400, y: 400 }"
         bordered
         rowKey="id"
         :columns="columns"
@@ -206,8 +206,10 @@ import { filterObj } from '@/utils/util';
           {
             title:'标注标签',
             align:"center",
-            dataIndex: 'markTitle'
-          },  {
+            dataIndex: 'markTitle',
+             ellipsis: true
+          },  
+          {
             title:'标注特征',
             align:"center",
             dataIndex: 'markFeature'
@@ -264,7 +266,7 @@ import { filterObj } from '@/utils/util';
         fieldList.push({type:'string',value:'markType',text:'是否标注',dictCode:''})
         fieldList.push({type:'string',value:'markXml',text:'标注文件',dictCode:''})
         fieldList.push({type:'string',value:'markTitle',text:'标注标签',dictCode:''})
-          fieldList.push({type:'string',value:'markFeature',text:'标注特征',dictCode:''})
+        fieldList.push({type:'string',value:'markFeature',text:'标注特征',dictCode:''})
         this.superFieldList = fieldList
       }
     }
