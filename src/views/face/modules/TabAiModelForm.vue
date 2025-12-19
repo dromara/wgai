@@ -4,23 +4,33 @@
       <a-form-model ref="form" :model="model" :rules="validatorRules" slot="detail">
         <a-row>
           <a-col :span="24">
-            <a-form-model-item label="AI模型名称" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="aiName">
+            <a-form-model-item label="AI前置模型名称" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="aiName">
               <a-input v-model="model.aiName" placeholder="请输入AI模型名称"  ></a-input>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="AI权重文件" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="aiWeights">
+            <a-form-model-item label="AI前置权重文件" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="aiWeights">
               <j-upload v-model="model.aiWeights"   ></j-upload>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="AI配置文件" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="aiConfig">
+            <a-form-model-item label="AI前置配置文件" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="aiConfig">
               <j-upload v-model="model.aiConfig"   ></j-upload>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="AIName文件" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="aiNameName">
-              <j-upload v-model="model.aiNameName"   ></j-upload>
+            <a-form-model-item label="AI后置模型名称" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="endName">
+              <a-input v-model="model.endName" placeholder="请输入AI后置模型名称"  ></a-input>
+            </a-form-model-item>
+          </a-col>
+          <a-col :span="24">
+            <a-form-model-item label="AI后置权重文件" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="endWeights">
+              <j-upload v-model="model.endWeights"   ></j-upload>
+            </a-form-model-item>
+          </a-col>
+          <a-col :span="24">
+            <a-form-model-item label="AI后置配置文件" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="endConfig">
+              <j-upload v-model="model.endConfig"   ></j-upload>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
@@ -33,6 +43,12 @@
                        <a-input-number v-model="model.nmsThreshold" placeholder="识别阈值" style="width: 100%" />
             </a-form-model-item>
           </a-col>
+         <!-- <a-col :span="24">
+            <a-form-model-item label="AIName文件" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="aiNameName">
+              <j-upload v-model="model.aiNameName"   ></j-upload>
+            </a-form-model-item>
+          </a-col> -->
+          
           <a-col :span="24">
             <a-form-model-item label="模型类型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="spareOne">
              <j-dict-select-tag  v-model="model.spareOne" placeholder="请选择模型类型"

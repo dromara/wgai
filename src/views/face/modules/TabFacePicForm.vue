@@ -4,58 +4,43 @@
       <a-form-model ref="form" :model="model" :rules="validatorRules" slot="detail">
         <a-row>
           <a-col :span="24">
-            <a-form-model-item label="AI模型名称" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="aiName">
-              <a-input v-model="model.aiName" placeholder="请输入AI模型名称"  ></a-input>
+            <a-form-model-item label="所属模型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="modelId">
+                <j-search-select-tag  v-model="model.modelId" dict="tab_ai_model,end_name,id,model_dify=20"  placeholder="请选择前置模型" />
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="AI权重文件" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="aiWeights">
-              <j-upload v-model="model.aiWeights"   ></j-upload>
+            <a-form-model-item label="人脸名称" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="faceName">
+              <a-input v-model="model.faceName" placeholder="请输入人脸名称"  ></a-input>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="AI配置文件" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="aiConfig">
-              <j-upload v-model="model.aiConfig"   ></j-upload>
+            <a-form-model-item label="人脸图片" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="facePic">
+              <j-image-upload isMultiple="true"  v-model="model.facePic" ></j-image-upload>
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="AIName文件" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="aiNameName">
-              <j-upload v-model="model.aiNameName"   ></j-upload>
+            <a-form-model-item label="512维度数据" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="face512">
+              <a-textarea v-model="model.face512" rows="4" placeholder="请输入512维度数据" />
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="识别阈值(0-1)" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="threshold">
-                       <a-input-number v-model="model.threshold" placeholder="识别阈值" style="width: 100%" />
+            <a-form-model-item label="3D维度数据" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="face3d">
+              <a-textarea v-model="model.face3d" rows="4" placeholder="请输入3D维度数据" />
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="识别NMS阈值(0-1)" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="nmsThreshold">
-                       <a-input-number v-model="model.nmsThreshold" placeholder="识别阈值" style="width: 100%" />
+            <a-form-model-item label="其他维度数据" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="faceOther">
+              <a-textarea v-model="model.faceOther" rows="4" placeholder="请输入其他维度数据" />
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="模型类型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="spareOne">
-             <j-dict-select-tag  v-model="model.spareOne" placeholder="请选择模型类型"
-                               dictCode="model_type"/>
-            </a-form-model-item>
-          </a-col>
-          
-          <a-col :span="24">
-            <a-form-model-item label="识别方式" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="modelDifyType">
-             <j-dict-select-tag  v-model="model.modelDifyType" placeholder="请选择识别类型"
-                               dictCode="model_type"/>
+            <a-form-model-item label="是否标注" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="isRun">
+              <j-dict-select-tag type="list" v-model="model.isRun" dictCode="push_static" placeholder="请选择是否标注" />
             </a-form-model-item>
           </a-col>
           <a-col :span="24">
-            <a-form-model-item label="识别类型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="modelDify">
-             <j-dict-select-tag  v-model="model.modelDify" placeholder="请选择识别类型"
-                               dictCode="dify_type"/>
-            </a-form-model-item>
-          </a-col>
-          <a-col :span="24">
-            <a-form-model-item label="识别类型" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="modelJmType">
-             <j-dict-select-tag  v-model="model.modelJmType" placeholder="请选择识别类型"
-                               dictCode="jm_type"/>
+            <a-form-model-item label="备注" :labelCol="labelCol" :wrapperCol="wrapperCol" prop="remake">
+              <a-input v-model="model.remake" placeholder="请输入备注"  ></a-input>
             </a-form-model-item>
           </a-col>
         </a-row>
@@ -70,7 +55,7 @@
   import { validateDuplicateValue } from '@/utils/util'
 
   export default {
-    name: 'TabAiModelForm',
+    name: 'TabFacePicForm',
     components: {
     },
     props: {
@@ -94,12 +79,22 @@
           sm: { span: 16 },
         },
         confirmLoading: false,
-        validatorRules: {
-        },
+       validatorRules: {
+         modelId: [
+            { required: true, message: '请选择模型' }
+         ],
+              faceName: [
+                { required: true, message: '请输入人脸名称' }
+              ],
+              facePic: [
+                { required: true, message: '请上传人脸ZIP' }
+              ],
+         
+            },
         url: {
-          add: "/tab/tabAiModel/add",
-          edit: "/tab/tabAiModel/edit",
-          queryById: "/tab/tabAiModel/queryById"
+          add: "/face/tabFacePic/add",
+          edit: "/face/tabFacePic/edit",
+          queryById: "/face/tabFacePic/queryById"
         }
       }
     },

@@ -91,7 +91,7 @@
         <span slot="action" slot-scope="text, record">
 		<a @click="handleEdit(record)">编辑</a>
 		  <a-divider type="vertical" />
-		  <a @click="handleNext(record)">模型下发</a>
+		 <!-- <a @click="handleNext(record)">模型下发</a> -->
 		  <a-divider type="vertical" />
 		  <a-dropdown>
 			<a class="ant-dropdown-link">更多 <a-icon type="down" /></a>
@@ -148,14 +148,15 @@
             }
           },
           {
-            title:'AI模型名称',
+            title:'定位模型名称',
             align:"center",
             dataIndex: 'aiName'
           },
           {
-            title:'AI模型类型',
+            title:'识别模型名称',
             align:"center",
-            dataIndex: 'spareOne_dictText'
+            dataIndex: 'endName',
+         
           },
           {
             title:'AI模型阈值',
@@ -166,6 +167,11 @@
             title:'AI模型NMS阈值',
             align:"center",
             dataIndex: 'nmsThreshold'
+          },
+          {
+            title:'AI模型类型',
+            align:"center",
+            dataIndex: 'spareOne_dictText'
           },
           {
             title:'AI模型识别方式',
@@ -182,12 +188,7 @@
             align:"center",
             dataIndex: 'modelJmType_dictText'
           },
-          // {
-          //   title:'AI权重文件',
-          //   align:"center",
-          //   dataIndex: 'aiWeights',
-          //   scopedSlots: {customRender: 'fileSlot'}
-          // },
+         
           // {
           //   title:'AI配置文件',
           //   align:"center",
@@ -210,7 +211,7 @@
           }
         ],
         url: {
-          list: "/tab/tabAiModel/list",
+          list: "/tab/tabAiModel/listface",
           delete: "/tab/tabAiModel/delete",
           deleteBatch: "/tab/tabAiModel/deleteBatch",
           exportXlsUrl: "/tab/tabAiModel/exportXls",

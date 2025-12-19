@@ -12,11 +12,11 @@
       </div>
       <div id="buttonsText">
         {{videoInfo}}
-        <a-col :span="24">
-          <a-form-model-item :labelCol="{span: 4}" :wrapperCol="{span: 20}" label="订阅id" prop="videoId">
+        <a-col :span="24" :readonly="true">
+          <a-form-model-item :labelCol="{span: 4}" :wrapperCol="{span: 20}" label="订阅摄像头" prop="videoId">
             <!--            <a-input  v-model="model.videoId" placeholder="摄像头id" :disabled="true" readonly="readonly"  ></a-input> -->
 
-            <j-dict-select-tag type="list" aria-readonly="true" style="width: 100%;" v-model="model.videoId"
+            <j-dict-select-tag type="list"   :readonly="true" style="width: 100%;" v-model="model.videoId"
               dictCode="tab_ai_subscription_new,name,id" placeholder="请选择订阅ID" />
 
           </a-form-model-item>

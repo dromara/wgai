@@ -5,19 +5,36 @@
     <a-form layout="inline" @keyup.enter.native="searchQuery">
       <a-row :gutter="24">
         <a-col :xl="6" :lg="7" :md="8" :sm="24">
-          <a-form-item label="预警内容">
-            <a-input placeholder="预警内容" v-model="queryParam.warningInfo"></a-input>
+          <a-form-item label="预警摄像头">
+            <a-input placeholder="预警摄像头" v-model="queryParam.warningName"></a-input>
           </a-form-item>
         </a-col>
-     
+        <a-col :xl="6" :lg="7" :md="8" :sm="24">
+          <a-form-item label="预警算法">
+            <a-input placeholder="预警算法" v-model="queryParam.warningAi"></a-input>
+          </a-form-item>
+        </a-col>
+        <a-col :xl="6" :lg="7" :md="8" :sm="24">
+          <a-form-item label="预警算法">
+            <a-input placeholder="预警算法" v-model="queryParam.warningAi"></a-input>
+          </a-form-item>
+        </a-col>
+              <a-col :xl="10" :lg="10" :md="12" :sm="24">
+                  <a-form-item label="预警时间">
+                              <j-date showTime="true" dateFormat="YYYY-MM-DD HH:mm:ss" placeholder="请选择开始日期" class="query-group-cust" v-model="queryParam.warningTime_begin"></j-date>
+                              <span class="query-group-split-cust"></span>
+                              <j-date showTime="true" dateFormat="YYYY-MM-DD HH:mm:ss"  placeholder="请选择结束日期" class="query-group-cust" v-model="queryParam.warningTime_end"></j-date>
+                  </a-form-item>
+               </a-col>
+                
         <a-col :xl="6" :lg="7" :md="8" :sm="24">
           <span style="float: left;overflow: hidden;" class="table-page-search-submitButtons">
             <a-button type="primary" @click="searchQuery" class="cx" icon="search">查询</a-button>
             <a-button type="primary" @click="searchReset" class="cz" icon="reload" style="margin-left: 8px">重置</a-button>
-            <!-- <a @click="handleToggleSearch" style="margin-left: 8px">
+            <a @click="handleToggleSearch" style="margin-left: 8px">
               {{ toggleSearchStatus ? '收起' : '展开' }}
               <a-icon :type="toggleSearchStatus ? 'up' : 'down'"/>
-            </a> -->
+            </a>
           </span>
         </a-col>
         
@@ -38,7 +55,12 @@
         <!-- 高级查询区域 -->
         <a-dropdown v-if="selectedRowKeys.length > 0">
           <a-menu slot="overlay">
+            
+         <!--   <a-menu-item key="2" @click="batchTrain"><a-icon type="delete" />批量训练</a-menu-item> -->
             <a-menu-item key="1" @click="batchDel"><a-icon type="delete" />删除</a-menu-item>
+            
+     
+     
           </a-menu>
           <a-button style="margin-left: 8px"> 批量操作 <a-icon type="down" /></a-button>
         </a-dropdown>
@@ -157,7 +179,12 @@
             customRender: function(t, r, index) {
               return parseInt(index) + 1;
             }
+          }, {
+            title: '预警摄像头',
+            align: "center",
+            dataIndex: 'warningName'
           },
+          
           {
             title: '预警类型',
             align: "center",
@@ -309,8 +336,14 @@
           dictCode: ''
         })
         this.superFieldList = fieldList
+      },
+      batchTrain(){
+        
+      },
+      oneTrain(){
+        
       }
-    }
+      }
   }
 </script>
 <style src="@assets/zwyStyle/css/main.css"></style>
