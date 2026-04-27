@@ -9,6 +9,7 @@ import org.apache.commons.lang.StringUtils;
 import org.bytedeco.ffmpeg.global.avcodec;
 import org.bytedeco.javacv.*;
 import org.jeecg.common.util.RestUtil;
+import org.jeecg.modules.demo.audio.entity.TabAudioDevice;
 import org.jeecg.modules.demo.easy.entity.TabEasyPic;
 import org.jeecg.modules.demo.tab.entity.PushInfo;
 import org.jeecg.modules.demo.tab.entity.TabAiBase;
@@ -2881,13 +2882,13 @@ public class identifyTypeNew {
 
                 String recordVideo = "";
                 //是否录像
-                if (pushInfo.getIsRecording() == 0) {
-                    log.info("开启录像 录像时常{}", pushInfo.getRecordTime());
-                    long recordTime = pushInfo.getRecordTime();
+                if (netPush.getTabAiVideoSetting().getIsRecording() == 0) {
+                    log.info("开启录像 录像时常{}", netPush.getTabAiVideoSetting().getRecordTime());
+                    long recordTime = netPush.getTabAiVideoSetting().getRecordTime();
                     recordVideo = RecordVideo(pushInfo.getBeginEventTypes(), savePath, recordTime, netPush.getId());
                     if (StringUtils.isNotEmpty(recordVideo)) {
                         log.error("录像完成:{}", recordVideo);
-                        if (pushInfo.getIsBegin() == 0) {
+                        if (netPush.getTabAiVideoSetting().getIsAnalysis() == 0) { //是否开启分析
                             //需要分析录像视频逐帧分析
                             log.error("开始分析视频");
                             recordVideo = analysisVideo(recordVideo, netPush, savePath);
@@ -2897,21 +2898,32 @@ public class identifyTypeNew {
                     log.info("[未开启录像]");
                 }
 
-                if (pushInfo.getPushStatic() == 0) {// 0 开启 1未开启
-                    log.info("[推送第三方结果]：");
-                    if(!pushInfo.getEventUrl().equals("localhost")){ //不进行推送
-                        if(StringUtils.isNotEmpty(recordVideo)){
-                            String base64Mp4 = base64Image(recordVideo);
-                            push.setVideo(base64Mp4);
-                        }
-                        JSONObject ob = RestUtil.post(pushInfo.getEventUrl(), (JSONObject) JSONObject.toJSON(push));
-                        log.info("返回内容：" + ob);
+                //`临时使用播报
+                if(netPush.getTabAiVideoSetting().getIsAudio() == 0){
+                    log.info("开始播报！~~~~~~播报内容！~~~~~~{}",audioText);
+                    if(StringUtils.isNotEmpty(audioText)){
+                        TabAudioDevice tabAudioDevice=new TabAudioDevice();
+                        tabAudioDevice.setDeivceUrl("http://192.168.0.160:8307");
+                        String token= getToken(tabAudioDevice);
+                        postAudioText(token,tabAudioDevice,audioText);
                     }
+                }
+
+                if (pushInfo.getPushStatic() == 0) {// 0 开启 1未开启
+                    log.info("[已经开启推送第三方]：");
+
+                    if(StringUtils.isNotEmpty(recordVideo)){
+                        String base64Mp4 = base64Image(recordVideo);
+                        push.setVideo(base64Mp4);
+                    }
+                    JSONObject ob = RestUtil.post(pushInfo.getEventUrl(), (JSONObject) JSONObject.toJSON(push));
+                    log.info("返回内容：" + ob);
+
                 } else {
                     log.info("[当前设置为：不推送第三方]");
                 }
 
-                if(pushInfo.getSaveLocalhost()==0){ //保存到本地
+                if(netPush.getTabAiVideoSetting().getSaveLocalhost()==0){ //保存到本地
                     log.info("[本地也保存]");
                     push.setAlarmPicData(saveName);
                     push.setVideo(recordVideo);
@@ -2920,14 +2932,14 @@ public class identifyTypeNew {
                     JSONObject ob = RestUtil.post("http://127.0.0.1:9998/wgai/video/tabAiWarning/addPush", (JSONObject) JSONObject.toJSON(push));
 
                     log.info("返回内容：" + ob);
-                }
-
-                if (pushInfo.getSaveRecord() != 0 && StringUtils.isNotEmpty(recordVideo)&&pushInfo.getSaveLocalhost()!=0) {
+                }else{
+                    log.info("[不保存本地录像]");
                     File imageFile = new File(recordVideo);
                     if (imageFile.exists()) {
                         imageFile.delete();
                     }
                 }
+
 
 
             } catch (Exception exception) {

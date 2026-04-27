@@ -53,33 +53,93 @@ import static org.jeecg.modules.tab.AIModel.AIModelYolo3.base64Image;
 import static org.jeecg.modules.tab.AIModel.pose.FallDetectionResult.detectFallOrStand;
 
 /**
+ * ONNX目标检测工具类 - 支持双模式预警
+ *
+ * <p>支持两种预警模式：</p>
+ * <ul>
+ *   <li>时间间隔预警（warnType=0）：按固定时间间隔报警</li>
+ *   <li>目标跟踪预警（warnType=1）：只在新目标进入时报警，类似电子围栏</li>
+ * </ul>
+ *
  * @author wggg
  * @date 2025/9/30 11:07
+ * @version 2.0 - 新增目标跟踪预警功能
  */
 @Slf4j
-public class identifyTypeNewOnnx {
+public class identifyTypeNewOnnxTest {
 
-    /***
-     * 识别方法
-     * @param pushInfo
-     * @param image
-     * @param netPush
-     * @param redisTemplate
-     * @param retureBoxInfos
-     * @return
+    // ========================================
+    // 目标跟踪配置常量
+    // ========================================
+
+    /**
+     * 目标匹配距离阈值（像素）
+     * <p>当前帧检测到的目标与历史目标的中心点距离小于此值时，认为是同一目标</p>
+     * <p>建议值：50-150像素，根据场景调整：</p>
+     * <ul>
+     *   <li>室内近距离监控：50-80像素</li>
+     *   <li>室外远距离监控：100-150像素</li>
+     *   <li>人流密集区域：80-120像素</li>
+     * </ul>
+     */
+    private static final double TARGET_MATCH_DISTANCE_THRESHOLD = 150.0;
+
+    /**
+     * 目标超时时间（毫秒）
+     * <p>目标超过此时间未被检测到，则认为已离开监控区域</p>
+     * <p>建议值：3000-10000毫秒，根据帧率调整：</p>
+     * <ul>
+     *   <li>高帧率（>15fps）：3000-5000毫秒</li>
+     *   <li>低帧率（<10fps）：6000-10000毫秒</li>
+     * </ul>
+     */
+    private static final long TARGET_TIMEOUT_MS = 10000;
+
+    /**
+     * Redis存储目标列表的key后缀
+     * <p>完整key格式：{cameraId}:targets</p>
+     */
+    private static final String REDIS_KEY_SUFFIX_TARGETS = ":targets";
+
+    /**
+     * 目标跟踪编号全局计数器（循环0-9999）
+     * <p>每个新出现的目标分配一个唯一显示编号，方便在画面上确认跟踪正确性</p>
+     */
+    private static final java.util.concurrent.atomic.AtomicInteger TRACK_COUNTER =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+
+    /**
+     * ONNX V5 目标检测方法（支持双模式预警）
+     *
+     * @param pushInfo 推送信息配置
+     * @param image 待检测的图像（Mat格式）
+     * @param netPush 网络推送配置对象
+     * @param redisTemplate Redis操作模板
+     * @param retureBoxInfos 前置检测框列表（用于区域过滤）
+     * @return true-检测成功并推送，false-检测失败或不满足推送条件
      */
     public boolean detectObjectsDifyOnnxV5(TabAiSubscriptionNew pushInfo, Mat image, NetPush netPush,
                                            RedisTemplate redisTemplate, List<retureBoxInfo> retureBoxInfos) {
 
-        // ========== 1. 频率控制检查 ==========
-        long intervalTime = netPush.getTabAiVideoSetting().getWarnTime();
-        Object lastPushTime = redisTemplate.opsForValue().get(netPush.getId());
-        if (lastPushTime != null) {
-            log.info("推送间隔未到，跳过本次检测");
-            return false;
+        // ========== 1. 预警模式判断和频率控制 ==========
+        Integer warnType = netPush.getTabAiVideoSetting().getWarnType();
+
+        if (warnType == 0) {
+            // 时间间隔预警模式：检查距离上次推送的时间间隔
+            long intervalTime = netPush.getTabAiVideoSetting().getWarnTime();
+            Object lastPushTime = redisTemplate.opsForValue().get(netPush.getId());
+            if (lastPushTime != null) {
+                log.info("【时间间隔预警】推送间隔未到，跳过本次检测");
+                return false;
+            }
+
+            log.info("【时间间隔预警】间隔时间: {}s", intervalTime);
+        } else if (warnType == 1) {
+            // 目标跟踪预警模式：不进行时间间隔检查，由目标跟踪逻辑控制
+            log.info("【目标跟踪预警】模式启用 - 推送对象: {}", pushInfo.getName());
         }
-        log.info("间隔时间: {}s, 推送对象: {}, 前置检测框: {}", intervalTime, pushInfo.getName(),
-                JSON.toJSONString(retureBoxInfos));
+
+        log.info("前置检测框: {}", JSON.toJSONString(retureBoxInfos));
 
         // ========== 2. 初始化参数 ==========
         List<String> classNames = netPush.getClaseeNames();
@@ -131,7 +191,7 @@ public class identifyTypeNewOnnx {
         }
         log.info("NMS后检测框数量: {}", nmsIndices.length);
 
-        // ========== 7. 过滤和绘制检测框 ==========
+        // ========== 7. 过滤和收集有效检测目标 ==========
         if (netPush.getTabAiSubscriptionNew().getSaveBeforePic() == 0) {
             saveDebugImg(image, nmsIndices.length, netPush.getTabAiSubscriptionNew().getPathSave(),"before");
         }
@@ -139,22 +199,32 @@ public class identifyTypeNewOnnx {
         double dx = (640 - image.cols() * scale) / 2;
         double dy = (640 - image.rows() * scale) / 2;
 
+        //  先把自定义检测区域绘制到图像上，方便肉眼核对区域是否正确
+        if(netPush.getIsBy()==0&&netPush.getTabAiVideoSetting().getIsByWrite()==0){ //开启区域绘制
+            image = drawRegionsOnImage(image, netPush);
+        }
+
+
+        // 收集当前帧所有有效目标（用于目标跟踪）
+        List<DetectedTarget> currentFrameTargets = new ArrayList<>();
         DetectionStats stats = new DetectionStats();
         int validCount = 0;
+
+        // ✅ 是否需要将区域名写入推送（前提：开启区域识别 AND 开启区域推送）
+        boolean needAreaPush = netPush.getIsBy() == 0 && netPush.getTabAiVideoSetting().getIsByPush() == 0;
+
+        // ✅ 收集当前帧所有命中的区域名称（去重、保留顺序）
+        Set<String> hitAreaNames = new LinkedHashSet<>();
+
+        // 延迟绘制队列：先收集，跟踪完再画（以便在标签上显示编号）
+        // 每个元素: [BoundingBox, baseLabel, confidence, color, DetectedTarget]
+        List<Object[]> drawQueue = new ArrayList<>();
 
         for (int idx : nmsIndices) {
             Rect2d box = detectionResult.boxes2d.get(idx);
             Integer classId = detectionResult.classIds.get(idx);
             String className = classNames.get(classId);
             float confidence = detectionResult.confidences.get(idx);
-
-            // 坐标还原到原图
-            BoundingBox originalBox = restoreCoordinates(box, scale, dx, dy, image);
-
-            // 区域过滤
-            if (!isValidDetection(pushInfo, netPush, retureBoxInfos, originalBox, box)) {
-                continue;
-            }
 
             // 获取类别配置
             TabAiBase aiBase = getAiBaseConfig(className);
@@ -163,36 +233,131 @@ public class identifyTypeNewOnnx {
                 continue;
             }
 
+            log.info("className：{}",className);
+            // 坐标还原到原图
+            BoundingBox originalBox = restoreCoordinates(box, scale, dx, dy, image);
+
+            // ✅ 区域过滤：null=丢弃；非null=有效，值为区域名（可能为""）
+            String areaName = isValidDetection(pushInfo, netPush, retureBoxInfos, originalBox, box);
+            if (areaName == null) {
+                log.info("不在区域内，跳过");
+                continue;
+            }
+
+            // ✅ 当开启区域推送时，收集命中区域名称
+            if (needAreaPush && !areaName.isEmpty()) {
+                hitAreaNames.add(areaName);
+            }
+
+
+
+            // 计算目标中心点（用于目标跟踪）
+            double centerX = originalBox.x + originalBox.width / 2.0;
+            double centerY = originalBox.y + originalBox.height / 2.0;
+
+            // 创建检测目标对象（用于目标跟踪）
+            DetectedTarget target = new DetectedTarget();
+            target.setCenterX(centerX);
+            target.setCenterY(centerY);
+            target.setClassName(className);
+            target.setConfidence(confidence);
+            target.setBoundingBox(originalBox);
+            target.setDetectedTime(System.currentTimeMillis());
+            currentFrameTargets.add(target);
+
             // 累计统计信息
             stats.accumulate(aiBase);
 
-            // 绘制检测框
+            // 加入延迟绘制队列（编号等跟踪完成后补充）
             Scalar color = getColor(aiBase.getRgbColor());
-            image=drawDetection(image, originalBox, aiBase.getChainName(), confidence, color);
+            drawQueue.add(new Object[]{originalBox, aiBase.getChainName(), confidence, color, target});
 
             validCount++;
         }
 
-        // ========== 8. 推送结果 ==========
-        if (stats.warnNumber <= 0) {
-            log.error("【无有效检测结果，不推送】");
+        // ========== 8. 目标跟踪逻辑 ==========
+        // 始终执行跟踪以获取每个目标的显示编号；是否触发报警由 warnType 决定
+        TargetTrackingResult trackingResult = processTargetTracking(
+                netPush.getId(),
+                currentFrameTargets,
+                redisTemplate
+        );
+        Map<DetectedTarget, Integer> targetNumMap = trackingResult.getTargetNumMap();
+
+        boolean shouldTriggerAlarm = false;
+        int newTargetCount = 0;
+
+        if (warnType == 1) {
+            // 目标跟踪预警模式
+            shouldTriggerAlarm = trackingResult.hasNewTargets();
+            newTargetCount = trackingResult.getNewTargetCount();
+
+            log.info("【目标跟踪】当前目标数: {}, 新增目标数: {}, 是否触发报警: {}",
+                    currentFrameTargets.size(), newTargetCount, shouldTriggerAlarm);
+
+        } else {
+            // 时间间隔预警模式 - 有检测结果就触发
+            shouldTriggerAlarm = validCount > 0;
+        }
+
+        // ========== 8b. 带编号绘制检测框 ==========
+        for (Object[] di : drawQueue) {
+            BoundingBox    box       = (BoundingBox)    di[0];
+            String         baseName  = (String)          di[1];
+            float          conf      = (float)            di[2];
+            Scalar         color     = (Scalar)           di[3];
+            DetectedTarget dt        = (DetectedTarget)   di[4];
+            Integer        trackNum  = targetNumMap.get(dt);
+
+            // 格式：类名-置信度-编号，例如 人-0.92-0001
+            String confStr    = String.format("%.2f", conf);
+            String numStr     = trackNum != null ? String.format("%04d", trackNum) : "----";
+            String fullLabel  = baseName + "-" + confStr + "-" + numStr;
+
+            // 详细日志：方便核对每帧每个目标
+            log.info("【目标标注】{} | 置信度:{} | 编号:{} | 框:[x={},y={},w={},h={}] | 中心:({},{})",
+                    baseName, confStr, numStr,
+                    (int) box.x, (int) box.y, (int) box.width, (int) box.height,
+                    (int)(box.x + box.width / 2.0), (int)(box.y + box.height / 2.0));
+
+            image = drawDetection(image, box, fullLabel, color);
+        }
+
+        // ========== 9. 推送结果 ==========
+        if (!shouldTriggerAlarm || stats.warnNumber <= 0) {
+            log.info("【不触发报警】shouldTrigger: {}, warnNumber: {}", shouldTriggerAlarm, stats.warnNumber);
             return false;
         }
 
-        // 设置Redis缓存防止频繁推送
-        redisTemplate.opsForValue().set(netPush.getId(), System.currentTimeMillis(),
-                intervalTime, TimeUnit.SECONDS);
+
+        if (warnType == 0) {
+            redisTemplate.opsForValue().set(netPush.getId(), System.currentTimeMillis(),
+                    netPush.getTabAiVideoSetting().getWarnTime(), TimeUnit.SECONDS);
+            log.info("【时间间隔预警】已触发报警，开始计时 {}s", netPush.getTabAiVideoSetting().getWarnTime());
+        }
 
         // 保存图像并推送
         String savePath = uploadPath + File.separator + "push" + File.separator;
         String savedImagePath = saveDetectionImage(image, savePath);
 
         long endTime = System.currentTimeMillis();
-        log.info("识别耗时: {}ms, 有效检测: {}/{}", (endTime - startTime), validCount, nmsIndices.length);
+        log.info("识别耗时: {}ms, 有效检测: {}/{}, 新增目标: {}",
+                (endTime - startTime), validCount, nmsIndices.length, newTargetCount);
 
         try {
+            // 如果是目标跟踪模式，在报警文本中加入新增目标信息
+            String warnText = stats.warnText;
+            if (warnType == 1 && newTargetCount > 0) {
+                warnText = String.format("检测到%d个新目标进入监控区域！%s", newTargetCount, stats.warnText);
+            }
+
+            // ✅ 拼接命中区域名称（多个区域用逗号分隔）
+            String modelArea = (needAreaPush && !hitAreaNames.isEmpty())
+                    ? String.join(",", hitAreaNames) : "";
+            log.info("【区域推送】needAreaPush={} 命中区域: [{}]", needAreaPush, modelArea);
+
             isOk(pushInfo, netPush, redisTemplate, savedImagePath, tabAiModel,
-                    stats.audioText, stats.warnNumber, stats.warnText, stats.warnName, savePath);
+                    stats.audioText, stats.warnNumber, warnText, stats.warnName, savePath, modelArea);
             return true;
         } catch (Exception ex) {
             log.error("推送失败", ex);
@@ -201,23 +366,39 @@ public class identifyTypeNewOnnx {
     }
 
 
+    /**
+     * ONNX V5 Pose检测方法（支持双模式预警）
+     * <p>适用于姿态检测场景</p>
+     *
+     * @param pushInfo 推送信息配置
+     * @param image 待检测的图像
+     * @param netPush 网络推送配置对象
+     * @param redisTemplate Redis操作模板
+     * @param retureBoxInfos 前置检测框列表
+     * @return true-检测成功并推送，false-检测失败或不满足推送条件
+     */
     public boolean detectObjectsDifyOnnxV5Pose(TabAiSubscriptionNew pushInfo, Mat image, NetPush netPush,
-                                           RedisTemplate redisTemplate, List<retureBoxInfo> retureBoxInfos) {
+                                               RedisTemplate redisTemplate, List<retureBoxInfo> retureBoxInfos) {
 
-        // ========== 1. 频率控制检查 ==========
-        if(netPush.getTabAiVideoSetting().getWarnType()==0){//时间预警
+        // ========== 1. 预警模式判断和频率控制 ==========
+        Integer warnType = netPush.getTabAiVideoSetting().getWarnType();
 
-        }else if(netPush.getTabAiVideoSetting().getWarnType()==1){ //目标跟随事件预警
+        if (warnType == 0) {
+            // 时间间隔预警模式：检查距离上次推送的时间间隔
+            long intervalTime = netPush.getTabAiVideoSetting().getWarnTime();
+            Object lastPushTime = redisTemplate.opsForValue().get(netPush.getId());
+            if (lastPushTime != null) {
+                log.info("【时间间隔预警】推送间隔未到，跳过本次检测");
+                return false;
+            }
 
+            log.info("【时间间隔预警】间隔时间: {}s", intervalTime);
+        } else if (warnType == 1) {
+            // 目标跟踪预警模式：不进行时间间隔检查，由目标跟踪逻辑控制
+            log.info("【目标跟踪预警】模式启用 - 推送对象: {}", pushInfo.getName());
         }
-        long intervalTime = netPush.getTabAiVideoSetting().getWarnTime();
-        Object lastPushTime = redisTemplate.opsForValue().get(netPush.getId());
-        if (lastPushTime != null) {
-            log.info("推送间隔未到，跳过本次检测");
-            return false;
-        }
-        log.info("间隔时间: {}s, 推送对象: {}, 前置检测框: {}", intervalTime, pushInfo.getName(),
-                JSON.toJSONString(retureBoxInfos));
+
+        log.info("前置检测框: {}", JSON.toJSONString(retureBoxInfos));
 
         // ========== 2. 初始化参数 ==========
         List<String> classNames = netPush.getClaseeNames();
@@ -464,7 +645,7 @@ public class identifyTypeNewOnnx {
             }
 
 
-        // ========== 5. 检测结果验证 ==========
+            // ========== 5. 检测结果验证 ==========
             log.info("NMS前检测框数量: " + boxes2d.size());
             if(boxes2d.size()<=0){
                 log.error("未识别到{}",netPush.getTabAiModel().getAiName());
@@ -492,8 +673,21 @@ public class identifyTypeNewOnnx {
             double dx = (640 - image.cols() * scale) / 2;
             double dy = (640 - image.rows() * scale) / 2;
 
+            if (needDrawArea(netPush)) {
+                image = drawRegionsOnImage(image, netPush);
+            }
+
+            boolean needAreaPush = needPushArea(netPush);
+            Set<String> hitAreaNames = new LinkedHashSet<>();
             DetectionStats stats = new DetectionStats();
-            int colorIdx = 0;
+
+            // ✅ 收集当前帧所有有效目标（用于目标跟踪，与 detectObjectsDifyOnnxV5 保持一致）
+            List<DetectedTarget> currentFrameTargets = new ArrayList<>();
+            // ✅ 延迟绘制队列：先收集，跟踪完再画，以便在标签上显示跟踪编号
+            // 每个元素: [BoundingBox, baseLabel, confidence, color, DetectedTarget]
+            List<Object[]> drawQueue = new ArrayList<>();
+            int validCount = 0;
+
             for (int idx : indicesArr) {
                 Rect2d box = boxes2d.get(idx);
                 int classId = classIds.get(idx);
@@ -512,71 +706,142 @@ public class identifyTypeNewOnnx {
                 width = Math.min(width, image.cols() - x);
                 height = Math.min(height, image.rows() - y);
 
+                BoundingBox originalBox = new BoundingBox(x, y, width, height);
+                String areaName = isValidDetection(pushInfo, netPush, retureBoxInfos, originalBox, box);
+                if (areaName == null) {
+                    log.info("姿态目标不在区域内，跳过");
+                    continue;
+                }
+                if (needAreaPush && StringUtils.isNotEmpty(areaName)) {
+                    hitAreaNames.add(areaName);
+                }
+
                 // 执行跌倒检测
                 FallDetectionResult fallResult = detectFallOrStand(kpts, scale, dx, dy);
-                log.info("人体检测: 置信度={}, 状态={} , 原因={}, 报警={}",
+                log.info("人体检测: 置信度={}, 状态={}, 原因={}, 报警={}",
                         conf, fallResult.getStatus(), fallResult.getConfidence(),
                         fallResult.getReason(), fallResult.isAlert());
-                if(fallResult.isAlert()==false){
+                if (!fallResult.isAlert()) {
                     continue;
                 }
 
-                // 绘制边界框
-//                Imgproc.rectangle(image,
-//                        new Point(x, y),
-//                        new Point(x + width, y + height),
-//                        CommonColors(colorIdx), 2);
-//
-//                String label = "person: " + String.format("%.2f", conf);
-//                Imgproc.putText(image, label, new Point(x, y - 10),
-//                        Imgproc.FONT_HERSHEY_SIMPLEX, 0.5, CommonColors(colorIdx), 2);
                 TabAiBase aiBase = VideoSendReadCfg.map.get(fallResult.getStatus());
-                if(aiBase!=null){
-                    if(StringUtils.isNotEmpty(aiBase.getSpaceThree())&&aiBase.getSpaceThree().equals("N")){
-                        log.warn("【当前不推送：{}】",fallResult.getStatus());
+                if (aiBase != null) {
+                    if (StringUtils.isNotEmpty(aiBase.getSpaceThree()) && aiBase.getSpaceThree().equals("N")) {
+                        log.warn("【当前不推送：{}】", fallResult.getStatus());
                         continue;
                     }
-                }else{
+                } else {
                     aiBase = new TabAiBase();
                     aiBase.setChainName(fallResult.getStatus());
-                    log.warn("【未找到当前基础库名称：{}】",fallResult.getStatus());
-
+                    log.warn("【未找到当前基础库名称：{}】", fallResult.getStatus());
                 }
                 stats.accumulate(aiBase);
 
-                image=drawDetection(image, new BoundingBox(x, y, width, height),aiBase.getChainName(),conf,CommonColors(colorIdx));
-                // 绘制关键点和骨骼连接
-             //   drawPoseKeypoints(image, kpts, scale, dx, dy);
+                // ✅ 计算目标中心点（用于目标跟踪）
+                double centerX = x + width / 2.0;
+                double centerY = y + height / 2.0;
 
-                colorIdx++;
+                // ✅ 创建检测目标对象
+                // className 使用姿态状态（如"跌倒"/"站立"），保证同类目标才会匹配
+                DetectedTarget target = new DetectedTarget();
+                target.setCenterX(centerX);
+                target.setCenterY(centerY);
+                target.setClassName(fallResult.getStatus());
+                target.setConfidence(conf);
+                target.setBoundingBox(originalBox);
+                target.setDetectedTime(System.currentTimeMillis());
+                currentFrameTargets.add(target);
+
+                // ✅ 加入延迟绘制队列（trackNum 等跟踪完成后补充）
+                Scalar color = getColor(aiBase.getRgbColor());
+                drawQueue.add(new Object[]{originalBox, aiBase.getChainName(), conf, color, target});
+
+                validCount++;
             }
 
+            // ========== 8. 目标跟踪逻辑（与 detectObjectsDifyOnnxV5 完全一致）==========
+            // 始终执行跟踪以获取每个目标的显示编号；是否触发报警由 warnType 决定
+            TargetTrackingResult trackingResult = processTargetTracking(
+                    netPush.getId(),
+                    currentFrameTargets,
+                    redisTemplate
+            );
+            Map<DetectedTarget, Integer> targetNumMap = trackingResult.getTargetNumMap();
 
-        // ========== 8. 推送结果 ==========
-        if (stats.warnNumber <= 0) {
-            log.error("【无有效检测结果，不推送】");
-            return false;
-        }
+            boolean shouldTriggerAlarm = false;
+            int newTargetCount = 0;
 
-        // 设置Redis缓存防止频繁推送
-        redisTemplate.opsForValue().set(netPush.getId(), System.currentTimeMillis(),
-                intervalTime, TimeUnit.SECONDS);
+            if (warnType == 1) {
+                // 目标跟踪预警模式：只在有新目标时触发
+                shouldTriggerAlarm = trackingResult.hasNewTargets();
+                newTargetCount = trackingResult.getNewTargetCount();
+                log.info("【目标跟踪-Pose】当前目标数: {}, 新增目标数: {}, 是否触发报警: {}",
+                        currentFrameTargets.size(), newTargetCount, shouldTriggerAlarm);
+            } else {
+                // 时间间隔预警模式 - 有检测结果就触发
+                shouldTriggerAlarm = validCount > 0;
+            }
 
-        // 保存图像并推送
-        String savePath = uploadPath + File.separator + "push" + File.separator;
-        String savedImagePath = saveDetectionImage(image, savePath);
+            // ========== 8b. 带编号绘制检测框（格式：识别内容-置信度-目标编号）==========
+            for (Object[] di : drawQueue) {
+                BoundingBox    bbox     = (BoundingBox)    di[0];
+                String         baseName = (String)          di[1];
+                float          conf     = (float)            di[2];
+                Scalar         color    = (Scalar)           di[3];
+                DetectedTarget dt       = (DetectedTarget)   di[4];
+                Integer        trackNum = targetNumMap.get(dt);
 
-        long endTime = System.currentTimeMillis();
-        log.info("识别耗时: {}ms, 有效检测: {}/{}", (endTime - startTime));
+                // 格式：类名-置信度-编号，例如 跌倒-0.92-0001
+                String confStr   = String.format("%.2f", conf);
+                String numStr    = trackNum != null ? String.format("%04d", trackNum) : "----";
+                String fullLabel = baseName + "-" + confStr + "-" + numStr;
 
-        try {
-            isOk(pushInfo, netPush, redisTemplate, savedImagePath, tabAiModel,
-                    stats.audioText, stats.warnNumber, stats.warnText, stats.warnName, savePath);
-            return true;
-        } catch (Exception ex) {
-            log.error("推送失败", ex);
-            return false;
-        }
+                log.info("【目标标注-Pose】{} | 置信度:{} | 编号:{} | 框:[x={},y={},w={},h={}] | 中心:({},{})",
+                        baseName, confStr, numStr,
+                        (int) bbox.x, (int) bbox.y, (int) bbox.width, (int) bbox.height,
+                        (int)(bbox.x + bbox.width / 2.0), (int)(bbox.y + bbox.height / 2.0));
+
+                image = drawDetection(image, bbox, fullLabel, color);
+            }
+
+            // ========== 9. 推送结果 ==========
+            if (!shouldTriggerAlarm || stats.warnNumber <= 0) {
+                log.info("【不触发报警-Pose】shouldTrigger: {}, warnNumber: {}", shouldTriggerAlarm, stats.warnNumber);
+                return false;
+            }
+            //  仅在识别到内容并触发报警时，才设置间隔缓存（防止频繁推送）
+            if (warnType == 0) {
+                redisTemplate.opsForValue().set(netPush.getId(), System.currentTimeMillis(),
+                        netPush.getTabAiVideoSetting().getWarnTime(), TimeUnit.SECONDS);
+                log.info("【时间间隔预警】已触发报警，开始计时 {}s", netPush.getTabAiVideoSetting().getWarnTime());
+            }
+            // 保存图像并推送
+            String savePath = uploadPath + File.separator + "push" + File.separator;
+            String savedImagePath = saveDetectionImage(image, savePath);
+
+            long endTime = System.currentTimeMillis();
+            log.info("识别耗时: {}ms, 有效检测: {}/{}, 新增目标: {}",
+                    (endTime - startTime), validCount, indicesArr.length, newTargetCount);
+
+            try {
+                // 如果是目标跟踪模式，在报警文本中加入新增目标信息（与 detectObjectsDifyOnnxV5 一致）
+                String warnText = stats.warnText;
+                if (warnType == 1 && newTargetCount > 0) {
+                    warnText = String.format("检测到%d个新目标进入监控区域！%s", newTargetCount, stats.warnText);
+                }
+
+                String modelArea = (needAreaPush && !hitAreaNames.isEmpty())
+                        ? String.join(",", hitAreaNames) : "";
+                log.info("【区域推送-Pose】needAreaPush={} 命中区域: [{}]", needAreaPush, modelArea);
+
+                isOk(pushInfo, netPush, redisTemplate, savedImagePath, tabAiModel,
+                        stats.audioText, stats.warnNumber, warnText, stats.warnName, savePath, modelArea);
+                return true;
+            } catch (Exception ex) {
+                log.error("推送失败", ex);
+                return false;
+            }
         } catch (Exception ex) {
             log.error("ONNX推理失败", ex);
             return false;
@@ -744,7 +1009,7 @@ public class identifyTypeNewOnnx {
 
 
     private DetectionResult runOnnxInferenceROI(OrtSession session, OrtEnvironment env,
-                                             float[] inputData, Integer expectedClassCount) throws Exception {
+                                                float[] inputData, Integer expectedClassCount) throws Exception {
         long[] shape = new long[]{1, 3, 640, 640};
         DetectionResult result = new DetectionResult();
         float confThreshold = 0.35f;
@@ -792,7 +1057,7 @@ public class identifyTypeNewOnnx {
         }
 
         // 策略3：如果人体框很小（<150px），裁剪固定大小的区域
-   //     return cropFixedSizeRegion(personBox, image, 640);
+        //     return cropFixedSizeRegion(personBox, image, 640);
     }
 
 
@@ -932,33 +1197,28 @@ public class identifyTypeNewOnnx {
 
         DetectionStats stats = new DetectionStats();
         int validCount = 0;
+        boolean needAreaPush = needPushArea(netPush);
+        Set<String> hitAreaNames = new LinkedHashSet<>();
 
         if (netPush.getTabAiSubscriptionNew().getSaveBeforePic() == 0) {
             saveDebugImg(image, 10000, netPush.getTabAiSubscriptionNew().getPathSave(),"before");
         }
 
+        if (needDrawArea(netPush)) {
+            image = drawRegionsOnImage(image, netPush);
+        }
+
         for (FinalDetectionResult det : allDetections) {
-            // 1. 区域过滤（如果配置了检测区域）
-            if (netPush.getIsBy() == 0) {
-                TabVideoUtil videoUtil = netPush.getTabVideoUtil();
-                boolean inArea;
+            BoundingBox bbox = new BoundingBox(det.x, det.y, det.width, det.height);
+            Rect2d areaBox = new Rect2d(det.x, det.y, det.width, det.height);
 
-                // 关键修复：将640×640坐标转换为原图坐标
-                if (videoUtil.getBzType() == null) {
-
-                    inArea = isPointInArea(det.x, det.y,
-                            Double.parseDouble(videoUtil.getCanvasStartx()),
-                            Double.parseDouble(videoUtil.getCanvasStarty()),
-                            Double.parseDouble(videoUtil.getCanvasWidth()),
-                            Double.parseDouble(videoUtil.getCanvasHeight()));
-                } else {
-                    // 新版多形状区域判断（需要解析shapeData并转换坐标）
-                    inArea = isPointInShapeData(det.x, det.y, videoUtil.getShapeData());
-                }
-                if (!inArea) {
-                    log.debug("检测框不在指定区域内，跳过");
-                    continue;
-                }
+            String areaName = isValidDetection(pushInfo, netPush, retureBoxInfos, bbox, areaBox);
+            if (areaName == null) {
+                log.debug("检测框不在指定区域内，跳过");
+                continue;
+            }
+            if (needAreaPush && StringUtils.isNotEmpty(areaName)) {
+                hitAreaNames.add(areaName);
             }
 
             // 2. 前置模型关联过滤（如果使用了ROI检测）
@@ -979,7 +1239,6 @@ public class identifyTypeNewOnnx {
 
             // 5. 绘制检测框
             Scalar color = getColor(aiBase.getRgbColor());
-            BoundingBox bbox = new BoundingBox(det.x, det.y, det.width, det.height);
 
             // 添加ROI来源标记
             String label = aiBase.getChainName();
@@ -1010,8 +1269,10 @@ public class identifyTypeNewOnnx {
                 (endTime - startTime), validCount, allDetections.size());
 
         try {
+            String modelArea = (needAreaPush && !hitAreaNames.isEmpty())
+                    ? String.join(",", hitAreaNames) : "";
             isOk(pushInfo, netPush, redisTemplate, savedImagePath, tabAiModel,
-                    stats.audioText, stats.warnNumber, stats.warnText, stats.warnName, savePath);
+                    stats.audioText, stats.warnNumber, stats.warnText, stats.warnName, savePath, modelArea);
             return true;
         } catch (Exception ex) {
             log.error("推送失败", ex);
@@ -1324,11 +1585,12 @@ public class identifyTypeNewOnnx {
             // 坐标还原到原图（640x640）
             BoundingBox originalBox = restoreCoordinates(box, scale, dx, dy, image);
 
-//            // 区域过滤（如果启用）
-//            if (!isValidDetection(pushInfo, netPush, retureBoxInfos, originalBox, box)) {
-//                log.info("检测框不在有效区域内: {}", className);
-//                continue;
-//            }
+            // 前置检测方法：只做自定义区域过滤，不做最终报警区域推送/区域绘制逻辑
+            String areaName = isValidDetectionForBefore(netPush, originalBox, box);
+            if (areaName == null) {
+                log.info("前置检测框不在有效区域内: {}", className);
+                continue;
+            }
 
             // 获取类别配置
             TabAiBase aiBase = VideoSendReadCfg.map.get(className);
@@ -1372,21 +1634,36 @@ public class identifyTypeNewOnnx {
     }
 
 
-    public boolean isOk(TabAiSubscriptionNew pushInfo, NetPush netPush, RedisTemplate redisTemplate, String saveName, TabAiModel tabAiModel,
-                        String audioText,
-                        Integer warnNumber,
-                        String warnText,
-                        String warnName,
-                        String savePath
-    ) {
+    /**
+     * 推送报警（兼容旧调用，不携带区域名称）。
+     * 委托 {@link #isOk(TabAiSubscriptionNew, NetPush, RedisTemplate, String, TabAiModel, String, Integer, String, String, String, String)}
+     */
+    public boolean isOk(TabAiSubscriptionNew pushInfo, NetPush netPush, RedisTemplate redisTemplate,
+                        String saveName, TabAiModel tabAiModel,
+                        String audioText, Integer warnNumber,
+                        String warnText, String warnName, String savePath) {
+        return isOk(pushInfo, netPush, redisTemplate, saveName, tabAiModel,
+                audioText, warnNumber, warnText, warnName, savePath, "");
+    }
+
+    /**
+     * 推送报警（完整版，携带区域名称）。
+     *
+     * @param modelArea 目标命中的区域名称（多个用逗号分隔）；
+     *                  空串表示未开启区域推送或旧版单矩形模式
+     */
+    public boolean isOk(TabAiSubscriptionNew pushInfo, NetPush netPush, RedisTemplate redisTemplate,
+                        String saveName, TabAiModel tabAiModel,
+                        String audioText, Integer warnNumber,
+                        String warnText, String warnName, String savePath,
+                        String modelArea) {
 
         log.warn("model{}-{}", tabAiModel.getAiName(), warnText);
         Thread t = new Thread(() -> {
             try {
 
-
                 String base64Img = base64Image(saveName);
-                //组装参数
+                // 组装参数
                 pushEntity push = new pushEntity();
                 push.setCameraName(pushInfo.getName());
                 push.setType("图片");
@@ -1398,6 +1675,11 @@ public class identifyTypeNewOnnx {
                 push.setModelName(warnName);
                 push.setAiNumber(warnNumber);
                 push.setModelText(warnText);
+                // ✅ 区域名称（仅开启了 isByPush 且命中区域时才有值）
+                if (modelArea != null && !modelArea.isEmpty()) {
+                    push.setModelArea(modelArea);
+                    log.info("【区域报警】命中区域: {}", modelArea);
+                }
 
 
                 String recordVideo = "";
@@ -1900,46 +2182,123 @@ public class identifyTypeNewOnnx {
         return new BoundingBox(x, y, w, h);
     }
 
+    private boolean needDrawArea(NetPush netPush) {
+        return netPush != null
+                && netPush.getIsBy() == 0
+                && netPush.getTabAiVideoSetting() != null
+                && netPush.getTabAiVideoSetting().getIsByWrite() != null
+                && netPush.getTabAiVideoSetting().getIsByWrite() == 0;
+    }
+
+    private boolean needPushArea(NetPush netPush) {
+        return netPush != null
+                && netPush.getIsBy() == 0
+                && netPush.getTabAiVideoSetting() != null
+                && netPush.getTabAiVideoSetting().getIsByPush() != null
+                && netPush.getTabAiVideoSetting().getIsByPush() == 0;
+    }
+
     /**
-     * 检测有效性验证
+     * 前置检测专用：只做自定义区域过滤，不做前置跟随过滤。
+     * 返回 null 表示不在区域内；返回空串/区域名表示通过。
      */
-    private boolean isValidDetection(TabAiSubscriptionNew pushInfo, NetPush netPush,
-                                     List<retureBoxInfo> retureBoxInfos, BoundingBox originalBox,
-                                     Rect2d box) {
-        // 前置模型区域过滤有前置 且 跟随前置区域
-        if (netPush.getIsFollow() == 0&&netPush.getIsBefor() == 0) {
-            boolean followFlag = retureBoxInfo.getLocalhost(retureBoxInfos, originalBox.x, originalBox.y, netPush.getFollowPosition());
+    private String isValidDetectionForBefore(NetPush netPush, BoundingBox originalBox, Rect2d box) {
+        if (netPush.getIsBy() != 0) {
+            return "";
+        }
+
+        TabVideoUtil videoUtil = netPush.getTabVideoUtil();
+        if (videoUtil == null) {
+            log.warn("已开启区域识别，但未配置区域信息");
+            return null;
+        }
+
+        if (videoUtil.getBzType() == null) {
+            boolean inArea = isPointInArea(originalBox.x, originalBox.y,
+                    Double.parseDouble(videoUtil.getCanvasStartx()),
+                    Double.parseDouble(videoUtil.getCanvasStarty()),
+                    Double.parseDouble(videoUtil.getCanvasWidth()),
+                    Double.parseDouble(videoUtil.getCanvasHeight()));
+            if (!inArea) {
+                log.info("前置目标不在旧版自定义矩形区域内 ({},{})", originalBox.x, originalBox.y);
+                return null;
+            }
+            return "";
+        }
+
+        String areaName = matchShapeArea(
+                originalBox.x, originalBox.y, originalBox.width, originalBox.height,
+                videoUtil.getShapeData(), false);
+        if (areaName == null) {
+            log.info("前置目标不在自定义区域内 ({},{})", originalBox.x, originalBox.y);
+            return null;
+        }
+        return areaName;
+    }
+
+    /**
+     * 检测有效性验证，同时返回命中的区域名称。
+     *
+     * <p>返回值语义：</p>
+     * <ul>
+     *   <li>{@code null}  → 目标不在有效范围内，应丢弃</li>
+     *   <li>非 null 字符串 → 目标有效，值为命中的区域名称（旧版矩形或未开启区域时返回 ""）</li>
+     * </ul>
+     *
+     * <p>调用示例：</p>
+     * <pre>{@code
+     * String areaName = isValidDetection(pushInfo, netPush, retureBoxInfos, originalBox, box);
+     * if (areaName == null) continue; // 过滤掉
+     * // areaName 即为区域名，可直接用于推送
+     * }</pre>
+     *
+     * @return 区域名称（有效），或 {@code null}（无效/过滤）
+     */
+    private String isValidDetection(TabAiSubscriptionNew pushInfo, NetPush netPush,
+                                    List<retureBoxInfo> retureBoxInfos, BoundingBox originalBox,
+                                    Rect2d box) {
+        // ── 1. 前置模型区域过滤 ──
+        if (netPush.getIsFollow() == 0 && netPush.getIsBefor() == 0) {
+            boolean followFlag = retureBoxInfo.getLocalhost(
+                    retureBoxInfos, originalBox.x, originalBox.y, netPush.getFollowPosition());
             if (!followFlag) {
                 log.info("不在前置模型范围内");
-                return false;
+                return null;
             }
         }
 
-        // 自定义区域过滤
+        // ── 2. 自定义区域过滤 ──
         if (netPush.getIsBy() == 0) {
-
             TabVideoUtil videoUtil = netPush.getTabVideoUtil();
-            boolean inArea;
 
-            // 关键修复：将640×640坐标转换为原图坐标
             if (videoUtil.getBzType() == null) {
-
-                inArea = isPointInArea(box.x, box.y,
+                // 旧版单矩形（canvas 坐标 = 原图坐标）
+                boolean inArea = isPointInArea(box.x, box.y,
                         Double.parseDouble(videoUtil.getCanvasStartx()),
                         Double.parseDouble(videoUtil.getCanvasStarty()),
                         Double.parseDouble(videoUtil.getCanvasWidth()),
                         Double.parseDouble(videoUtil.getCanvasHeight()));
+                if (!inArea) {
+                    log.info("不在旧版自定义矩形区域内 ({},{})", originalBox.x, originalBox.y);
+                    return null;
+                }
+                // 旧版无名称，返回空串表示"有效但无区域名"
+                return "";
             } else {
-                // 新版多形状区域判断（需要解析shapeData并转换坐标）
-                inArea = isPointInShapeData(box.x, box.y, videoUtil.getShapeData());
-            }
-            if (!inArea) {
-                log.info("不在自定义区域内{},{}",box.x, box.y);
-                return false;
+                // ✅ 新版 shapeData：委托 matchShapeArea，同时拿到区域名称
+                String areaName = matchShapeArea(
+                        originalBox.x, originalBox.y, originalBox.width, originalBox.height,
+                        videoUtil.getShapeData(), false);
+                if (areaName == null) {
+                    log.info("不在自定义区域内 ({},{})", originalBox.x, originalBox.y);
+                    return null;
+                }
+                return areaName; // 区域名（可能含用户自定义名称）
             }
         }
 
-        return true;
+        // 未开启区域过滤，返回空串表示"有效但无区域约束"
+        return "";
     }
 
     /**
@@ -1949,7 +2308,7 @@ public class identifyTypeNewOnnx {
      * @param originalSize 原图对应维度的尺寸
      * @return 原图坐标系下的坐标
      */
-    private double scaleCoordinate(double coord, int modelSize, double originalSize) {
+    public static double scaleCoordinate(double coord, int modelSize, double originalSize) {
         return coord * (originalSize / modelSize);
     }
     public static boolean isPointInArea(double px, double py, double x, double y, double width, double height) {
@@ -1960,107 +2319,166 @@ public class identifyTypeNewOnnx {
         return px >= x && px <= x2 && py >= y && py <= y2;
     }
 
+    // ========== 区域匹配核心方法（唯一实现，其他方法委托此处）==========
 
-    private boolean isPointInShapeData(double x640, double y640, String shapeDataJson) {
+    /**
+     * 【核心】判断目标框与 shapeData 中哪个区域匹配，并返回该区域的名称。
+     *
+     * <p>这是整个区域判断的唯一底层实现，所有其他区域相关方法均委托此方法。</p>
+     *
+     * <ul>
+     *   <li>命中任意区域 → 返回该区域的 {@code name} 字段（若为空则回退为"矩形N"/"多边形N"）</li>
+     *   <li>未命中任何区域 → 返回 {@code null}</li>
+     * </ul>
+     *
+     * <p><b>判断策略：</b></p>
+     * <ul>
+     *   <li>矩形（rect）严格模式：目标框四角均在区域内</li>
+     *   <li>矩形（rect）宽松模式：目标框与区域交叉面积 ≥ 目标框面积的 5%</li>
+     *   <li>多边形（polygon）严格模式：目标框四角均在多边形内</li>
+     *   <li>多边形（polygon）宽松模式：11×11 采样点中 ≥ 5% 在多边形内</li>
+     * </ul>
+     *
+     * @param x1           目标框左上角 X（原图坐标）
+     * @param y1           目标框左上角 Y（原图坐标）
+     * @param w            目标框宽度
+     * @param h            目标框高度
+     * @param shapeDataJson shapeData JSON 字符串
+     * @param strictMode   true=严格（完全包含），false=宽松（5%重叠即可）
+     * @return 命中区域的名称（空名称时返回默认编号名），未命中返回 {@code null}
+     */
+    public static String matchShapeArea(
+            double x1, double y1, double w, double h,
+            String shapeDataJson, boolean strictMode) {
+
+        if (StringUtils.isEmpty(shapeDataJson)) {
+            log.warn("【matchShapeArea】shapeDataJson 为空");
+            return null;
+        }
         try {
             JSONObject shapeData = JSON.parseObject(shapeDataJson);
-
-            // 获取原图尺寸
-            int imageWidth = shapeData.getIntValue("imageWidth");
-            int imageHeight = shapeData.getIntValue("imageHeight");
-
-            // ✅ 坐标转换：640×640 → 原图尺寸
-            double xOriginal = scaleCoordinate(x640, 640, imageWidth);
-            double yOriginal = scaleCoordinate(y640, 640, imageHeight);
-            log.info("绘制区域{}",shapeDataJson);
-            log.info("坐标转换: 640系({}, {}) → 原图系({}, {}) [原图尺寸: {}×{}]",
-                    x640, y640, xOriginal, yOriginal, imageWidth, imageHeight);
-
-            // 获取所有形状
-            JSONArray shapes = shapeData.getJSONArray("shapes");
+            JSONArray  shapes    = shapeData.getJSONArray("shapes");
             if (shapes == null || shapes.isEmpty()) {
-                log.warn("shapeData 中没有定义任何形状");
-                return false;
+                log.warn("【matchShapeArea】shapeData 中没有定义任何形状");
+                return null;
             }
 
-            // 遍历所有形状，只要在任意一个形状内就返回true
+            double x2         = x1 + w;
+            double y2         = y1 + h;
+            double objectArea = w * h;
+
+            log.info("【区域判断】目标框[{},{},{},{}] objectArea={} mode={}",
+                    (int)x1, (int)y1, (int)x2, (int)y2, (int)objectArea,
+                    strictMode ? "strict" : "loose");
+
             for (int i = 0; i < shapes.size(); i++) {
-                JSONObject shape = shapes.getJSONObject(i);
-                String type = shape.getString("type");
+                JSONObject shape       = shapes.getJSONObject(i);
+                String     type        = shape.getString("type");
                 JSONObject coordinates = shape.getJSONObject("coordinates");
 
-                boolean inThisShape = false;
+                // ✅ 读取区域名称，空时回退为默认编号
+                String rawName  = shape.getString("name");
+                String areaName = (rawName != null && !rawName.trim().isEmpty())
+                        ? rawName.trim()
+                        : ("rect".equals(type) ? "矩形" : "多边形") + (i + 1);
+
+                boolean matched = false;
 
                 if ("rect".equals(type)) {
-                    // 矩形判断
-                    double startX = coordinates.getDoubleValue("startX");
-                    double startY = coordinates.getDoubleValue("startY");
-                    double endX = coordinates.getDoubleValue("endX");
-                    double endY = coordinates.getDoubleValue("endY");
+                    double areaMinX = Math.min(coordinates.getDoubleValue("startX"),
+                            coordinates.getDoubleValue("endX"));
+                    double areaMaxX = Math.max(coordinates.getDoubleValue("startX"),
+                            coordinates.getDoubleValue("endX"));
+                    double areaMinY = Math.min(coordinates.getDoubleValue("startY"),
+                            coordinates.getDoubleValue("endY"));
+                    double areaMaxY = Math.max(coordinates.getDoubleValue("startY"),
+                            coordinates.getDoubleValue("endY"));
 
-                    inThisShape = xOriginal >= startX && xOriginal <= endX
-                            && yOriginal >= startY && yOriginal <= endY;
-
-                    log.info("矩形{} 判断: ({}, {}) in [{}, {}] - [{}, {}] = {}",
-                            i + 1, xOriginal, yOriginal, startX, startY, endX, endY, inThisShape);
+                    if (strictMode) {
+                        matched = x1 >= areaMinX && x2 <= areaMaxX
+                                && y1 >= areaMinY && y2 <= areaMaxY;
+                        log.info("矩形[{}]「{}」严格判断: 目标[{},{},{},{}] 区域[{},{},{},{}] → {}",
+                                i+1, areaName,
+                                (int)x1,(int)y1,(int)x2,(int)y2,
+                                (int)areaMinX,(int)areaMinY,(int)areaMaxX,(int)areaMaxY,
+                                matched ? "✅ 命中" : "❌ 未命中");
+                    } else {
+                        double iw = Math.min(x2, areaMaxX) - Math.max(x1, areaMinX);
+                        double ih = Math.min(y2, areaMaxY) - Math.max(y1, areaMinY);
+                        if (iw > 0 && ih > 0 && objectArea > 0) {
+                            double ratio = (iw * ih) / objectArea;
+                            matched = ratio >= 0.05;
+                            log.info("矩形[{}]「{}」宽松判断: 目标[{},{},{},{}] 区域[{},{},{},{}] 占比={}% → {}",
+                                    i+1, areaName,
+                                    (int)x1,(int)y1,(int)x2,(int)y2,
+                                    (int)areaMinX,(int)areaMinY,(int)areaMaxX,(int)areaMaxY,
+                                    String.format("%.1f", ratio * 100),
+                                    matched ? "✅ 命中" : "❌ 未命中");
+                        } else {
+                            log.info("矩形[{}]「{}」宽松判断: 无交集 → ❌ 未命中", i+1, areaName);
+                        }
+                    }
 
                 } else if ("polygon".equals(type)) {
-                    // 多边形判断（使用射线法）
                     JSONArray points = coordinates.getJSONArray("points");
-                    inThisShape = isPointInPolygon(xOriginal, yOriginal, points);
+                    if (points == null || points.size() < 3) continue;
 
-                    log.info("多边形{} 判断: ({}, {}) 顶点数={} 结果={}",
-                            i + 1, xOriginal, yOriginal, points.size(), inThisShape);
+                    if (strictMode) {
+                        matched = isPointInPolygon(x1, y1, points)
+                                && isPointInPolygon(x2, y1, points)
+                                && isPointInPolygon(x1, y2, points)
+                                && isPointInPolygon(x2, y2, points);
+                        log.info("多边形[{}]「{}」严格判断: → {}", i+1, areaName,
+                                matched ? "✅ 命中" : "❌ 未命中");
+                    } else {
+                        int sampleN = 10, insideCount = 0, totalCount = 0;
+                        double stepX = w / sampleN, stepY = h / sampleN;
+                        for (int si = 0; si <= sampleN; si++) {
+                            for (int sj = 0; sj <= sampleN; sj++) {
+                                totalCount++;
+                                if (isPointInPolygon(x1 + si * stepX, y1 + sj * stepY, points)) {
+                                    insideCount++;
+                                }
+                            }
+                        }
+                        double ratio = (double) insideCount / totalCount;
+                        matched = ratio >= 0.05;
+                        log.info("多边形[{}]「{}」宽松判断: 采样={}/{} 占比={}% → {}",
+                                i+1, areaName, insideCount, totalCount,
+                                String.format("%.1f", ratio * 100),
+                                matched ? "✅ 命中" : "❌ 未命中");
+                    }
                 }
 
-                if (inThisShape) {
-                    log.info(" 点在区域内 - {}{}内", type.equals("rect") ? "矩形" : "多边形", i + 1);
-                    return true;
+                if (matched) {
+                    log.info("✅ 目标框命中区域[{}]「{}」", i+1, areaName);
+                    return areaName;
                 }
             }
 
-            log.info(" 点不在任何定义的区域内");
-            return false;
+            log.info("❌ 目标框不在任何区域内");
+            return null;
 
         } catch (Exception e) {
-            log.error("解析 shapeData 失败", e);
-            return false;
+            log.error("【matchShapeArea】解析失败", e);
+            return null;
         }
     }
 
-    public static boolean isPointInArea(double px, double py, String json) {
-        JSONObject object = JSONObject.parseObject(json);
-        JSONArray jsonArray = object.getJSONArray("shapes");
-
-        // 遍历所有形状，只要点在任意一个形状内就返回 true
-        for (int i = 0; i < jsonArray.size(); i++) {
-            JSONObject shape = jsonArray.getJSONObject(i);
-            String type = shape.getString("type");
-            JSONObject coordinates = shape.getJSONObject("coordinates");
-
-            if ("rect".equals(type)) {
-                // 矩形判定
-                double startX = coordinates.getDoubleValue("startX");
-                double startY = coordinates.getDoubleValue("startY");
-                double endX = coordinates.getDoubleValue("endX");
-                double endY = coordinates.getDoubleValue("endY");
-
-                // 判断点是否在矩形内
-                if (px >= startX && px <= endX && py >= startY && py <= endY) {
-                    return true;
-                }
-
-            } else if ("polygon".equals(type)) {
-                // 多边形判定 - 使用射线法
-                JSONArray points = coordinates.getJSONArray("points");
-                if (isPointInPolygon(px, py, points)) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
+    /**
+     * 判断物体框是否在自定义区域内（原图坐标系版本）。
+     * <p>委托 {@link #matchShapeArea} 实现，保持对外签名兼容。</p>
+     */
+    public static boolean isBoundingBoxInShapeData(
+            double x1_original, double y1_original,
+            double width_original, double height_original,
+            String shapeDataJson, boolean strictMode) {
+        return matchShapeArea(x1_original, y1_original, width_original, height_original,
+                shapeDataJson, strictMode) != null;
     }
+
+
+
     /**
      * 射线法判断点是否在多边形内
      * 原理：从点向右发射一条射线，计算与多边形边界的交点数
@@ -2110,14 +2528,156 @@ public class identifyTypeNewOnnx {
 
     /**
      * 绘制检测框
+     * <p>标签格式由调用方控制，例如：人-0.92-0001</p>
+     *
+     * @param image  原始图像
+     * @param box    边界框
+     * @param label  完整显示标签（含置信度和编号，调用方拼好）
+     * @param color  框和文字颜色
+     * @return 绘制后的图像
      */
-    private Mat drawDetection(Mat image, BoundingBox box, String label, float confidence, Scalar color) {
+    private Mat drawDetection(Mat image, BoundingBox box, String label, Scalar color) {
         Imgproc.rectangle(image,
                 new Point(box.x, box.y),
                 new Point(box.x + box.width, box.y + box.height),
                 color, 2);
+        return AIModelYolo3.addChineseText(image, label, new Point(box.x, box.y - 5), color);
+    }
 
-       return  AIModelYolo3.addChineseText(image, label + confidence, new Point(box.x, box.y), color);
+    /**
+     * 兼容旧调用：保留 confidence 参数但由本方法统一格式化拼入标签
+     * @deprecated 请直接使用 {@link #drawDetection(Mat, BoundingBox, String, Scalar)}
+     */
+    @Deprecated
+    private Mat drawDetection(Mat image, BoundingBox box, String label, float confidence, Scalar color) {
+        String fullLabel = label + String.format("%.2f", confidence);
+        return drawDetection(image, box, fullLabel, color);
+    }
+
+    /**
+     * 将自定义检测区域绘制到图像上（青色边框 + 编号标注）
+     * <p>支持旧版矩形（canvasStartx/y/width/height）和新版 shapeData（rect / polygon）</p>
+     *
+     * @param image   原始图像（将直接在上面绘制）
+     * @param netPush 包含区域配置的推送对象
+     * @return 绘制后的图像（与传入为同一对象）
+     */
+    private Mat drawRegionsOnImage(Mat image, NetPush netPush) {
+        if (netPush.getIsBy() != 0) {
+            // 自定义区域过滤未开启，不绘制
+            return image;
+        }
+        TabVideoUtil videoUtil = netPush.getTabVideoUtil();
+        if (videoUtil == null) {
+            return image;
+        }
+
+        // 青色：在任何背景下都清晰可辨
+        Scalar regionColor  = new Scalar(0, 255, 255);
+        Scalar labelColor   = new Scalar(0, 200, 200);
+        int    thickness    = 2;
+
+        try {
+            if (videoUtil.getBzType() == null) {
+                // ── 旧版矩形区域（canvas 坐标直接是原图坐标系）──
+                double x = Double.parseDouble(videoUtil.getCanvasStartx());
+                double y = Double.parseDouble(videoUtil.getCanvasStarty());
+                double w = Double.parseDouble(videoUtil.getCanvasWidth());
+                double h = Double.parseDouble(videoUtil.getCanvasHeight());
+
+                Imgproc.rectangle(image,
+                        new Point(x, y),
+                        new Point(x + w, y + h),
+                        regionColor, thickness);
+                image = AIModelYolo3.addChineseText(image, "检测区域",
+                        new Point(x, Math.max(y - 8, 16)), labelColor);
+
+                log.info("【绘制区域】矩形区域 x={} y={} w={} h={}", (int)x, (int)y, (int)w, (int)h);
+
+            } else {
+                // ── 新版 shapeData：矩形 / 多边形，坐标映射到当前图像尺寸 ──
+                String shapeDataJson = videoUtil.getShapeData();
+                if (StringUtils.isEmpty(shapeDataJson)) {
+                    log.warn("【绘制区域】shapeData 为空，跳过绘制");
+                    return image;
+                }
+
+                JSONObject shapeData = JSON.parseObject(shapeDataJson);
+                int  srcW   = shapeData.getIntValue("imageWidth");
+                int  srcH   = shapeData.getIntValue("imageHeight");
+                int  dstW   = image.cols();
+                int  dstH   = image.rows();
+                double scaleX = (srcW > 0) ? (double) dstW / srcW : 1.0;
+                double scaleY = (srcH > 0) ? (double) dstH / srcH : 1.0;
+
+                JSONArray shapes = shapeData.getJSONArray("shapes");
+                if (shapes == null || shapes.isEmpty()) {
+                    log.warn("【绘制区域】shapeData 中没有形状定义");
+                    return image;
+                }
+
+                for (int i = 0; i < shapes.size(); i++) {
+                    JSONObject shape     = shapes.getJSONObject(i);
+                    String type          = shape.getString("type");
+                    JSONObject coords    = shape.getJSONObject("coordinates");
+                    // ✅ 优先使用用户自定义名称，无名称时回退编号
+                    String rawName   = shape.getString("name");
+                    String areaLabel = (rawName != null && !rawName.trim().isEmpty())
+                            ? rawName.trim() : "区域" + (i + 1);
+
+                    if ("rect".equals(type)) {
+                        double sx = coords.getDoubleValue("startX") * scaleX;
+                        double sy = coords.getDoubleValue("startY") * scaleY;
+                        double ex = coords.getDoubleValue("endX")   * scaleX;
+                        double ey = coords.getDoubleValue("endY")   * scaleY;
+                        double minX = Math.min(sx, ex), maxX = Math.max(sx, ex);
+                        double minY = Math.min(sy, ey), maxY = Math.max(sy, ey);
+
+                        Imgproc.rectangle(image,
+                                new Point(minX, minY),
+                                new Point(maxX, maxY),
+                                regionColor, thickness);
+                        image = AIModelYolo3.addChineseText(image, areaLabel,
+                                new Point(minX, Math.max(minY - 8, 16)), labelColor);
+
+                        log.info("【绘制区域】矩形{} 原图[{},{} -> {},{}] 映射[{},{} -> {},{}]",
+                                i + 1,
+                                (int)coords.getDoubleValue("startX"), (int)coords.getDoubleValue("startY"),
+                                (int)coords.getDoubleValue("endX"),   (int)coords.getDoubleValue("endY"),
+                                (int)minX, (int)minY, (int)maxX, (int)maxY);
+
+                    } else if ("polygon".equals(type)) {
+                        JSONArray points = coords.getJSONArray("points");
+                        if (points == null || points.size() < 3) continue;
+
+                        List<Point> pts = new ArrayList<>();
+                        StringBuilder ptLog = new StringBuilder();
+                        for (int j = 0; j < points.size(); j++) {
+                            JSONObject pt = points.getJSONObject(j);
+                            double px = pt.getDoubleValue("x") * scaleX;
+                            double py = pt.getDoubleValue("y") * scaleY;
+                            pts.add(new Point(px, py));
+                            ptLog.append(String.format("(%d,%d)", (int)px, (int)py));
+                            if (j < points.size() - 1) ptLog.append("->");
+                        }
+
+                        MatOfPoint matPts = new MatOfPoint();
+                        matPts.fromList(pts);
+                        Imgproc.polylines(image,
+                                java.util.Arrays.asList(matPts),
+                                true, regionColor, thickness);
+                        image = AIModelYolo3.addChineseText(image, areaLabel,
+                                new Point(pts.get(0).x, Math.max(pts.get(0).y - 8, 16)), labelColor);
+
+                        log.info("【绘制区域】多边形{} 顶点: {}", i + 1, ptLog);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("【绘制区域】绘制失败", e);
+        }
+
+        return image;
     }
 
     /**
@@ -2218,20 +2778,348 @@ public class identifyTypeNewOnnx {
             // 将缩放后的图像复制到画布中心
             Rect roi = new Rect(dx, dy, newWidth, newHeight);
             Mat roiMat = new Mat(letterboxed, roi);
-            try{
+            try {
                 resized.copyTo(roiMat);
                 return letterboxed;
-            }finally {
+            } finally {
                 //不单独释放
             }
 
-        }finally {
-            if(resized!=null){
+        } finally {
+            if (resized != null) {
                 resized.release();
             }
         }
+    }
 
 
+
+    // ========================================
+    // 目标跟踪核心方法
+    // ========================================
+
+    /**
+     * 处理目标跟踪逻辑
+     * <p>工作流程：</p>
+     * <ol>
+     *   <li>从Redis获取历史目标列表</li>
+     *   <li>清理超时目标（超过TARGET_TIMEOUT_MS未检测到）</li>
+     *   <li>将当前帧目标与历史目标进行匹配</li>
+     *   <li>识别新进入的目标</li>
+     *   <li>更新Redis中的目标列表</li>
+     * </ol>
+     *
+     * @param cameraId 摄像头ID
+     * @param currentTargets 当前帧检测到的目标列表
+     * @param redisTemplate Redis操作模板
+     * @return 跟踪结果（是否有新目标、新目标数量等）
+     */
+    private TargetTrackingResult processTargetTracking(String cameraId,
+                                                       List<DetectedTarget> currentTargets,
+                                                       RedisTemplate redisTemplate) {
+        String redisKey = cameraId + REDIS_KEY_SUFFIX_TARGETS;
+        long currentTime = System.currentTimeMillis();
+
+        // 1. 获取历史目标列表
+        List<TrackedTarget> historicalTargets = getHistoricalTargets(redisKey, redisTemplate);
+
+        // 2. 清理超时目标（超过X秒未检测到的目标）
+        historicalTargets.removeIf(target ->
+                (currentTime - target.getLastSeenTime()) > TARGET_TIMEOUT_MS
+        );
+
+        log.info("【目标跟踪】历史目标数: {} (清理超时后)", historicalTargets.size());
+
+        // 3. 匹配当前目标与历史目标
+        List<TrackedTarget> updatedTargets = new ArrayList<>();
+        List<DetectedTarget> newTargets = new ArrayList<>();
+        // ⭐ 用 IdentityHashMap 保证以对象引用为 key（DetectedTarget 未重写 equals）
+        Map<DetectedTarget, Integer> targetNumMap = new java.util.IdentityHashMap<>();
+
+        for (DetectedTarget currentTarget : currentTargets) {
+            // 尝试找到匹配的历史目标
+            TrackedTarget matchedTarget = findMatchingTarget(currentTarget, historicalTargets);
+
+            if (matchedTarget != null) {
+                // 找到匹配目标，更新其信息
+                updateTrackedTarget(matchedTarget, currentTarget, currentTime);
+                updatedTargets.add(matchedTarget);
+                historicalTargets.remove(matchedTarget); // 移除已匹配的目标
+                targetNumMap.put(currentTarget, matchedTarget.getTrackNum()); // 沿用旧编号
+
+                log.debug("【目标匹配】目标ID: {} 编号: {} 更新位置: ({}, {})",
+                        matchedTarget.getTargetId(),
+                        matchedTarget.getTrackNum(),
+                        currentTarget.getCenterX(),
+                        currentTarget.getCenterY());
+            } else {
+                // 未找到匹配目标，认为是新目标
+                TrackedTarget newTrackedTarget = createNewTrackedTarget(currentTarget, currentTime);
+                updatedTargets.add(newTrackedTarget);
+                newTargets.add(currentTarget);
+                targetNumMap.put(currentTarget, newTrackedTarget.getTrackNum()); // 分配新编号
+
+                log.info("【新目标进入】目标ID: {}, 编号: {}, 类别: {}, 位置: ({}, {})",
+                        newTrackedTarget.getTargetId(),
+                        newTrackedTarget.getTrackNum(),
+                        currentTarget.getClassName(),
+                        currentTarget.getCenterX(),
+                        currentTarget.getCenterY());
+            }
+        }
+
+        // 4. 保存更新后的目标列表到Redis
+        saveTargetsToRedis(redisKey, updatedTargets, redisTemplate);
+
+        // 5. 返回跟踪结果
+        TargetTrackingResult result = new TargetTrackingResult();
+        result.setHasNewTargets(!newTargets.isEmpty());
+        result.setNewTargetCount(newTargets.size());
+        result.setTotalTargetCount(updatedTargets.size());
+        result.setNewTargets(newTargets);
+        result.setTargetNumMap(targetNumMap);
+
+        return result;
+    }
+
+    /**
+     * 从Redis获取历史目标列表
+     */
+    private List<TrackedTarget> getHistoricalTargets(String redisKey, RedisTemplate redisTemplate) {
+        try {
+            Object value = redisTemplate.opsForValue().get(redisKey);
+            if (value == null) {
+                return new ArrayList<>();
+            }
+
+            String json = value.toString();
+            JSONArray jsonArray = JSONArray.parseArray(json);
+
+            List<TrackedTarget> targets = new ArrayList<>();
+            for (int i = 0; i < jsonArray.size(); i++) {
+                JSONObject obj = jsonArray.getJSONObject(i);
+                TrackedTarget target = new TrackedTarget();
+                target.setTargetId(obj.getString("targetId"));
+                target.setTrackNum(obj.getIntValue("trackNum"));
+                target.setCenterX(obj.getDoubleValue("centerX"));
+                target.setCenterY(obj.getDoubleValue("centerY"));
+                target.setClassName(obj.getString("className"));
+                target.setFirstDetectedTime(obj.getLongValue("firstDetectedTime"));
+                target.setLastSeenTime(obj.getLongValue("lastSeenTime"));
+                target.setConfidence(obj.getFloatValue("confidence"));
+                targets.add(target);
+            }
+
+            return targets;
+        } catch (Exception e) {
+            log.error("获取历史目标失败", e);
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * 保存目标列表到Redis
+     * <p>过期时间设置为超时时间的3倍，确保数据不会过早丢失</p>
+     */
+    private void saveTargetsToRedis(String redisKey, List<TrackedTarget> targets,
+                                    RedisTemplate redisTemplate) {
+        try {
+            JSONArray jsonArray = new JSONArray();
+            for (TrackedTarget target : targets) {
+                JSONObject obj = new JSONObject();
+                obj.put("targetId", target.getTargetId());
+                obj.put("trackNum", target.getTrackNum());
+                obj.put("centerX", target.getCenterX());
+                obj.put("centerY", target.getCenterY());
+                obj.put("className", target.getClassName());
+                obj.put("firstDetectedTime", target.getFirstDetectedTime());
+                obj.put("lastSeenTime", target.getLastSeenTime());
+                obj.put("confidence", target.getConfidence());
+                jsonArray.add(obj);
+            }
+
+            String json = jsonArray.toJSONString();
+            // 设置过期时间为超时时间的3倍
+            redisTemplate.opsForValue().set(redisKey, json,
+                    TARGET_TIMEOUT_MS * 3, TimeUnit.MILLISECONDS);
+
+            log.debug("【保存目标】保存{}个目标到Redis", targets.size());
+        } catch (Exception e) {
+            log.error("保存目标到Redis失败", e);
+        }
+    }
+
+    /**
+     * 查找匹配的历史目标
+     * <p>匹配规则：</p>
+     * <ul>
+     *   <li>类别必须相同</li>
+     *   <li>中心点距离小于TARGET_MATCH_DISTANCE_THRESHOLD</li>
+     *   <li>选择距离最近的目标作为匹配结果</li>
+     * </ul>
+     */
+    private TrackedTarget findMatchingTarget(DetectedTarget currentTarget,
+                                             List<TrackedTarget> historicalTargets) {
+        TrackedTarget bestMatch = null;
+        double minDistance = Double.MAX_VALUE;
+
+        for (TrackedTarget historical : historicalTargets) {
+            // 只匹配相同类别的目标
+            if (!currentTarget.getClassName().equals(historical.getClassName())) {
+                continue;
+            }
+
+            // 计算欧氏距离
+            double distance = calculateDistance(
+                    currentTarget.getCenterX(), currentTarget.getCenterY(),
+                    historical.getCenterX(), historical.getCenterY()
+            );
+
+            // 找到距离最小且小于阈值的目标
+            if (distance < TARGET_MATCH_DISTANCE_THRESHOLD && distance < minDistance) {
+                minDistance = distance;
+                bestMatch = historical;
+            }
+        }
+
+        if (bestMatch != null) {
+            log.debug("【目标匹配】距离: {}", minDistance);
+        }
+
+        return bestMatch;
+    }
+
+    /**
+     * 计算两点之间的欧氏距离
+     * <p>公式：distance = √[(x1-x2)² + (y1-y2)²]</p>
+     */
+    private double calculateDistance(double x1, double y1, double x2, double y2) {
+        double dx = x1 - x2;
+        double dy = y1 - y2;
+        return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    /**
+     * 更新已跟踪目标的信息
+     */
+    private void updateTrackedTarget(TrackedTarget trackedTarget, DetectedTarget currentTarget,
+                                     long currentTime) {
+        trackedTarget.setCenterX(currentTarget.getCenterX());
+        trackedTarget.setCenterY(currentTarget.getCenterY());
+        trackedTarget.setLastSeenTime(currentTime);
+        trackedTarget.setConfidence(currentTarget.getConfidence());
+    }
+
+    /**
+     * 创建新的跟踪目标
+     */
+    private TrackedTarget createNewTrackedTarget(DetectedTarget currentTarget, long currentTime) {
+        TrackedTarget newTarget = new TrackedTarget();
+        newTarget.setTargetId(generateTargetId());
+        // ⭐ 分配4位显示编号（循环 1-9999）
+        newTarget.setTrackNum(TRACK_COUNTER.incrementAndGet() % 10000);
+        newTarget.setCenterX(currentTarget.getCenterX());
+        newTarget.setCenterY(currentTarget.getCenterY());
+        newTarget.setClassName(currentTarget.getClassName());
+        newTarget.setFirstDetectedTime(currentTime);
+        newTarget.setLastSeenTime(currentTime);
+        newTarget.setConfidence(currentTarget.getConfidence());
+        return newTarget;
+    }
+
+    /**
+     * 生成唯一的目标ID
+     * <p>格式：target_{timestamp}_{uuid前8位}</p>
+     */
+    private String generateTargetId() {
+        return "target_" + System.currentTimeMillis() + "_" +
+                UUID.randomUUID().toString().substring(0, 8);
+    }
+
+    // ========================================
+    // 目标跟踪相关内部类
+    // ========================================
+
+    /**
+     * 当前帧检测到的目标
+     */
+    private static class DetectedTarget {
+        private double centerX;              // 中心点X坐标
+        private double centerY;              // 中心点Y坐标
+        private String className;            // 目标类别
+        private float confidence;            // 置信度
+        private BoundingBox boundingBox;     // 边界框
+        private long detectedTime;           // 检测时间
+
+        // Getters and Setters
+        public double getCenterX() { return centerX; }
+        public void setCenterX(double centerX) { this.centerX = centerX; }
+        public double getCenterY() { return centerY; }
+        public void setCenterY(double centerY) { this.centerY = centerY; }
+        public String getClassName() { return className; }
+        public void setClassName(String className) { this.className = className; }
+        public float getConfidence() { return confidence; }
+        public void setConfidence(float confidence) { this.confidence = confidence; }
+        public BoundingBox getBoundingBox() { return boundingBox; }
+        public void setBoundingBox(BoundingBox boundingBox) { this.boundingBox = boundingBox; }
+        public long getDetectedTime() { return detectedTime; }
+        public void setDetectedTime(long detectedTime) { this.detectedTime = detectedTime; }
+    }
+
+    /**
+     * 历史跟踪目标
+     */
+    private static class TrackedTarget {
+        private String targetId;          // 目标唯一ID
+        private int trackNum;              // 显示编号（4位，用于画面标注）
+        private double centerX;            // 中心点X坐标
+        private double centerY;            // 中心点Y坐标
+        private String className;          // 目标类别
+        private long firstDetectedTime;    // 首次检测时间
+        private long lastSeenTime;         // 最后一次检测时间
+        private float confidence;          // 置信度
+
+        // Getters and Setters
+        public String getTargetId() { return targetId; }
+        public void setTargetId(String targetId) { this.targetId = targetId; }
+        public int getTrackNum() { return trackNum; }
+        public void setTrackNum(int trackNum) { this.trackNum = trackNum; }
+        public double getCenterX() { return centerX; }
+        public void setCenterX(double centerX) { this.centerX = centerX; }
+        public double getCenterY() { return centerY; }
+        public void setCenterY(double centerY) { this.centerY = centerY; }
+        public String getClassName() { return className; }
+        public void setClassName(String className) { this.className = className; }
+        public long getFirstDetectedTime() { return firstDetectedTime; }
+        public void setFirstDetectedTime(long firstDetectedTime) { this.firstDetectedTime = firstDetectedTime; }
+        public long getLastSeenTime() { return lastSeenTime; }
+        public void setLastSeenTime(long lastSeenTime) { this.lastSeenTime = lastSeenTime; }
+        public float getConfidence() { return confidence; }
+        public void setConfidence(float confidence) { this.confidence = confidence; }
+    }
+
+    /**
+     * 目标跟踪结果
+     */
+    private static class TargetTrackingResult {
+        private boolean hasNewTargets;              // 是否有新目标
+        private int newTargetCount;                 // 新目标数量
+        private int totalTargetCount;               // 总目标数量
+        private List<DetectedTarget> newTargets;    // 新目标列表
+        /** 当前帧每个 DetectedTarget 对应的显示编号（4位整数） */
+        private Map<DetectedTarget, Integer> targetNumMap = new java.util.IdentityHashMap<>();
+
+        // Getters and Setters
+        public boolean hasNewTargets() { return hasNewTargets; }
+        public void setHasNewTargets(boolean hasNewTargets) { this.hasNewTargets = hasNewTargets; }
+        public int getNewTargetCount() { return newTargetCount; }
+        public void setNewTargetCount(int newTargetCount) { this.newTargetCount = newTargetCount; }
+        public int getTotalTargetCount() { return totalTargetCount; }
+        public void setTotalTargetCount(int totalTargetCount) { this.totalTargetCount = totalTargetCount; }
+        public List<DetectedTarget> getNewTargets() { return newTargets; }
+        public void setNewTargets(List<DetectedTarget> newTargets) { this.newTargets = newTargets; }
+        public Map<DetectedTarget, Integer> getTargetNumMap() { return targetNumMap; }
+        public void setTargetNumMap(Map<DetectedTarget, Integer> targetNumMap) { this.targetNumMap = targetNumMap; }
     }
 
 }

@@ -143,6 +143,25 @@ public class TabVideoUtilController extends JeecgController<TabVideoUtil, ITabVi
 		 return Result.error("未找到");
 
 	 }
+
+
+
+	 @AutoLog(value = "获取视频原图")
+	 @ApiOperation(value="获取视频原图", notes="获取视频原图")
+	 //@RequiresPermissions("org.jeecg.modules.demo:tab_ai_subscription_new:edit")
+	 @RequestMapping(value = "/getVideoVideoSetting", method = {RequestMethod.GET,RequestMethod.POST})
+	 public Result<TabVideoUtil> getVideoVideoSetting(@RequestParam(name="id",required=true) String id) {
+
+		 QueryWrapper<TabVideoUtil> queryWrapper=new QueryWrapper<>();
+		 queryWrapper.eq("video_id",id);
+		 TabVideoUtil tabVideoUtil1= tabVideoUtilService.getOne(queryWrapper);
+		 if(tabVideoUtil1!=null){
+
+			 return Result.ok(tabVideoUtil1);
+		 }
+		 return Result.error("未找到");
+
+	 }
 	 /**
 	  *  第一次新增后续修改
 	  *

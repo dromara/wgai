@@ -31,6 +31,7 @@ import org.jeecg.modules.tab.AIModel.V5Util.VideoReadInfoV5Util;
 import org.jeecg.modules.tab.AIModel.V5Util.VideoReadV5Util;
 import org.jeecg.modules.tab.AIModel.V5Util.VideoReadtestV5Util;
 import org.jeecg.modules.tab.AIModel.onnx.VideoReadOnnx;
+import org.jeecg.modules.tab.AIModel.onnx.VideoReadOnnxPose;
 import org.jeecg.modules.tab.AIModel.pose.ActionResult;
 import org.jeecg.modules.tab.AIModel.pose.FallDetectionResult;
 import org.jeecg.modules.tab.entity.TabAiModel;
@@ -4549,6 +4550,29 @@ public class AIModelYolo3 {
         ExecutorService executor = Executors.newCachedThreadPool();
         log.info("开始识别onnx");
         executor.submit(new VideoReadOnnx(netpush,tabAudioDevice, tabAiModelBund, videoUrl, redisTemplate, userId, uploadpath + File.separator + names,  webSocket));
+
+        return "";
+    }
+
+    /***
+     * 姿态
+     * @param netpush
+     * @param tabAudioDevice
+     * @param tabAiModelBund
+     * @param userId
+     * @param names
+     * @param videoUrl
+     * @param uploadpath
+     * @param webSocket
+     * @param redisUtil
+     * @param redisTemplate
+     * @return
+     * @throws Exception
+     */
+    public String SendVideoLocalhostYoloV11ThreadPose(NetPush netpush,TabAudioDevice tabAudioDevice, TabAiModelBund tabAiModelBund, String userId, String names, String videoUrl, String uploadpath, WebSocket webSocket, RedisUtil redisUtil, RedisTemplate redisTemplate) throws Exception {
+        ExecutorService executor = Executors.newCachedThreadPool();
+        log.info("开始识别onnx");
+        executor.submit(new VideoReadOnnxPose(netpush,tabAudioDevice, tabAiModelBund, videoUrl, redisTemplate, userId, uploadpath + File.separator + names,  webSocket));
 
         return "";
     }

@@ -36,7 +36,7 @@ public class WebSocket {
     private static ConcurrentHashMap<String, Session> sessionPool = new ConcurrentHashMap<>();
 
     /**
-     * Redis触发监听名字
+     * Redis触发监听名字SpringContextUtils
      */
     public static final String REDIS_TOPIC_NAME = "socketHandler";
     @Resource
@@ -105,15 +105,18 @@ public class WebSocket {
     public void pushMessage(String message) {
         try {
             for (Map.Entry<String, Session> item : sessionPool.entrySet()) {
+                Session session = item.getValue();
                 try {
-                    synchronized(item){
-                        item.getValue().getAsyncRemote().sendText(message);
+                    if (session != null && session.isOpen()) {
+                        synchronized (session) {
+                            session.getAsyncRemote().sendText(message);
+                        }
                     }
                 } catch (Exception e) {
                     log.error(e.getMessage(), e);
                 }
             }
-            log.info("【系统 WebSocket】群发消息:" + message);
+         //   log.info("【系统 WebSocket】群发消息:" + message.substring(0,30));
         } catch (Exception e) {
             log.error(e.getMessage(), e);
         }

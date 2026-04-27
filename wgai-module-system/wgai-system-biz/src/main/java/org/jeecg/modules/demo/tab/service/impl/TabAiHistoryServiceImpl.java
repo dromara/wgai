@@ -33,6 +33,8 @@ import org.jeecg.modules.demo.tab.mapper.TabAiBaseMapper;
 import org.jeecg.modules.demo.tab.mapper.TabAiHistoryMapper;
 import org.jeecg.modules.demo.tab.service.ITabAiHistoryService;
 import org.jeecg.modules.demo.video.entity.TabAiSubscriptionNew;
+import org.jeecg.modules.demo.video.entity.TabVideoUtil;
+import org.jeecg.modules.demo.video.service.impl.TabVideoUtilServiceImpl;
 import org.jeecg.modules.demo.video.util.RedisCacheHolder;
 import org.jeecg.modules.message.websocket.WebSocket;
 import org.jeecg.modules.monitor.service.RedisService;
@@ -774,7 +776,8 @@ public class TabAiHistoryServiceImpl extends ServiceImpl<TabAiHistoryMapper, Tab
         }
         return 0;
     }
-
+    @Autowired
+    TabVideoUtilServiceImpl tabVideoUtilServiceImpl;
     @Override
     public int saveIdentifyLocalVideoThreadOnnx(TabAiModelBund tabAiModelBund, String path, String userId) {
 
@@ -810,12 +813,34 @@ public class TabAiHistoryServiceImpl extends ServiceImpl<TabAiHistoryMapper, Tab
             }
 
             NetPush beforePush=new NetPush();
+            beforePush.setId(tabAiModelBund.getId());
             OnnxModelWrapper endNet=getOnnxModel(  tabAiModel1);
             beforePush.setSession(endNet.getSession());
             beforePush.setEnv(endNet.getEnv());
             beforePush.setClaseeNames(Files.readAllLines(Paths.get(tabAiModel1.getAiNameName())));
+            TabVideoUtil tabVideoUtil = new TabVideoUtil();
+
+            if (tabAiModelBund.getIsBy() != null && tabAiModelBund.getIsBy() == 0) {
+                tabVideoUtil = tabVideoUtilServiceImpl.getOne(
+                        new QueryWrapper<TabVideoUtil>().eq("video_id", tabAiModelBund.getId())
+                );
+                log.info("开启区域入侵识别{}-{}", tabAiModelBund.getSpaceTwo(), tabVideoUtil);
+            } else {
+                log.info("未开启区域入侵识别{}", tabAiModelBund.getSpaceTwo());
+            }
+            beforePush.setIsBy(tabAiModelBund.getIsBy()!=null?tabAiModelBund.getIsBy():1);
+            beforePush.setTabVideoUtil(tabVideoUtil);
             RedisCacheHolder.put(tabAiModelBund.getId()  + "videoRead",true);
-            String savePath=modelYolo3.SendVideoLocalhostYoloV11Thread(beforePush,tabAudioDevice,tabAiModelBund,userId,tabAiModel1.getAiNameName(),tabAiModelBund.getSendUrl(),path,webSocket,redisUtil,redisTemplate);
+            String savePath="";
+            if(tabAiModel1.getModelDify()!=null&&tabAiModel1.getModelDify()==2){  //姿态识别
+                log.info("姿态识别");
+                savePath=modelYolo3.SendVideoLocalhostYoloV11ThreadPose(beforePush,tabAudioDevice,tabAiModelBund,userId,tabAiModel1.getAiNameName(),tabAiModelBund.getSendUrl(),path,webSocket,redisUtil,redisTemplate);
+
+            }else{
+                log.info("图像识别");
+                savePath=modelYolo3.SendVideoLocalhostYoloV11Thread(beforePush,tabAudioDevice,tabAiModelBund,userId,tabAiModel1.getAiNameName(),tabAiModelBund.getSendUrl(),path,webSocket,redisUtil,redisTemplate);
+
+            }
             if(savePath.equals("error")){
                 return 1;
             }

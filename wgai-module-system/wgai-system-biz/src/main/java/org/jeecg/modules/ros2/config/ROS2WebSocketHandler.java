@@ -6,6 +6,8 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import lombok.extern.slf4j.Slf4j;
+import lombok.var;
+import org.jeecg.modules.ros2.service.RobotHardwareService;
 import org.jeecg.modules.ros2.service.VelocityMonitorService;
 import org.jeecg.modules.ros2.service.WebSocketPushService;
 import org.springframework.web.socket.CloseStatus;
@@ -13,266 +15,422 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.Base64;
 import java.util.function.Consumer;
 
 /**
  * ROS2 WebSocket 消息处理器
+ *
+ * 核心职责：rosbridge → Java → 翻译 → 底盘硬件
+ *
+ * /cmd_vel 处理路径：
+ *   Nav2 发布 /cmd_vel
+ *        ↓ (rosbridge 转发)
+ *   handleCmdVel()  ← 这里解析 linear.x / angular.z
+ *        ↓
+ *   RobotHardwareService.sendVelocity()  ← 翻译为底盘协议
+ *        ↓
+ *   UDP / TCP / 串口 → 底盘硬件
  */
 @Slf4j
 public class ROS2WebSocketHandler extends TextWebSocketHandler {
 
     private final VelocityMonitorService velocityService;
-    private final WebSocketPushService pushService;
+    private final WebSocketPushService   pushService;
+    private final RobotHardwareService   hardwareService; // ← 底盘硬件控制
     private final Gson gson = new Gson();
     private final Consumer<WebSocketSession> onConnectCallback;
     private final Runnable onDisconnectCallback;
 
+    // 点云下采样：最多推送给前端的点数，避免数据量过大
+    private static final int MAX_POINTS_TO_PUSH = 3000;
+
     public ROS2WebSocketHandler(
             VelocityMonitorService velocityService,
             WebSocketPushService pushService,
+            RobotHardwareService hardwareService,
             Consumer<WebSocketSession> onConnectCallback,
             Runnable onDisconnectCallback) {
-        this.velocityService = velocityService;
-        this.pushService = pushService;
-        this.onConnectCallback = onConnectCallback;
+        this.velocityService      = velocityService;
+        this.pushService          = pushService;
+        this.hardwareService      = hardwareService;
+        this.onConnectCallback    = onConnectCallback;
         this.onDisconnectCallback = onDisconnectCallback;
     }
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-        log.info("✅ ROS2 Bridge 连接已建立，Session ID: {}", session.getId());
-
-        // 设置消息大小限制
-        session.setTextMessageSizeLimit(10 * 1024 * 1024); // 10MB
-        session.setBinaryMessageSizeLimit(10 * 1024 * 1024);
-
-        if (onConnectCallback != null) {
-            try {
-                onConnectCallback.accept(session);
-            } catch (Exception e) {
-                log.error("执行连接回调失败", e);
-            }
-        }
+        log.info("✅ ROS2 Bridge 连接建立: {}", session.getId());
+        session.setTextMessageSizeLimit(20 * 1024 * 1024);   // 20MB（点云数据量大）
+        session.setBinaryMessageSizeLimit(20 * 1024 * 1024);
+        if (onConnectCallback != null) onConnectCallback.accept(session);
     }
 
     @Override
-    protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
-        String payload = message.getPayload();
-        handleRosMessage(payload);
+    protected void handleTextMessage(WebSocketSession session, TextMessage message) {
+        handleRosMessage(message.getPayload());
     }
 
     @Override
-    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
-        log.warn("❌ ROS2 Bridge 连接已关闭，状态: code={}, reason={}",
-                status.getCode(), status.getReason());
-
-        if (onDisconnectCallback != null) {
-            try {
-                onDisconnectCallback.run();
-            } catch (Exception e) {
-                log.error("执行断开回调失败", e);
-            }
-        }
+    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+        log.warn("ROS2 Bridge 断开: code={}, reason={}", status.getCode(), status.getReason());
+        if (onDisconnectCallback != null) onDisconnectCallback.run();
     }
 
     @Override
-    public void handleTransportError(WebSocketSession session, Throwable exception) throws Exception {
-        log.error("ROS2 Bridge 传输错误", exception);
+    public void handleTransportError(WebSocketSession session, Throwable ex) {
+        log.error("ROS2 Bridge 传输错误: {}", ex.getMessage());
     }
 
-    /**
-     * 处理 ROS 消息
-     */
-    private void handleRosMessage(String message) {
+    // ======================== 消息分发 ========================
+
+    private void handleRosMessage(String raw) {
         try {
-
-            JsonObject json = gson.fromJson(message, JsonObject.class);
-
-            if (!json.has("topic")) {
-                log.warn("收到非话题消息");
-                return;
-            }
+            JsonObject json = gson.fromJson(raw, JsonObject.class);
+            if (!json.has("topic") || !json.has("msg")) return;
 
             String topic = json.get("topic").getAsString();
-            log.info("[正在接收ROS消息:topic:{}   主要数据内容:{}]",topic,json);
-            if (!json.has("msg")) {
-                log.warn("消息不包含 msg 字段");
-                return;
-            }
-
             JsonObject msg = json.getAsJsonObject("msg");
 
-            // 根据话题分发消息
+            // ================================================================
+            // 消息分发说明：
+            //
+            // 这里处理的全部是【订阅】方向的消息（ROS2 → Java → 前端显示）
+            //
+            // 【控制车子移动】不在这里！控制是【发布】方向：
+            //   前端 D-PAD → HTTP POST /ros2/robot/cmd-vel
+            //   → ROS2BridgeService.publish("/cmd_vel", twist)
+            //   → rosbridge → ROS2 /cmd_vel → 底盘驱动 → 电机
+            // ================================================================
+
             switch (topic) {
-                case "/cmd_vel":
-                    handleCmdVel(msg);
+                // fast_lio 点云 → 建图页面实时显示
+                case "/cloud_registered":
+                    handlePointCloud(msg);
                     break;
-                case "/map":
-                    handleMapUpdate(msg);
+
+                // fast_lio 里程计 → 机器人位姿（建图时用）
+                case "/Odometry":
+                    handleOdometry(msg);
                     break;
+
+                // AMCL 定位 → 机器人位姿（导航时更精确，覆盖里程计）
                 case "/amcl_pose":
                     handleRobotPose(msg);
                     break;
+
+                // ✅ Nav2 规划路径 → 前端画绿色路径线（这是路径不显示的关键！）
+                //    /plan = Nav2 的路径，/path = fast_lio 的轨迹，两者不同！
                 case "/plan":
                     handlePath(msg);
                     break;
+
+                // ✅ /cmd_vel：Nav2自主导航 或 手动遥控 都走这里
+                //    解析速度 → 转发给底盘硬件（核心桥接逻辑）
+                case "/cmd_vel":
+                    handleCmdVel(msg);
+                    break;
+
+                // 兼容旧的 SLAM Toolbox 格式
+                case "/map":
+                    handleMapUpdate(msg);
+                    break;
+
+                // fast_lio 轨迹（与 /plan 不同，是历史轨迹）
+                case "/path":
+                    handlePath(msg);
+                    break;
+
                 default:
-                    log.warn("收到未处理的话题: {}", topic);
+                    log.debug("未处理的话题: {}", topic);
+            }
+        } catch (Exception e) {
+            log.warn("处理消息失败: {}", e.getMessage());
+        }
+    }
+
+    // ======================== ✅ 新增：处理 PointCloud2 ========================
+
+    /**
+     * 解析 sensor_msgs/PointCloud2 并推送2D点云给前端
+     *
+     * rosbridge 传来的 PointCloud2 结构：
+     * {
+     *   "header": {...},
+     *   "height": 1,
+     *   "width": 点数,
+     *   "fields": [{"name":"x","offset":0,"datatype":7},{"name":"y","offset":4},...],
+     *   "is_bigendian": false,
+     *   "point_step": 16,   // 每个点占字节数（x+y+z+intensity = 4*4=16）
+     *   "row_step": ...,
+     *   "data": "base64编码的二进制点云数据",
+     *   "is_dense": true
+     * }
+     */
+    private void handlePointCloud(JsonObject msg) {
+        try {
+            // 读取基础参数
+            int pointStep = msg.has("point_step") ? msg.get("point_step").getAsInt() : 16;
+            int width     = msg.has("width")      ? msg.get("width").getAsInt()      : 0;
+
+            if (width == 0 || !msg.has("data")) {
+                log.debug("点云数据为空，跳过");
+                return;
             }
 
+            // ✅ 解码 base64 二进制数据
+            String dataBase64 = msg.get("data").getAsString();
+            byte[] rawData    = Base64.getDecoder().decode(dataBase64);
+
+            int totalPoints = rawData.length / pointStep;
+            // 下采样：如果点太多，每隔 N 个取一个
+            int step = Math.max(1, totalPoints / MAX_POINTS_TO_PUSH);
+
+            // ✅ 动态读取字段偏移量（从 fields 获取 x/y 的偏移）
+            int xOffset = 0, yOffset = 4, zOffset = 8; // 默认 fast_lio 格式
+            if (msg.has("fields")) {
+                for (var fieldEl : msg.getAsJsonArray("fields")) {
+                    JsonObject field = fieldEl.getAsJsonObject();
+                    String name = field.get("name").getAsString();
+                    int offset  = field.get("offset").getAsInt();
+                    switch (name) {
+                        case "x": xOffset = offset; break;
+                        case "y": yOffset = offset; break;
+                        case "z": zOffset = offset; break;
+                    }
+                }
+            }
+
+            // 提取 X、Y 坐标（Z 用于高度过滤）
+            JSONArray points = new JSONArray();
+            for (int i = 0; i < totalPoints; i += step) {
+                int base = i * pointStep;
+                if (base + zOffset + 4 > rawData.length) break;
+
+                // 小端字节序读取 float32
+                float x = readFloat(rawData, base + xOffset);
+                float y = readFloat(rawData, base + yOffset);
+                float z = readFloat(rawData, base + zOffset);
+
+                // 过滤无效点和 NaN
+                if (Float.isNaN(x) || Float.isNaN(y) || Float.isInfinite(x) || Float.isInfinite(y))
+                    continue;
+
+                // ✅ 高度过滤：只保留 -0.5m ~ 2.0m 高度的点（去除地面和天花板噪点）
+                if (z < -0.5f || z > 2.0f) continue;
+
+                JSONObject pt = new JSONObject();
+                pt.put("x", Math.round(x * 1000.0) / 1000.0); // 保留3位小数，减少数据量
+                pt.put("y", Math.round(y * 1000.0) / 1000.0);
+                pt.put("z", Math.round(z * 1000.0) / 1000.0);  // ← 加这行
+                points.add(pt);
+            }
+
+            if (points.isEmpty()) {
+                log.debug("过滤后点云为空");
+                return;
+            }
+
+            // 推送给前端
+            JSONObject cloudData = new JSONObject();
+            cloudData.put("points",      points);
+            cloudData.put("totalRaw",    totalPoints);  // 原始点数（调试用）
+            cloudData.put("pushCount",   points.size()); // 实际推送点数
+
+            pushService.pushToAll("cloud_update", cloudData);
+            log.info("✅ 点云推送: 原始{}点 → 推送{}点", totalPoints, points.size());
+
         } catch (Exception e) {
-            log.warn("处理 ROS 消息失败", e);
+            log.error("处理点云失败: {}", e.getMessage());
         }
     }
 
+    /** 从字节数组读取小端 float32 */
+    private float readFloat(byte[] data, int offset) {
+        return ByteBuffer.wrap(data, offset, 4).order(ByteOrder.LITTLE_ENDIAN).getFloat();
+    }
+
+    // ======================== ✅ 新增：处理 Odometry ========================
+
     /**
-     * 处理速度指令
+     * 解析 nav_msgs/Odometry（fast_lio 发布的里程计）
+     * 用于显示机器人实时位置
      */
-    private void handleCmdVel(JsonObject msg) {
+    private void handleOdometry(JsonObject msg) {
         try {
-            velocityService.handleVelocityMessage(msg);
+            JsonObject poseWithCov = msg.getAsJsonObject("pose");
+            if (poseWithCov == null) return;
+
+            JsonObject pose        = poseWithCov.getAsJsonObject("pose");
+            JsonObject position    = pose.getAsJsonObject("position");
+            JsonObject orientation = pose.getAsJsonObject("orientation");
+
+            double posX = position.get("x").getAsDouble();
+            double posY = position.get("y").getAsDouble();
+
+            // 四元数 → 偏航角 theta
+            double qx = orientation.get("x").getAsDouble();
+            double qy = orientation.get("y").getAsDouble();
+            double qz = orientation.get("z").getAsDouble();
+            double qw = orientation.get("w").getAsDouble();
+            double theta = Math.atan2(2.0 * (qw * qz + qx * qy),
+                    1.0 - 2.0 * (qy * qy + qz * qz));
+
+            // 速度（可选）
+            double linearVel  = 0, angularVel = 0;
+            JsonObject twist = msg.getAsJsonObject("twist");
+            if (twist != null && twist.has("twist")) {
+                JsonObject twistInner = twist.getAsJsonObject("twist");
+                linearVel  = twistInner.getAsJsonObject("linear").get("x").getAsDouble();
+                angularVel = twistInner.getAsJsonObject("angular").get("z").getAsDouble();
+            }
+
+            JSONObject poseData = new JSONObject();
+            poseData.put("x",          posX);
+            poseData.put("y",          posY);
+            poseData.put("theta",      theta);
+            poseData.put("linearVel",  linearVel);
+            poseData.put("angularVel", angularVel);
+
+            pushService.pushToAll("robot_pose", poseData);
+            log.debug("位姿推送: x={:.2f}, y={:.2f}, θ={:.1f}°",
+                    posX, posY, Math.toDegrees(theta));
+
         } catch (Exception e) {
-            log.error("处理速度消息失败", e);
+            log.error("处理 Odometry 失败: {}", e.getMessage());
         }
     }
 
-    /**
-     * 处理地图更新
-     */
+    // ======================== 保留原有：/map 和 /amcl_pose ========================
+
+    /** 兼容 SLAM Toolbox 的 OccupancyGrid */
     private void handleMapUpdate(JsonObject msg) {
         try {
-            // 提取地图信息
             JsonObject info = msg.getAsJsonObject("info");
-            if (info == null) {
-                log.warn("地图消息缺少 info 字段");
-                return;
-            }
+            if (info == null) return;
 
-            int width = info.get("width").getAsInt();
-            int height = info.get("height").getAsInt();
+            int width     = info.get("width").getAsInt();
+            int height    = info.get("height").getAsInt();
             double resolution = info.get("resolution").getAsDouble();
 
-            // 提取地图数据
             JsonArray dataArray = msg.getAsJsonArray("data");
-            if (dataArray == null) {
-                log.warn("地图消息缺少 data 字段");
-                return;
-            }
+            if (dataArray == null) return;
 
-            // 提取原点
-            JsonObject origin = info.getAsJsonObject("origin");
+            JsonObject origin   = info.getAsJsonObject("origin");
             JsonObject position = origin.getAsJsonObject("position");
 
-            // 构建前端消息（使用 JSONObject）
-            JSONObject mapData = new JSONObject();
-            mapData.put("width", width);
-            mapData.put("height", height);
-            mapData.put("resolution", resolution);
-
-            // 转换数据数组
             JSONArray dataArr = new JSONArray();
             for (int i = 0; i < dataArray.size(); i++) {
                 dataArr.add(dataArray.get(i).getAsInt());
             }
-            mapData.put("data", dataArr);
 
-            // 添加原点
+            JSONObject mapData = new JSONObject();
+            mapData.put("width",      width);
+            mapData.put("height",     height);
+            mapData.put("resolution", resolution);
+            mapData.put("data",       dataArr);
+
             JSONObject originObj = new JSONObject();
             originObj.put("x", position.get("x").getAsDouble());
             originObj.put("y", position.get("y").getAsDouble());
             mapData.put("origin", originObj);
 
-            // 通过 pushService 推送
             pushService.pushToAll("map_update", mapData);
-
-            log.info("✅ 地图更新已推送: {}x{}, 分辨率: {}", width, height, resolution);
+            log.info("地图更新: {}x{}", width, height);
 
         } catch (Exception e) {
-            log.error("处理地图消息失败", e);
+            log.error("处理 /map 失败", e);
         }
     }
 
-    /**
-     * 处理机器人位姿
-     */
+    /** amcl_pose（导航定位用） */
     private void handleRobotPose(JsonObject msg) {
         try {
-            JsonObject poseWithCovariance = msg.getAsJsonObject("pose");
-            if (poseWithCovariance == null) {
-                log.warn("位姿消息缺少 pose 字段");
-                return;
-            }
-
-            JsonObject pose = poseWithCovariance.getAsJsonObject("pose");
+            JsonObject pose     = msg.getAsJsonObject("pose").getAsJsonObject("pose");
             JsonObject position = pose.getAsJsonObject("position");
-            JsonObject orientation = pose.getAsJsonObject("orientation");
+            JsonObject ori      = pose.getAsJsonObject("orientation");
 
-            // 四元数转欧拉角
-            double x = orientation.get("x").getAsDouble();
-            double y = orientation.get("y").getAsDouble();
-            double z = orientation.get("z").getAsDouble();
-            double w = orientation.get("w").getAsDouble();
-            double theta = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+            double theta = Math.atan2(
+                    2 * (ori.get("w").getAsDouble() * ori.get("z").getAsDouble()
+                            + ori.get("x").getAsDouble() * ori.get("y").getAsDouble()),
+                    1 - 2 * (ori.get("y").getAsDouble() * ori.get("y").getAsDouble()
+                            + ori.get("z").getAsDouble() * ori.get("z").getAsDouble())
+            );
 
-            // 构建位姿数据
             JSONObject poseData = new JSONObject();
-            poseData.put("x", position.get("x").getAsDouble());
-            poseData.put("y", position.get("y").getAsDouble());
+            poseData.put("x",     position.get("x").getAsDouble());
+            poseData.put("y",     position.get("y").getAsDouble());
             poseData.put("theta", theta);
 
-            // 推送到前端
             pushService.pushToAll("robot_pose", poseData);
-
-            log.debug("机器人位姿已推送: x={}, y={}, theta={}",
-                    poseData.getDouble("x"),
-                    poseData.getDouble("y"),
-                    poseData.getDouble("theta"));
-
         } catch (Exception e) {
-            log.error("处理机器人位姿失败", e);
+            log.error("处理 amcl_pose 失败", e);
         }
     }
 
     /**
-     * 处理路径规划
+     * 处理 /cmd_vel 速度指令
+     *
+     * 来源有两种：
+     *   1. Nav2 自主导航时，controller_server 实时计算并发布（自动驾驶）
+     *   2. 手动遥控时，前端 D-PAD → RobotController → publish /cmd_vel
+     *
+     * geometry_msgs/Twist 结构：
+     *   linear:  { x: 线速度m/s, y: 0, z: 0 }
+     *   angular: { x: 0,        y: 0, z: 角速度rad/s }
      */
+    private void handleCmdVel(JsonObject msg) {
+        try {
+            JsonObject linear  = msg.getAsJsonObject("linear");
+            JsonObject angular = msg.getAsJsonObject("angular");
+            if (linear == null || angular == null) return;
+
+            double linearX  = linear.get("x").getAsDouble();  // 线速度 m/s
+            double angularZ = angular.get("z").getAsDouble(); // 角速度 rad/s
+
+            // ① 推送前端（速度仪表盘显示）
+            JSONObject velData = new JSONObject();
+            velData.put("linear",  linearX);
+            velData.put("angular", angularZ);
+            pushService.pushToAll("cmd_vel_update", velData);
+
+            // ② VelocityMonitorService 监控记录
+            velocityService.handleVelocityMessage(msg);
+
+            // ③ ✅ 核心：发送到底盘硬件（Java 作为协议翻译层）
+            hardwareService.sendVelocity(linearX, angularZ);
+
+        } catch (Exception e) {
+            log.error("处理 /cmd_vel 失败: {}", e.getMessage());
+        }
+    }
+
+    /** 路径规划 */
     private void handlePath(JsonObject msg) {
         try {
             JsonArray poses = msg.getAsJsonArray("poses");
-            if (poses == null) {
-                log.warn("路径消息缺少 poses 字段");
-                return;
-            }
+            if (poses == null) return;
 
-            // 构建路径数据
             JSONArray posesArray = new JSONArray();
-
             for (int i = 0; i < poses.size(); i++) {
-                JsonObject poseStamped = poses.get(i).getAsJsonObject();
-                JsonObject pose = poseStamped.getAsJsonObject("pose");
-                JsonObject position = pose.getAsJsonObject("position");
-
-                JSONObject point = new JSONObject();
-                point.put("x", position.get("x").getAsDouble());
-                point.put("y", position.get("y").getAsDouble());
-                posesArray.add(point);
+                JsonObject position = poses.get(i).getAsJsonObject()
+                        .getAsJsonObject("pose").getAsJsonObject("position");
+                JSONObject pt = new JSONObject();
+                pt.put("x", position.get("x").getAsDouble());
+                pt.put("y", position.get("y").getAsDouble());
+                posesArray.add(pt);
             }
 
             JSONObject pathData = new JSONObject();
             pathData.put("poses", posesArray);
-
-            // 推送到前端
             pushService.pushToAll("path_update", pathData);
-
-            log.info("✅ 路径规划已推送: {} 个路径点", posesArray.size());
-
         } catch (Exception e) {
-            log.error("处理路径消息失败", e);
+            log.error("处理路径失败", e);
         }
     }
 
     @Override
-    public boolean supportsPartialMessages() {
-        return true; // 支持分片消息
-    }
+    public boolean supportsPartialMessages() { return true; }
 }

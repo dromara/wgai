@@ -8,6 +8,7 @@ import org.bytedeco.javacv.Java2DFrameConverter;
 import org.jeecg.modules.demo.video.entity.TabAiSubscriptionNew;
 import org.jeecg.modules.demo.video.util.RedisCacheHolder;
 import org.jeecg.modules.demo.video.util.identifyTypeNewOnnx;
+import org.jeecg.modules.demo.video.util.identifyTypeNewOnnxTest;
 import org.jeecg.modules.demo.video.util.reture.retureBoxInfo;
 import org.jeecg.modules.tab.AIModel.NetPush;
 import org.opencv.core.Mat;
@@ -31,7 +32,7 @@ import static org.jeecg.modules.tab.AIModel.AIModelYolo3.bufferedImageToMat;
 public class VideoReadPicOnnxNew implements Runnable {
 
     private static final ThreadLocal<TabAiSubscriptionNew> threadLocalPushInfo = new ThreadLocal<>();
-    private final ThreadLocal<identifyTypeNewOnnx> identifyTypeNewLocal = ThreadLocal.withInitial(identifyTypeNewOnnx::new);
+    private final ThreadLocal<identifyTypeNewOnnxTest> identifyTypeNewLocal = ThreadLocal.withInitial(identifyTypeNewOnnxTest::new);
     private final ThreadLocal<Java2DFrameConverter> converterLocal = ThreadLocal.withInitial(Java2DFrameConverter::new);
 
     private final TabAiSubscriptionNew tabAiSubscriptionNew;
@@ -46,7 +47,7 @@ public class VideoReadPicOnnxNew implements Runnable {
     private final AtomicInteger pendingFrames = new AtomicInteger(0);
     private volatile long lastProcessTime = System.currentTimeMillis();
 
-    private static final long TARGET_FRAME_INTERVAL = 1000; // 1秒一帧
+    private static final long TARGET_FRAME_INTERVAL = 300; // 1秒3帧
     private volatile long lastFrameTime = 0;
 
     private final AtomicLong processedFrames = new AtomicLong(0);
@@ -119,7 +120,7 @@ public class VideoReadPicOnnxNew implements Runnable {
 
         // ========== 正常处理流程 ==========
         try {
-            identifyTypeNewOnnx identifyTypeAll = identifyTypeNewLocal.get();
+            identifyTypeNewOnnxTest identifyTypeAll = identifyTypeNewLocal.get();
             List<NetPush> netPushList = threadLocalPushInfo.get().getNetPushList();
 
             Frame frame;
@@ -188,7 +189,7 @@ public class VideoReadPicOnnxNew implements Runnable {
         }
     }
 
-    private void processFrameAsync(Frame frame, List<NetPush> netPushList, identifyTypeNewOnnx identifyTypeAll) {
+    private void processFrameAsync(Frame frame, List<NetPush> netPushList, identifyTypeNewOnnxTest identifyTypeAll) {
         if (forceShutdown.get()) {
             frame.close();
             return;
@@ -267,7 +268,7 @@ public class VideoReadPicOnnxNew implements Runnable {
         activeTasks.removeIf(Future::isDone);
     }
 
-    private void processNetPush(Mat mat, NetPush netPush, identifyTypeNewOnnx identifyTypeAll) {
+    private void processNetPush(Mat mat, NetPush netPush, identifyTypeNewOnnxTest identifyTypeAll) {
         try {
             if (forceShutdown.get()) return;
 
@@ -282,17 +283,17 @@ public class VideoReadPicOnnxNew implements Runnable {
         }
     }
 
-    public void executeDetection(Mat mat, NetPush netPush, identifyTypeNewOnnx identifyTypeAll,
+    public void executeDetection(Mat mat, NetPush netPush, identifyTypeNewOnnxTest identifyTypeAll,
                                  List<retureBoxInfo> retureBoxInfos) {
         try {
             if (forceShutdown.get()) return;
 
             long inferenceStart = System.currentTimeMillis();
 
-            if (netPush.getDifyType() == 2) {
+            if (netPush.getDifyType() == 2) {  //姿态识别
                 identifyTypeAll.detectObjectsDifyOnnxV5Pose(tabAiSubscriptionNew, mat, netPush, redisTemplate, retureBoxInfos);
             } else {
-                if (netPush.getIsBeforZoom() == 0) {
+                if (netPush.getIsBeforZoom() == 0) { //开启区域放大
                     identifyTypeAll.detectObjectsDifyOnnxV5WithROI(tabAiSubscriptionNew, mat, netPush, redisTemplate, retureBoxInfos);
                 } else {
                     identifyTypeAll.detectObjectsDifyOnnxV5(tabAiSubscriptionNew, mat, netPush, redisTemplate, retureBoxInfos);
@@ -309,7 +310,7 @@ public class VideoReadPicOnnxNew implements Runnable {
         }
     }
 
-    public void processWithPredecessors(Mat mat, NetPush netPush, identifyTypeNewOnnx identifyTypeAll) {
+    public void processWithPredecessors(Mat mat, NetPush netPush, identifyTypeNewOnnxTest identifyTypeAll) {
         List<NetPush> before = netPush.getListNetPush();
         if (before == null || before.isEmpty()) return;
 
@@ -335,7 +336,7 @@ public class VideoReadPicOnnxNew implements Runnable {
         }
     }
 
-    private retureBoxInfo validateFirstModel(Mat mat, NetPush beforePush, identifyTypeNewOnnx identifyTypeAll) {
+    private retureBoxInfo validateFirstModel(Mat mat, NetPush beforePush, identifyTypeNewOnnxTest identifyTypeAll) {
         try {
             if (forceShutdown.get()) return null;
             return identifyTypeAll.detectObjectsV5Onnx(tabAiSubscriptionNew, mat, beforePush, redisTemplate);

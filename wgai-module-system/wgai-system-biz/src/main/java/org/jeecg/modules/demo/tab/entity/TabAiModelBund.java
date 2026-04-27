@@ -110,4 +110,10 @@ public class TabAiModelBund implements Serializable {
     @ApiModelProperty(value = "播报地址")
     @Dict(dictTable = "tab_audio_device", dicCode = "id", dicText = "device_name")
     private java.lang.String audioId;
+
+
+
+    @Dict(dicCode = "push_static")
+    @ApiModelProperty(value = "是否开启区域识别")
+    private Integer isBy;
 }

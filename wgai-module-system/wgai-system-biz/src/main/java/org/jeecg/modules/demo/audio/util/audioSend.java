@@ -110,7 +110,7 @@ public class audioSend {
         jsonObject.put("TaskName","WGAI_Send"+time+random);
         jsonObject.put("TaskType",7);
         jsonObject.put("Priority",0);
-        jsonObject.put("AutoPause",0);
+        jsonObject.put("AutoPause",1);
         jsonObject.put("StartMode",2);
         jsonObject.put("EndMode",0);
         jsonObject.put("PlayMode",2);

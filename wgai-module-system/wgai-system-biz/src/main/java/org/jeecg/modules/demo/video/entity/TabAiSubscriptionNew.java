@@ -132,6 +132,23 @@ public class TabAiSubscriptionNew implements Serializable {
 	@Excel(name = "是否保存图片", width = 15)
     @ApiModelProperty(value = "是否保存图片")
     private java.lang.Integer savePic;
+
+    @Dict(dicCode = "push_static")
+    @Excel(name = "是否保存图片", width = 15)
+    @ApiModelProperty(value = "是否保存失败图片")
+    private java.lang.Integer saveErrorPic;
+
+    @Dict(dicCode = "push_static")
+    @Excel(name = "是否保存图片", width = 15)
+    @ApiModelProperty(value = "是否保存前置调试图片")
+    private java.lang.Integer saveBeforePic;
+
+
+    @Dict(dicCode = "push_static")
+    @Excel(name = "是否保存图片", width = 15)
+    @ApiModelProperty(value = "是否保存放大调试图")
+    private java.lang.Integer saveRoiPic;
+
 	/**是否开启报警录像*/
     @Dict(dicCode = "push_static")
 	@Excel(name = "是否开启报警录像", width = 15)
@@ -170,8 +187,8 @@ public class TabAiSubscriptionNew implements Serializable {
     @TableField(exist = false)
     TabVideoUtil tabVideoUtil;
 
-    @TableField(exist = false)
-    List<TabAiVideoSetting> listSetting;
+//    @TableField(exist = false)
+//    List<TabAiVideoSetting> listSetting;
 
     @TableField(exist = false)
     List<TabAiModelNew> tabAiModelNewList;

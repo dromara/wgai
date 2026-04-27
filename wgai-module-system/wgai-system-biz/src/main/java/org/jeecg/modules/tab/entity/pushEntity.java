@@ -38,4 +38,7 @@ public String cameraName;
     public Integer aiNumber;
     //报警内容
     private String  modelText;
+
+    //报警区域
+    private String  modelArea;
 }

@@ -40,31 +40,33 @@
 <!--			<artifactId>easyAi</artifactId>-->
 <!--			<version>1.1.7</version>-->
 <!--		</dependency>-->
-		<!-- y语音识别 api  当你在寻找这个jar包的时候我已经知道你没有阅读代码 因为此jar包就在代码中 你还在苦苦寻找-->
+		<!--  当你在寻找这个jar包的时候我已经知道你没有阅读代码 因为此jar包就在代码中 你还在苦苦寻找-->
 <!--		<dependency>-->
 <!--			<groupId>sherpa.onnx.java</groupId>-->
 <!--			<artifactId>k2fsa</artifactId>-->
 <!--			<version>0.0.2</version>-->
 <!--		</dependency>-->
 
-				<dependency>
-					<groupId>sherpa.onnx.java</groupId>
-					<artifactId>k2fsa</artifactId>
-					<version>1.12.10</version>
-				</dependency>
+		<dependency>
+			<groupId>sherpa.onnx.java</groupId>
+			<artifactId>k2fsa</artifactId>
+			<version>1.12.10</version>
+		</dependency>
+
+
+		<dependency>
+			<groupId>sherpa.onnx.java</groupId>
+			<artifactId>k2fsa.native.win</artifactId>
+			<version>1.12.10</version>
+		</dependency>
+
 
 
 <!--		<dependency>-->
 <!--			<groupId>sherpa.onnx.java</groupId>-->
-<!--			<artifactId>k2fsa.native.win</artifactId>-->
+<!--			<artifactId>k2fsa.native.linux</artifactId>-->
 <!--			<version>1.12.10</version>-->
 <!--		</dependency>-->
-
-		<dependency>
-			<groupId>sherpa.onnx.java</groupId>
-			<artifactId>k2fsa.native.linux</artifactId>
-			<version>1.12.10</version>
-		</dependency>
 		<!-- 企业微信/钉钉 api -->
 		<dependency>
 			<groupId>org.jeecgframework</groupId>

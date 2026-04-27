@@ -37,7 +37,7 @@ public class VelocityMonitorService {
      */
     public void handleVelocityMessage(JsonObject twistMsg) {
         try {
-            log.info("处理速度消息");
+            log.info("处理速度消息{}",twistMsg);
             VelocityCommand velocity = parseVelocityCommand(twistMsg);
 
             // 更新当前速度

@@ -4,6 +4,8 @@ import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OnnxValue;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtSession;
+import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 import lombok.extern.slf4j.Slf4j;
 import org.bytedeco.ffmpeg.global.avutil;
@@ -31,10 +33,10 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.jeecg.modules.demo.audio.util.video.videoIdentifyTypeNewOnnx.isPointInArea;
 import static org.jeecg.modules.demo.video.util.identifyTypeNewOnnx.letterboxResize;
 import static org.jeecg.modules.tab.AIModel.AIModelYolo3.CommonColorsVue;
 import static org.jeecg.modules.tab.AIModel.AIModelYolo3.bufferedImageToMat;
-import static org.jeecg.modules.tab.AIModel.onnx.VideoReadOnnxPose.isBoundingBoxInShapeData;
 
 /**
  * @author wggg
@@ -58,7 +60,7 @@ import static org.jeecg.modules.tab.AIModel.onnx.VideoReadOnnxPose.isBoundingBox
  *   5. ByteTracker 仍运行（保留以备扩展），但不参与 permId 分配
  */
 @Slf4j
-public class VideoReadOnnx implements Runnable {
+public class VideoReadOnnxPose implements Runnable {
 
     private RedisTemplate redisTemplate;
     public Integer TARGET_FRAME_INTERVAL = 300;
@@ -76,10 +78,10 @@ public class VideoReadOnnx implements Runnable {
 
     private final Java2DFrameConverter converter = new Java2DFrameConverter();
 
-    public VideoReadOnnx(NetPush netpush, TabAudioDevice tabAudioDevice,
-                         TabAiModelBund tabAiModelBund, String videoUrl,
-                         RedisTemplate redisTemplate, String userId,
-                         String namesUrl, WebSocket webSocket) {
+    public VideoReadOnnxPose(NetPush netpush, TabAudioDevice tabAudioDevice,
+                             TabAiModelBund tabAiModelBund, String videoUrl,
+                             RedisTemplate redisTemplate, String userId,
+                             String namesUrl, WebSocket webSocket) {
         this.videoUrl = videoUrl;
         this.redisTemplate = redisTemplate;
         this.userId = userId;
@@ -286,7 +288,7 @@ public class VideoReadOnnx implements Runnable {
             matInfo = bufferedImageToMat(image);
             if (matInfo == null || matInfo.empty()) return;
 
-            detectObjectsDifyOnnx(matInfo, netpush, redisTemplate, null, grabTimestamp, streamPts);
+            detectObjectsDifyOnnxPose(matInfo, netpush, redisTemplate, null, grabTimestamp, streamPts);
 
         } catch (Exception e) {
             log.error("[processFrame 异常]", e);
@@ -296,12 +298,11 @@ public class VideoReadOnnx implements Runnable {
         }
     }
 
-    public boolean detectObjectsDifyOnnx(Mat image, NetPush netPush,
-                                         RedisTemplate redisTemplate,
-                                         List<retureBoxInfo> retureBoxInfos,
-                                         long grabTimestamp, long streamPts) {
-        List<String> classNames = netPush.getClaseeNames();
-        Integer expectedClassCount = classNames.size();
+    public boolean detectObjectsDifyOnnxPose(Mat image, NetPush netPush,
+                                             RedisTemplate redisTemplate,
+                                             List<retureBoxInfo> retureBoxInfos,
+                                             long grabTimestamp, long streamPts) {
+        final String PERSON_CLASS = "person";
         long startTime = System.currentTimeMillis();
 
         Mat processedImage = null;
@@ -316,9 +317,9 @@ public class VideoReadOnnx implements Runnable {
 
             DetectionResult detectionResult;
             try {
-                detectionResult = runOnnxInference(session, env, inputData, expectedClassCount);
+                detectionResult = runOnnxInferencePose(session, env, inputData);
             } catch (Exception ex) {
-                log.error("ONNX推理失败", ex);
+                log.error("姿态模型推理失败", ex);
                 return false;
             }
 
@@ -336,8 +337,8 @@ public class VideoReadOnnx implements Runnable {
             }
             if (detectionCount > 200) { log.warn("检测数量异常: {}", detectionCount); return false; }
 
-            int[] nmsIndices = performNMS(detectionResult, 0.35f, 0.35f);
-            if (nmsIndices.length > 50) { log.warn("NMS后检测框数量过多: {}", nmsIndices.length); return false; }
+            int[] nmsIndices = performNMS(detectionResult, 0.25f, 0.25f);
+            if (nmsIndices.length > 100) { log.warn("NMS后人员数量过多: {}", nmsIndices.length); return false; }
 
             double scale = Math.min(640.0 / image.cols(), 640.0 / image.rows());
             double dx    = (640 - image.cols() * scale) / 2;
@@ -347,9 +348,9 @@ public class VideoReadOnnx implements Runnable {
             List<ByteTracker.Detection> detections = new ArrayList<>();
             List<DetCache> cache = new ArrayList<>();
             for (int idx : nmsIndices) {
-                Rect2d  box        = detectionResult.boxes2d.get(idx);
-                Integer classId    = detectionResult.classIds.get(idx);
-                float   confidence = detectionResult.confidences.get(idx);
+                Rect2d box        = detectionResult.boxes2d.get(idx);
+                float  confidence = detectionResult.confidences.get(idx);
+
 
 
                 if (netPush.getIsBy() == 0) {
@@ -362,12 +363,13 @@ public class VideoReadOnnx implements Runnable {
                     }
                 }
 
-                BoundingBox ob = restoreCoordinates(box, scale, dx, dy, image);
-                cache.add(new DetCache(ob, classId, confidence));
+                BoundingBox ob    = restoreCoordinates(box, scale, dx, dy, image);
+                cache.add(new DetCache(ob, 0, confidence));
                 detections.add(new ByteTracker.Detection(
                         (float) ob.x, (float) ob.y,
                         (float)(ob.x + ob.width), (float)(ob.y + ob.height),
-                        confidence, classId));
+                        confidence, 0));
+
             }
 
             // ── ByteTracker 仍运行（不用于 permId 分配）────────────────────
@@ -378,13 +380,12 @@ public class VideoReadOnnx implements Runnable {
             PermanentIdMapper idMapper = getIdMapper(netPush);
             List<Integer> permIds = idMapper.assignPermIds(cache);
 
-            // ── 构建输出（支持多类别）────────────────────────────────────────
+            // ── 构建输出 ────────────────────────────────────────────────────
+            TabAiBase aiBase  = getAiBaseConfig(PERSON_CLASS);
             List<JSONObject> jsonlist = new ArrayList<>();
             for (int i = 0; i < cache.size(); i++) {
-                DetCache c       = cache.get(i);
-                int      permId  = permIds.get(i);
-                String   className = classNames.get(c.classId);
-                TabAiBase aiBase = getAiBaseConfig(className);
+                DetCache c      = cache.get(i);
+                int      permId = permIds.get(i);
 
                 JSONObject bj = new JSONObject();
                 bj.put("x",         c.box.x);
@@ -392,9 +393,8 @@ public class VideoReadOnnx implements Runnable {
                 bj.put("width",     c.box.width);
                 bj.put("height",    c.box.height);
                 bj.put("url",       videoUrl);
-                bj.put("name",      className + "_" + permId);
-                bj.put("className", className);
-                bj.put("color",     CommonColorsVue(c.classId));
+                bj.put("name",      aiBase.getChainName() + permId);
+                bj.put("color",     CommonColorsVue(0));
                 bj.put("number",    grabTimestamp);
                 bj.put("streamPts", streamPts);
                 bj.put("trackId",   permId);
@@ -409,7 +409,7 @@ public class VideoReadOnnx implements Runnable {
             bja.put("list",      jsonlist);
 
             long inferMs = System.currentTimeMillis() - startTime;
-            log.info("目标检测耗时: {}ms, 检测: {}, 追踪: {}", inferMs, cache.size(), trackResults.size());
+            log.info("姿态识别耗时: {}ms, 检测: {}, 追踪: {}", inferMs, cache.size(), trackResults.size());
 
             webSocket.sendMessage(bja.toJSONString());
             return true;
@@ -419,120 +419,293 @@ public class VideoReadOnnx implements Runnable {
         }
     }
 
+
+    /**
+     * 判断物体框是否在自定义区域内
+     *
+     * @param x640 物体框左上角X坐标（640×640坐标系）
+     * @param y640 物体框左上角Y坐标（640×640坐标系）
+     * @param width640 物体框宽度（640×640坐标系）
+     * @param height640 物体框高度（640×640坐标系）
+     * @param shapeDataJson 前端保存的区域配置JSON
+     * @param strictMode true=完全在区域内才算, false=有交集就算（推荐）
+     */
+    public static boolean isBoundingBoxInShapeData(double x640, double y640, double width640, double height640,
+                                                   String shapeDataJson, boolean strictMode) {
+        try {
+            JSONObject shapeData = JSON.parseObject(shapeDataJson);
+
+            // 获取原图尺寸
+            int imageWidth = shapeData.getIntValue("imageWidth");
+            int imageHeight = shapeData.getIntValue("imageHeight");
+
+            // ✅ 计算物体框的四个边界点（640坐标系）
+            double x1_640 = x640;
+            double y1_640 = y640;
+            double x2_640 = x640 + width640;
+            double y2_640 = y640 + height640;
+
+            // ✅ 将640×640的边界框转换到原图坐标系
+            double x1_original = x1_640;
+            double y1_original = y1_640;
+            double x2_original = x2_640;
+            double y2_original = y2_640;
+
+            log.info("物体框坐标转换: 640系[x:{}, y:{}, w:{}, h:{}] → 640边界[{}, {}, {}, {}] → 原图边界[{}, {}, {}, {}] [原图: {}×{}]",
+                    x640, y640, width640, height640,
+                    x1_640, y1_640, x2_640, y2_640,
+                    x1_original, y1_original, x2_original, y2_original,
+                    imageWidth, imageHeight);
+
+            // 获取所有形状
+            JSONArray shapes = shapeData.getJSONArray("shapes");
+            if (shapes == null || shapes.isEmpty()) {
+                log.warn("shapeData 中没有定义任何形状");
+                return false;
+            }
+
+            // 遍历所有形状，只要满足条件就返回true
+            for (int i = 0; i < shapes.size(); i++) {
+                JSONObject shape = shapes.getJSONObject(i);
+                String type = shape.getString("type");
+                JSONObject coordinates = shape.getJSONObject("coordinates");
+
+                boolean matchThisShape = false;
+
+                if ("rect".equals(type)) {
+                    // ✅ 矩形判断 - 修复了min/max问题
+                    double startX = coordinates.getDoubleValue("startX");
+                    double startY = coordinates.getDoubleValue("startY");
+                    double endX = coordinates.getDoubleValue("endX");
+                    double endY = coordinates.getDoubleValue("endY");
+
+                    // 计算矩形的实际边界（无论从哪个方向绘制）
+                    double areaMinX = Math.min(startX, endX);
+                    double areaMaxX = Math.max(startX, endX);
+                    double areaMinY = Math.min(startY, endY);
+                    double areaMaxY = Math.max(startY, endY);
+
+                    if (strictMode) {
+                        // 严格模式：物体框完全在区域内
+                        matchThisShape = x1_original >= areaMinX && x2_original <= areaMaxX
+                                && y1_original >= areaMinY && y2_original <= areaMaxY;
+                    } else {
+                        // 宽松模式：物体框与区域有交集（推荐）
+                        matchThisShape = !(x2_original < areaMinX || x1_original > areaMaxX
+                                || y2_original < areaMinY || y1_original > areaMaxY);
+                    }
+
+                    log.info("矩形{} 判断: 物体框[{}, {}, {}, {}] vs 区域[{}, {}, {}, {}] {} = {}",
+                            i + 1,
+                            x1_original, y1_original, x2_original, y2_original,
+                            areaMinX, areaMinY, areaMaxX, areaMaxY,
+                            strictMode ? "完全包含" : "有交集",
+                            matchThisShape);
+
+                } else if ("polygon".equals(type)) {
+                    // ✅ 多边形判断
+                    JSONArray points = coordinates.getJSONArray("points");
+
+                    if (strictMode) {
+                        // 严格模式：物体框的四个角点都在多边形内
+                        matchThisShape = isPointInPolygon(x1_original, y1_original, points)
+                                && isPointInPolygon(x2_original, y1_original, points)
+                                && isPointInPolygon(x1_original, y2_original, points)
+                                && isPointInPolygon(x2_original, y2_original, points);
+                    } else {
+                        // 宽松模式：物体框至少有一个角点在多边形内，或中心点在多边形内
+                        double centerX = (x1_original + x2_original) / 2;
+                        double centerY = (y1_original + y2_original) / 2;
+
+                        matchThisShape = isPointInPolygon(x1_original, y1_original, points)
+                                || isPointInPolygon(x2_original, y1_original, points)
+                                || isPointInPolygon(x1_original, y2_original, points)
+                                || isPointInPolygon(x2_original, y2_original, points)
+                                || isPointInPolygon(centerX, centerY, points);
+                    }
+
+                    log.info("多边形{} 判断: 物体框[{}, {}, {}, {}] 顶点数={} {} = {}",
+                            i + 1,
+                            x1_original, y1_original, x2_original, y2_original,
+                            points.size(),
+                            strictMode ? "完全包含" : "有交集",
+                            matchThisShape);
+                }
+
+                if (matchThisShape) {
+                    log.info("✅ 物体框在区域内 - {}{}内 (模式: {})",
+                            type.equals("rect") ? "矩形" : "多边形",
+                            i + 1,
+                            strictMode ? "严格" : "宽松");
+                    return true;
+                }
+            }
+
+            log.info("❌ 物体框不在任何定义的区域内");
+            return false;
+
+        } catch (Exception e) {
+            log.error("解析 shapeData 失败", e);
+            return false;
+        }
+    }
+    /**
+     * 矩形相交判断
+     */
+    private static boolean isRectIntersect(double l1, double t1, double r1, double b1,
+                                           double l2, double t2, double r2, double b2) {
+        return !(r1 < l2 || l1 > r2 || b1 < t2 || t1 > b2);
+    }
+
+    /**
+     * 检测框是否与多边形相交
+     */
+    private static boolean isBoxIntersectPolygon(double boxLeft, double boxTop,
+                                                 double boxRight, double boxBottom,
+                                                 JSONArray points) {
+
+        // 1. 多边形外包矩形快速排除
+        double polyMinX = Double.MAX_VALUE;
+        double polyMinY = Double.MAX_VALUE;
+        double polyMaxX = -Double.MAX_VALUE;
+        double polyMaxY = -Double.MAX_VALUE;
+
+        for (int i = 0; i < points.size(); i++) {
+            JSONObject p = points.getJSONObject(i);
+            double x = p.getDoubleValue("x");
+            double y = p.getDoubleValue("y");
+
+            if (x < polyMinX) polyMinX = x;
+            if (y < polyMinY) polyMinY = y;
+            if (x > polyMaxX) polyMaxX = x;
+            if (y > polyMaxY) polyMaxY = y;
+        }
+
+        if (!isRectIntersect(boxLeft, boxTop, boxRight, boxBottom, polyMinX, polyMinY, polyMaxX, polyMaxY)) {
+            return false;
+        }
+
+        // 2. 检测框四个角有任意一点在多边形内
+        if (isPointInPolygon(boxLeft, boxTop, points)
+                || isPointInPolygon(boxRight, boxTop, points)
+                || isPointInPolygon(boxRight, boxBottom, points)
+                || isPointInPolygon(boxLeft, boxBottom, points)) {
+            return true;
+        }
+
+        // 3. 多边形任意顶点在检测框内
+        for (int i = 0; i < points.size(); i++) {
+            JSONObject p = points.getJSONObject(i);
+            double x = p.getDoubleValue("x");
+            double y = p.getDoubleValue("y");
+
+            if (x >= boxLeft && x <= boxRight && y >= boxTop && y <= boxBottom) {
+                return true;
+            }
+        }
+
+        // 4. 多边形边与检测框四条边是否相交
+        for (int i = 0, j = points.size() - 1; i < points.size(); j = i++) {
+            JSONObject pi = points.getJSONObject(i);
+            JSONObject pj = points.getJSONObject(j);
+
+            double x1 = pj.getDoubleValue("x");
+            double y1 = pj.getDoubleValue("y");
+            double x2 = pi.getDoubleValue("x");
+            double y2 = pi.getDoubleValue("y");
+
+            // 上边
+            if (isLineIntersect(x1, y1, x2, y2, boxLeft, boxTop, boxRight, boxTop)) return true;
+            // 右边
+            if (isLineIntersect(x1, y1, x2, y2, boxRight, boxTop, boxRight, boxBottom)) return true;
+            // 下边
+            if (isLineIntersect(x1, y1, x2, y2, boxRight, boxBottom, boxLeft, boxBottom)) return true;
+            // 左边
+            if (isLineIntersect(x1, y1, x2, y2, boxLeft, boxBottom, boxLeft, boxTop)) return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * 点在多边形内：射线法
+     */
+    private static boolean isPointInPolygon(double px, double py, JSONArray points) {
+        int n = points.size();
+        boolean inside = false;
+
+        for (int i = 0, j = n - 1; i < n; j = i++) {
+            JSONObject pi = points.getJSONObject(i);
+            JSONObject pj = points.getJSONObject(j);
+
+            double xi = pi.getDoubleValue("x");
+            double yi = pi.getDoubleValue("y");
+            double xj = pj.getDoubleValue("x");
+            double yj = pj.getDoubleValue("y");
+
+            if (((yi > py) != (yj > py))
+                    && (px < (xj - xi) * (py - yi) / (((yj - yi) == 0) ? 1e-10 : (yj - yi)) + xi)) {
+                inside = !inside;
+            }
+        }
+
+        return inside;
+    }
+
+    /**
+     * 两线段是否相交
+     */
+    private static boolean isLineIntersect(double x1, double y1, double x2, double y2,
+                                           double x3, double y3, double x4, double y4) {
+        double d1 = cross(x3, y3, x4, y4, x1, y1);
+        double d2 = cross(x3, y3, x4, y4, x2, y2);
+        double d3 = cross(x1, y1, x2, y2, x3, y3);
+        double d4 = cross(x1, y1, x2, y2, x4, y4);
+
+        if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0))
+                && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+            return true;
+        }
+
+        if (d1 == 0 && onSegment(x3, y3, x4, y4, x1, y1)) return true;
+        if (d2 == 0 && onSegment(x3, y3, x4, y4, x2, y2)) return true;
+        if (d3 == 0 && onSegment(x1, y1, x2, y2, x3, y3)) return true;
+        if (d4 == 0 && onSegment(x1, y1, x2, y2, x4, y4)) return true;
+
+        return false;
+    }
+
+    private static double cross(double x1, double y1, double x2, double y2, double px, double py) {
+        return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1);
+    }
+
+    private static boolean onSegment(double x1, double y1, double x2, double y2, double px, double py) {
+        return px >= Math.min(x1, x2) && px <= Math.max(x1, x2)
+                && py >= Math.min(y1, y2) && py <= Math.max(y1, y2);
+    }
     // =========================================================================
     // 推理 / NMS / 预处理
     // =========================================================================
-
-    /**
-     * ONNX推理 - 支持YOLOv5/v8/v11多种格式
-     */
-    private DetectionResult runOnnxInference(OrtSession session, OrtEnvironment env,
-                                             float[] inputData, Integer expectedClassCount) throws Exception {
+    private DetectionResult runOnnxInferencePose(OrtSession session, OrtEnvironment env,
+                                                 float[] inputData) throws Exception {
         long[] shape = {1, 3, 640, 640};
-        DetectionResult result = new DetectionResult();
-        float confThreshold = 0.45f;
-
         try (OnnxTensor inputTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputData), shape)) {
-            Map<String, OnnxTensor> inputs = Collections.singletonMap(
-                    session.getInputNames().iterator().next(), inputTensor);
-
-            try (OrtSession.Result results = session.run(inputs)) {
-                for (Map.Entry<String, OnnxValue> entry : results) {
-                    if (!(entry.getValue() instanceof OnnxTensor)) continue;
-
-                    OnnxTensor tensor = (OnnxTensor) entry.getValue();
-                    long[] tensorShape = tensor.getInfo().getShape();
-                    Object rawOutput = tensor.getValue();
-
-                    parseOnnxOutput(rawOutput, tensorShape, expectedClassCount, confThreshold, result);
+            Map<String, OnnxTensor> inputs = new HashMap<>();
+            inputs.put(session.getInputNames().iterator().next(), inputTensor);
+            try (OrtSession.Result result = session.run(inputs)) {
+                float[][][] output = (float[][][]) result.get(0).getValue();
+                int numBoxes = output[0][0].length;
+                DetectionResult dr = new DetectionResult();
+                for (int i = 0; i < numBoxes; i++) {
+                    float cx   = output[0][0][i], cy = output[0][1][i];
+                    float w    = output[0][2][i], h  = output[0][3][i];
+                    float conf = output[0][4][i];
+                    if (conf < 0.25f) continue;
+                    dr.boxes2d.add(new Rect2d(cx - w / 2, cy - h / 2, w, h));
+                    dr.confidences.add(conf);
+                    dr.classIds.add(0);
                 }
-            }
-        }
-
-        return result;
-    }
-
-    /**
-     * 解析ONNX输出（支持YOLOv5-v11多种格式）
-     */
-    private void parseOnnxOutput(Object rawOutput, long[] tensorShape, Integer expectedClassCount,
-                                 float confThreshold, DetectionResult result) {
-        if (rawOutput instanceof float[][][]) {
-            float[][][] batch = (float[][][]) rawOutput;
-
-            // 判断是否需要转置 (YOLOv11: [1, 84, 8400])
-            boolean needTranspose = tensorShape.length == 3 &&
-                    tensorShape[1] < tensorShape[2] &&
-                    tensorShape[1] <= (expectedClassCount + 5);
-
-            for (float[][] detections : batch) {
-                if (needTranspose) {
-                    parseTransposedDetections(detections, tensorShape, expectedClassCount, confThreshold, result);
-                } else {
-                    parseStandardDetections(detections, expectedClassCount, confThreshold, result);
-                }
-            }
-        } else if (rawOutput instanceof float[][]) {
-            parseStandardDetections((float[][]) rawOutput, expectedClassCount, confThreshold, result);
-        }
-    }
-
-    /**
-     * 解析转置格式（YOLOv11）
-     */
-    private void parseTransposedDetections(float[][] detections, long[] tensorShape,
-                                           Integer expectedClassCount, float confThreshold,
-                                           DetectionResult result) {
-        int numFeatures = (int) tensorShape[1];
-        int numDetections = (int) tensorShape[2];
-        int numClasses = numFeatures - 4;
-
-        for (int i = 0; i < numDetections; i++) {
-            float cx = detections[0][i];
-            float cy = detections[1][i];
-            float w = detections[2][i];
-            float h = detections[3][i];
-
-            // 找最高分类别
-            float maxScore = 0;
-            int classId = 0;
-            for (int c = 0; c < numClasses; c++) {
-                if (detections[4 + c][i] > maxScore) {
-                    maxScore = detections[4 + c][i];
-                    classId = c;
-                }
-            }
-
-            if (maxScore > confThreshold && classId < expectedClassCount) {
-                result.addDetection(cx - w / 2, cy - h / 2, w, h, maxScore, classId);
-            }
-        }
-    }
-
-    /**
-     * 解析标准格式（YOLOv5/v8）
-     */
-    private void parseStandardDetections(float[][] detections, Integer expectedClassCount,
-                                         float confThreshold, DetectionResult result) {
-        for (float[] det : detections) {
-            boolean hasObjectness = det.length > 5;
-            int startIdx = hasObjectness ? 5 : 4;
-
-            // 找最高分类别
-            float maxScore = 0;
-            int classId = 0;
-            for (int i = startIdx; i < det.length; i++) {
-                if (det[i] > maxScore) {
-                    maxScore = det[i];
-                    classId = i - startIdx;
-                }
-            }
-
-            float confidence = hasObjectness ? det[4] * maxScore : maxScore;
-
-            if (confidence > confThreshold && classId < expectedClassCount) {
-                float cx = det[0], cy = det[1], w = det[2], h = det[3];
-                result.addDetection(cx - w / 2, cy - h / 2, w, h, confidence, classId);
+                return dr;
             }
         }
     }
@@ -616,7 +789,59 @@ public class VideoReadOnnx implements Runnable {
         double h = Math.min(box.height / scale, image.rows() - y);
         return new BoundingBox(x, y, w, h);
     }
-
+    private void parseOnnxOutput(Object raw, long[] shape, Integer expClass,
+                                 float confThr, DetectionResult result) {
+        if (raw instanceof float[][][]) {
+            float[][][] batch = (float[][][]) raw;
+            boolean needTranspose = shape.length == 3 && shape[1] < shape[2]
+                    && shape[1] <= (expClass + 5);
+            for (float[][] d : batch) {
+                if (needTranspose) parseTransposedDetections(d, shape, expClass, confThr, result);
+                else               parseStandardDetections(d, expClass, confThr, result);
+            }
+        } else if (raw instanceof float[][]) {
+            parseStandardDetections((float[][]) raw, expClass, confThr, result);
+        }
+    }
+    private void parseTransposedDetections(float[][] det, long[] shape, Integer expClass,
+                                           float confThr, DetectionResult result) {
+        int nc = (int) shape[1] - 4, nd = (int) shape[2];
+        for (int i = 0; i < nd; i++) {
+            float cx = det[0][i], cy = det[1][i], w = det[2][i], h = det[3][i];
+            float max = 0; int cid = 0;
+            for (int c = 0; c < nc; c++) if (det[4 + c][i] > max) { max = det[4 + c][i]; cid = c; }
+            if (max > confThr && cid < expClass)
+                result.addDetection(cx - w / 2, cy - h / 2, w, h, max, cid);
+        }
+    }
+    private void parseStandardDetections(float[][] det, Integer expClass,
+                                         float confThr, DetectionResult result) {
+        for (float[] d : det) {
+            boolean hasObj = d.length > 5; int si = hasObj ? 5 : 4;
+            float max = 0; int cid = 0;
+            for (int i = si; i < d.length; i++) if (d[i] > max) { max = d[i]; cid = i - si; }
+            float conf = hasObj ? d[4] * max : max;
+            if (conf > confThr && cid < expClass)
+                result.addDetection(d[0] - d[2] / 2, d[1] - d[3] / 2, d[2], d[3], conf, cid);
+        }
+    }
+    private DetectionResult runOnnxInference(OrtSession session, OrtEnvironment env,
+                                             float[] inputData, Integer expClass) throws Exception {
+        long[] shape = {1, 3, 640, 640};
+        DetectionResult result = new DetectionResult();
+        try (OnnxTensor t = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputData), shape)) {
+            try (OrtSession.Result results = session.run(
+                    Collections.singletonMap(session.getInputNames().iterator().next(), t))) {
+                for (Map.Entry<String, OnnxValue> e : results) {
+                    if (!(e.getValue() instanceof OnnxTensor)) continue;
+                    OnnxTensor tensor = (OnnxTensor) e.getValue();
+                    parseOnnxOutput(tensor.getValue(), tensor.getInfo().getShape(),
+                            expClass, 0.45f, result);
+                }
+            }
+        }
+        return result;
+    }
     private FFmpegFrameGrabber restartGrabber(FFmpegFrameGrabber grabber) throws Exception {
         if (grabber != null) { grabber.stop(); grabber.release(); }
         return createOptimizedGrabber();

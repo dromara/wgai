@@ -106,6 +106,7 @@ public class TabAiWarningController extends JeecgController<TabAiWarning, ITabAi
 		 tabAiWarning.setWarningCome(pushInfo.getVideo());
 		 tabAiWarning.setWaringAi(pushInfo.getModelId());
 		 tabAiWarning.setWaringState("未处理");
+		 tabAiWarning.setRemake(pushInfo.getModelArea());
 	//	 tabAiWarning.setw
 		 tabAiWarningService.save(tabAiWarning);
 		 return Result.OK("添加成功！");

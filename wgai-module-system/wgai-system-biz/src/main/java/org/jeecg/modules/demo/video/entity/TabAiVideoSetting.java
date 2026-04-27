@@ -117,9 +117,48 @@ public class TabAiVideoSetting implements Serializable {
     @Dict(dicCode = "push_static")
     @ApiModelProperty(value = "是否开启区域识别")
     private Integer isBy;
+    @Dict(dicCode = "push_static")
+    @ApiModelProperty(value = "是否推送报警区域")
+    private Integer isByPush;
 
+    @Dict(dicCode = "push_static")
+    @ApiModelProperty(value = "是否推送报警区域")
+    private Integer isByWrite;
 
     @Dict(dicCode = "push_static")
     @ApiModelProperty(value = "是否跟随前置放大")
     private Integer isBeforZoom;
+
+
+
+    @Dict(dicCode = "warn_type")
+    @ApiModelProperty(value = "报警方式")
+    private Integer warnType;
+
+    @ApiModelProperty(value = "报警时间间隔")
+    private Integer warnTime;
+
+    @Dict(dicCode = "push_static")
+    @ApiModelProperty(value = "是否开启报警录像")
+    private Integer isRecording;
+
+    @Dict(dicCode = "push_static")
+    @ApiModelProperty(value = "是否分析录像")
+    private Integer isAnalysis;
+
+    @ApiModelProperty(value = "报警录像时间")
+    private Integer recordTime;
+
+    @Dict(dicCode = "push_static")
+    @ApiModelProperty(value = "是否本地保存录像")
+    private Integer saveRecord;
+
+    @Dict(dicCode = "push_static")
+    @ApiModelProperty(value = "保存本地")
+    private Integer saveLocalhost;
+
+    @Dict(dicCode = "push_static")
+    @ApiModelProperty(value = "是否播报")
+    private Integer isAudio;
+
 }
