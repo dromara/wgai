@@ -15,6 +15,8 @@ import org.bytedeco.opencv.global.opencv_core;
 import org.bytedeco.opencv.global.opencv_imgcodecs;
 
 import org.jeecg.common.api.vo.Result;
+import org.jeecg.modules.demo.audio.entity.TabAudioDevice;
+import org.jeecg.modules.demo.audio.mapper.TabAudioDeviceMapper;
 import org.jeecg.modules.demo.tab.service.impl.TabAiBaseServiceImpl;
 import org.jeecg.modules.demo.video.entity.*;
 import org.jeecg.modules.demo.video.mapper.*;
@@ -114,6 +116,9 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
     private static final Map<String, OnnxModelWrapper> GLOBAL_NET_CACHE_ONNX = new ConcurrentHashMap<>();
 
     @Autowired TabAiVideoSettingMapper tabAiVideoSettingMapper;
+
+    @Autowired
+    TabAudioDeviceMapper tabAudioDeviceMapper;
     @Autowired TabAiModelMapper tabAiModelMapper;
     @Autowired TabAiBaseServiceImpl tabAiBaseService;
     @Autowired TabVideoUtilServiceImpl tabVideoUtilServiceImpl;
@@ -393,6 +398,11 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
                         allPush.setIsFollow(tabAiVideoSetting.getIsFollow() == null ? 1 : tabAiVideoSetting.getIsFollow());
                         allPush.setWarinngMethod(tabAiVideoSetting.getWarinngMethod() == null ? 0 : tabAiVideoSetting.getWarinngMethod());
                         allPush.setNoDifText(StringUtils.isEmpty(tabAiVideoSetting.getNoDifText()) ? "未定义" : tabAiVideoSetting.getNoDifText());
+                        if(tabAiVideoSetting.getIsAudio()==0){//开启播报 组装播报设备
+                           List<TabAudioDevice> tabAudioDeviceList=tabAudioDeviceMapper.selectBatchIds(Arrays.asList(tabAiVideoSetting.getAudioDevice().split(",")));
+                           log.info("[开启播报：播报设备数{}]",tabAudioDeviceList.size());
+                           allPush.setTabAudioDevices(tabAudioDeviceList);
+                        }
                     }
 
                     NetPushList.add(allPush);

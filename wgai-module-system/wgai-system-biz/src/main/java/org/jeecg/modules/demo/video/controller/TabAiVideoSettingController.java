@@ -3,10 +3,7 @@ package org.jeecg.modules.demo.video.controller;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.io.IOException;
@@ -17,10 +14,13 @@ import javax.servlet.http.HttpServletResponse;
 
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtSession;
+import com.baomidou.mybatisplus.core.toolkit.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.jeecg.common.api.vo.Result;
 import org.jeecg.common.system.query.QueryGenerator;
 import org.jeecg.common.util.oConvertUtils;
+import org.jeecg.modules.demo.audio.entity.TabAudioDevice;
+import org.jeecg.modules.demo.audio.service.ITabAudioDeviceService;
 import org.jeecg.modules.demo.video.entity.TabAiModelNew;
 import org.jeecg.modules.demo.video.entity.TabAiSubscriptionNew;
 import org.jeecg.modules.demo.video.entity.TabAiVideoSetting;
@@ -81,17 +81,55 @@ public class TabAiVideoSettingController extends JeecgController<TabAiVideoSetti
 	 * @return
 	 */
 	//@AutoLog(value = "AI视频配置-分页列表查询")
-	@ApiOperation(value="AI视频配置-分页列表查询", notes="AI视频配置-分页列表查询")
-	@GetMapping(value = "/list")
-	public Result<IPage<TabAiVideoSetting>> queryPageList(TabAiVideoSetting tabAiVideoSetting,
-								   @RequestParam(name="pageNo", defaultValue="1") Integer pageNo,
-								   @RequestParam(name="pageSize", defaultValue="10") Integer pageSize,
-								   HttpServletRequest req) {
-		QueryWrapper<TabAiVideoSetting> queryWrapper = QueryGenerator.initQueryWrapper(tabAiVideoSetting, req.getParameterMap());
-		Page<TabAiVideoSetting> page = new Page<TabAiVideoSetting>(pageNo, pageSize);
-		IPage<TabAiVideoSetting> pageList = tabAiVideoSettingService.page(page, queryWrapper);
-		return Result.OK(pageList);
-	}
+	@Autowired
+	private ITabAudioDeviceService tabAudioDeviceService;
+
+	 @ApiOperation(value="AI视频配置-分页列表查询", notes="AI视频配置-分页列表查询")
+	 @GetMapping(value = "/list")
+	 public Result<IPage<TabAiVideoSetting>> queryPageList(TabAiVideoSetting tabAiVideoSetting,
+														   @RequestParam(name="pageNo", defaultValue="1") Integer pageNo,
+														   @RequestParam(name="pageSize", defaultValue="10") Integer pageSize,
+														   HttpServletRequest req) {
+		 QueryWrapper<TabAiVideoSetting> queryWrapper = QueryGenerator.initQueryWrapper(tabAiVideoSetting, req.getParameterMap());
+		 Page<TabAiVideoSetting> page = new Page<>(pageNo, pageSize);
+		 IPage<TabAiVideoSetting> pageList = tabAiVideoSettingService.page(page, queryWrapper);
+
+		 List<TabAiVideoSetting> records = pageList.getRecords();
+		 if (CollectionUtils.isNotEmpty(records)) {
+			 // 1. 收集所有设备ID（去重）
+			 Set<String> allIds = records.stream()
+					 .map(TabAiVideoSetting::getAudioDevice)
+					 .filter(StringUtils::isNotBlank)
+					 .flatMap(s -> Arrays.stream(s.split(",")))
+					 .map(String::trim)
+					 .filter(StringUtils::isNotBlank)
+					 .collect(Collectors.toSet());
+
+			 if (!allIds.isEmpty()) {
+				 // 2. 一次性查出所有设备名称，建立 id -> name 映射
+				 List<TabAudioDevice> devices = tabAudioDeviceService.listByIds(allIds);
+				 Map<String, String> idNameMap = devices.stream()
+						 .collect(Collectors.toMap(
+								 d -> String.valueOf(d.getId()),
+								 TabAudioDevice::getDeviceName,
+								 (a, b) -> a));
+
+				 // 3. 回填每条记录
+				 for (TabAiVideoSetting record : records) {
+					 String ids = record.getAudioDevice();
+					 if (StringUtils.isBlank(ids)) continue;
+					 String names = Arrays.stream(ids.split(","))
+							 .map(String::trim)
+							 .map(idNameMap::get)
+							 .filter(Objects::nonNull)
+							 .collect(Collectors.joining(","));
+					 record.setAudioDeviceName(names);
+				 }
+			 }
+		 }
+
+		 return Result.OK(pageList);
+	 }
 	
 	/**
 	 *   添加

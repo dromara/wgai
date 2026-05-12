@@ -16,7 +16,14 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Date;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.jeecg.common.util.RestUtil.*;
 
@@ -28,6 +35,164 @@ import static org.jeecg.common.util.RestUtil.*;
 @Slf4j
 public class audioSend {
 
+    // ── 常量 ──────────────────────────────────────────────────────────────────
+    private static final int  CHARS_PER_SECOND = 2;   // TextSpeed=0 时 2字/秒
+    private static final int  BUFFER_MS        = 500;  // 条目间缓冲(ms)，防止衔接过紧
+    private static final String TIME_FORMAT    = "yyyy-MM-dd HH:mm:ss";
+
+    // ── 设备播放队列尾时间表（deviceUid -> 队列尾 epoch ms）────────────────────
+    private static final ConcurrentHashMap<String, AtomicLong> DEVICE_QUEUE
+            = new ConcurrentHashMap<>();
+    /***
+     * 发送到音响
+     * @return
+     */
+    public static void sendAudio(List<TabAudioDevice> tabAudioDeviceList, String audioText){
+
+        for (TabAudioDevice audioDevice:tabAudioDeviceList) {
+            switch (audioDevice.getDeviceFac()){
+                case "1": //办公室音响协议
+                    log.info("办公室音响协议！播报内容{}",audioText);
+                     postAudioText(getToken(audioDevice),audioDevice,audioText);
+                    break;
+                case "2": //koer协议
+                    log.info("koer协议调用！播报内容{}",audioText);
+                    sendTextPlay(audioDevice,  audioText,  getKoerCookie(audioDevice));
+                    break;
+            }
+        }
+    }
+
+//------------------------------------------------koer音响设备--------------------------------------------
+    /**
+     * 获取cookie
+     * @param tabAudioDevice
+     * @return
+     */
+    /**
+     * 获取cookie
+     * @param tabAudioDevice
+     * @return JSessionID
+     */
+    public static String getKoerCookie(TabAudioDevice tabAudioDevice) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        JSONObject jsonObject = new JSONObject();
+        jsonObject.put("User", tabAudioDevice.getUsername());
+        jsonObject.put("Passwd", tabAudioDevice.getPwd());
+
+        ResponseEntity<JSONObject> json = request(
+                tabAudioDevice.getDeivceUrl() + "/login",
+                HttpMethod.POST,
+                headers,
+                null,
+                jsonObject,
+                JSONObject.class
+        );
+
+        log.info("获取 JSessionID 返回内容: {}", json.getBody());
+
+        JSONObject responseBody = json.getBody();
+        if (responseBody != null && Integer.valueOf(0).equals(responseBody.getInteger("Ret"))) {
+            return responseBody.getString("JSessionID");
+        }
+
+        log.error("获取 JSessionID 失败, 返回内容: {}", json.getBody());
+        return null;
+    }
+
+
+    // ── 核心发送方法 ───────────────────────────────────────────────────────────
+    public static String sendTextPlay(TabAudioDevice tabAudioDevice,
+                                      String audioText,
+                                      String cookie) {
+        log.info("发送的cookie={}", cookie);
+
+        // 1. 计算本条音频的预计时长(ms)
+        int speed = tabAudioDevice.getSpeed() != null ? tabAudioDevice.getSpeed() : 0;
+        long durationMs = calcDurationMs(audioText, speed);
+
+        // 2. 在设备队列中原子性地预占时间槽，返回本条应当开始的时刻
+        Date scheduledTime = reserveSlot(tabAudioDevice.getDeviceUid(), durationMs);
+        log.info("设备[{}] 预约播放时间={}, 预计时长={}ms",
+                tabAudioDevice.getDeviceUid(),
+                new SimpleDateFormat(TIME_FORMAT).format(scheduledTime),
+                durationMs);
+
+        // 3. 组装请求
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.add("Cookie", "JSESSIONID=" + cookie);
+
+        JSONObject jsonObject = new JSONObject();
+        jsonObject.put("Content",    audioText);
+        jsonObject.put("TargetIds",  Collections.singletonList(
+                Integer.parseInt(tabAudioDevice.getDeviceUid())));
+        jsonObject.put("TargetType", 1);
+        jsonObject.put("Time",       new SimpleDateFormat(TIME_FORMAT).format(scheduledTime)); // ← 关键改动
+        jsonObject.put("Playtime",   1);
+        jsonObject.put("Volume",     tabAudioDevice.getVolume());
+        jsonObject.put("PlayPrior",  1);
+        jsonObject.put("TextSpeed",  speed);
+        jsonObject.put("TextCode",   2);
+
+        ResponseEntity<JSONObject> json = request(
+                tabAudioDevice.getDeivceUrl() + "/TextPlay",
+                HttpMethod.POST,
+                headers,
+                null,
+                jsonObject,
+                JSONObject.class
+        );
+
+        log.info("发送文本播放返回内容: {}", json.getBody());
+
+        JSONObject responseBody = json.getBody();
+        if (responseBody != null && Integer.valueOf(0).equals(responseBody.getInteger("Ret"))) {
+            return responseBody.getString("TaskUUID");
+        }
+
+        log.error("发送文本播放失败, 返回内容: {}", json.getBody());
+        return null;
+    }
+
+// ── 工具方法：原子预占时间槽 ──────────────────────────────────────────────
+    /**
+     * 在设备队列中为本条音频预占时间槽。
+     * 线程安全：多线程并发调用时每条音频都能拿到独立的不重叠时间窗口。
+     *
+     * @return 本条音频应该开始播放的时刻
+     */
+    private static Date reserveSlot(String deviceUid, long durationMs) {
+        long now = System.currentTimeMillis();
+
+        AtomicLong queueTail = DEVICE_QUEUE.computeIfAbsent(deviceUid,
+                k -> new AtomicLong(now));
+        // 用数组捕获 lambda 内的 startTime（AtomicLong 只能存一个值）
+        long[] startTime = new long[1];
+
+        queueTail.updateAndGet(tail -> {
+            startTime[0] = Math.max(tail, now);          // 不早于当前时间
+            return startTime[0] + durationMs + BUFFER_MS; // 队列尾后移
+        });
+
+        return new Date(startTime[0]);
+    }
+
+// ── 工具方法：估算播放时长 ────────────────────────────────────────────────
+    /**
+     * 根据文本字数和 TextSpeed 估算播放时长(ms)。
+     * TextSpeed=0 → 2字/秒；如有其他档位可在此扩展。
+     */
+    private static long calcDurationMs(String text, int textSpeed) {
+        if (text == null || text.isEmpty()) return 0;
+        double charsPerSecond = (textSpeed == 0) ? 2.0 : 2.0; // 按需扩展其他档位
+        return (long) (text.length() / charsPerSecond * 1000);
+    }
+
+
+ // -------------------------------------------公司音响设备--------------------------------
 
     /**
      * 获取token
@@ -142,12 +307,22 @@ public class audioSend {
     }
 
     public static void main(String[] args) {
+        List<TabAudioDevice> audioDeviceList=new ArrayList<>();
 
         TabAudioDevice tabAudioDevice=new TabAudioDevice();
         tabAudioDevice.setDeivceUrl("http://192.168.0.160:8307");
-        String token=getToken(tabAudioDevice);
-
-        postAudioText(token,tabAudioDevice,"请勿抽烟 请勿在办公室抽烟");
+        tabAudioDevice.setDeviceUid("1");
+        audioDeviceList.add(tabAudioDevice);
+        TabAudioDevice tabAudioDevice2=new TabAudioDevice();
+        tabAudioDevice2.setDeivceUrl("http://192.168.0.160:8307");
+        tabAudioDevice2.setDeviceUid("1");
+        audioDeviceList.add(tabAudioDevice2);
+        for (TabAudioDevice audioDevice:audioDeviceList) {
+            sendTextPlay(audioDevice,
+                    "请勿抽烟 请勿在办公室抽烟",
+                   "11");
+        }
+      //  postAudioText(token,tabAudioDevice,"请勿抽烟 请勿在办公室抽烟");
 
        // wavToMp3(  sendWav(), "F:\\JAVAAI\\audio", "test.mp3");
     }

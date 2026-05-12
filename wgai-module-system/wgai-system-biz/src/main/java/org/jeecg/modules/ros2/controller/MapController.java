@@ -10,38 +10,52 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import javax.annotation.PostConstruct;
+import javax.annotation.PreDestroy;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 地图管理控制器 - 适配 fast_lio + Unitree L1
+ * 地图管理控制器 - 新架构(systemd 托管 ROS 栈,或直接 ros2 launch 启动)
  *
- * 接口：
- *   POST   /api/map/load          加载地图 + 自动写 nav2_params + 启动全部进程
- *   POST   /api/map/stop-nav2     停止全部导航进程
- *   GET    /api/map/nav2-status   查询运行状态
- *   GET    /api/map/nav2-health   查询健康状态（启动约20秒后调用）
+ * 架构说明:
+ *   ROS 栈(rosbridge + 雷达 + fast_lio + pc2scan + Nav2)由 launch 脚本启动,
+ *   可由 systemd 托管(robot-nav.service)或直接 ros2 launch 运行。
+ *   Java 只负责:
+ *     1. 读写地图文件(yaml/pgm)
+ *     2. 通过 /map_server/load_map service 热切换地图(无需重启 Nav2)
+ *     3. 维护 last_used.yaml 软链接(launch 脚本启动时自动恢复上次地图)
+ *     4. 自动持久化 AMCL 位姿
+ *     5. 维护 nav2_params_fastlio.yaml(供 launch 脚本下次启动读取)
+ *     6. 健康检查
+ *
+ * 接口:
+ *   POST   /api/map/load          切换到指定地图(service 调用,瞬时)
+ *   GET    /api/map/nav2-status   查询 Nav2 运行状态
+ *   GET    /api/map/nav2-health   查询 TF/scan/AMCL 健康状态
  *   GET    /api/map/list          地图列表
  *   GET    /api/map/image/{name}  pgm→png 图像
  *   GET    /api/map/meta/{name}   分辨率/原点/尺寸
  *   DELETE /api/map/{name}        删除地图
  *
- * 位姿自动持久化机制（无需前端手动设置初始位置）：
- *   - Nav2 启动后每 5 秒自动读取 AMCL 当前位姿并保存到文件
- *   - 下次加载同一张地图时，自动从文件恢复上次位姿作为 AMCL 初始位置
- *   - 若位姿文件不存在（首次使用），默认初始化为 (0, 0, 0)
+ * 位姿自动持久化机制:
+ *   - 加载地图后每 5 秒自动读取 AMCL 当前位姿并保存到文件
+ *   - 下次切换同一张地图或系统重启时,自动从文件恢复上次位姿
  *   - 位姿文件路径: {MAP_DIR}/{mapName}_last_pose.json
  *
- * TF 链（fast_lio 自己提供，无需额外发布）：
- *   fast_lio → camera_init → body     (实时里程计)
- *   AMCL    → map → camera_init       (定位结果)
+ * TF 链(由 launch 脚本启动的 fast_lio + AMCL 提供):
+ *   fast_lio:  camera_init → body
+ *   AMCL:      map → camera_init
  *   完整链:    map → camera_init → body  ✓
  */
 @Slf4j
@@ -50,49 +64,82 @@ import java.util.regex.Pattern;
 @Api(tags = "地图管理")
 public class MapController {
 
-    // ===================== 可修改的配置常量 =====================
+    // ===================== 配置常量 =====================
 
     private static final String MAP_DIR     = "/home/ros/maps/";
     private static final String SETUP_BASH  = "/home/lio_ws/install/setup.bash";
     private static final String ROS_BASH    = "/opt/ros/humble/setup.bash";
 
-    /** nav2 params 文件生成路径 */
+    /** systemd 服务名(与 /etc/systemd/system/robot-nav.service 一致) */
+    private static final String SYSTEMD_SERVICE = "robot-nav";
+
+    /** nav2 params 文件路径(与 robot_full.launch.py 中的路径一致) */
     private static final String NAV2_PARAMS_PATH = "/home/ros/nav2_params_fastlio.yaml";
 
-    /** 位姿持久化文件后缀（每张地图独立） */
+    /** 位姿持久化文件后缀(每张地图独立) */
     private static final String POSE_FILE_SUFFIX = "_last_pose.json";
 
-    /** fast_lio 里程计父帧 */
+    /** launch 脚本启动时优先读取的软链接文件名 */
+    private static final String LAST_USED_LINK = "last_used.yaml";
+
+    /** fast_lio 里程计父帧 / 机器人帧 / 话题 */
     private static final String ODOM_FRAME   = "camera_init";
-    /** fast_lio 机器人帧 */
     private static final String BASE_FRAME   = "body";
-    /** fast_lio 里程计话题 */
     private static final String ODOM_TOPIC   = "/Odometry";
-    /** fast_lio 点云话题 */
     private static final String CLOUD_TOPIC  = "/cloud_registered";
+
     /** 点云投影高度范围 */
     private static final double SCAN_MIN_H   = 0.1;
     private static final double SCAN_MAX_H   = 1.5;
-    /** 机器人半径（米） */
+    /** 机器人半径 / 膨胀半径(米) */
     private static final double ROBOT_RADIUS = 0.3;
-    /** 膨胀半径（米） */
-    private static final double INFLATE_R    = 0.55;
+    private static final double SELF_FILTER_RADIUS = 0.40;   // ① 机身自过滤距离(m)
+    private static final double INFLATE            = 0.20;   // ③ 膨胀半径(m),原 INFLATE_R=0.3
 
-    // ===================== 进程管理 =====================
+    // ===================== 运行状态 =====================
 
-    private volatile Process pc2scanProcess = null;
-    private volatile Process nav2Process    = null;
     private volatile String  loadedMapName  = null;
+    private volatile Map<String, Object> lastHealthCheck = null;
 
     /** 位姿自动保存定时任务 */
     private volatile ScheduledExecutorService poseAutoSaveScheduler = null;
 
     private final ExecutorService executor = Executors.newCachedThreadPool();
 
-    // ===================== 加载地图（核心） =====================
+    // ===================== 启动初始化 =====================
+
+    /**
+     * Java 启动时:
+     *   1. 如果 nav2_params_fastlio.yaml 不存在,写一份默认配置
+     *      (这样 launch 脚本启动 Nav2 时不会因为缺文件失败)
+     *   2. 不主动启动任何 ROS 进程,launch 脚本/systemd 自管
+     */
+    @PostConstruct
+    public void init() {
+        try {
+            File f = new File(NAV2_PARAMS_PATH);
+            if (!f.exists()) {
+                log.info("[初始化] {} 不存在,写入默认配置...", NAV2_PARAMS_PATH);
+                writeNav2Params(NAV2_PARAMS_PATH, 0.0, 0.0, 0.0, "");
+                log.info("[初始化] ✅ 默认 nav2_params 已生成");
+            } else {
+                log.info("[初始化] {} 已存在,跳过", NAV2_PARAMS_PATH);
+            }
+        } catch (Exception e) {
+            log.warn("[初始化] 写入默认 nav2_params 失败(可手动创建): {}", e.getMessage());
+        }
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        stopPoseAutoSave();
+        executor.shutdown();
+    }
+
+    // ===================== 切换地图(核心) =====================
 
     @PostMapping("/load")
-    @ApiOperation("加载地图并启动Nav2完整导航栈（自动恢复上次位姿，无需手动设置）")
+    @ApiOperation("切换到指定地图(通过 Nav2 service 热切换,无需重启)")
     public Result<Map<String, Object>> loadMap(@RequestBody Map<String, Object> params) {
         try {
             String mapName = (String) params.get("mapName");
@@ -106,120 +153,256 @@ public class MapController {
                 return Result.error("地图文件不存在: " + yamlPath);
             }
 
-            // ─────────────────────────────────────────────────────────────
-            // 读取上次保存的位姿，若无则默认 (0, 0, 0)
-            // 无需前端传入初始位置，自动恢复上次位置
-            // ─────────────────────────────────────────────────────────────
-            double[] savedPose = loadSavedPose(mapName);
-            double initX     = savedPose[0];
-            double initY     = savedPose[1];
-            double initTheta = savedPose[2];
-            boolean hasSavedPose = (savedPose[0] != 0.0 || savedPose[1] != 0.0 || savedPose[2] != 0.0);
-            log.info("初始位姿: x={}, y={}, theta={} ({})",
-                    initX, initY, initTheta, hasSavedPose ? "从文件恢复" : "默认(0,0,0)/首次使用");
+            // 1. 检查 Nav2 是否可达(兼容 systemd 和直接 ros2 launch 两种启动方式)
+            if (!isNav2Active()) {
+                return Result.error(
+                        "Nav2 服务未运行。请确认已启动:\n"
+                                + "  方式 A: ros2 launch /home/ros/robot_full.launch.py\n"
+                                + "  方式 B: sudo systemctl start " + SYSTEMD_SERVICE
+                );
+            }
 
-            // 停止旧进程
-            stopNav2Internal();
-            Thread.sleep(500);
+            // 2. 读上次保存的位姿(用于 params 文件 & 提示)
+            double[] saved = loadSavedPose(mapName);
+            boolean hasSavedPose =
+                    (saved[0] != 0.0 || saved[1] != 0.0 || saved[2] != 0.0);
 
-            // ─────────────────────────────────────────────────────────────
-            // Step 1: 自动生成 nav2_params_fastlio.yaml（含初始位姿）
-            // ─────────────────────────────────────────────────────────────
-            writeNav2Params(NAV2_PARAMS_PATH, initX, initY, initTheta);
-            log.info("✅ nav2 params 已写入: {}", NAV2_PARAMS_PATH);
+            // 3. 关键:调 /map_server/load_map service 热切换(无需重启 Nav2)
+            String svcOut = callMapLoadService(yamlPath);
+            boolean ok = svcOut != null && (svcOut.contains("result=0")
+                    || svcOut.contains("result: 0"));
+            if (!ok) {
+                log.error("地图切换失败,service 输出: {}", svcOut);
+                return Result.error("地图切换失败,Nav2 service 调用未成功:\n" + svcOut);
+            }
 
-            // ─────────────────────────────────────────────────────────────
-            // Step 2: 点云 → 激光扫描 转换
-            // ─────────────────────────────────────────────────────────────
-            String pc2scanCmd = "source " + ROS_BASH
-                    + " && source " + SETUP_BASH
-                    + " && ros2 run pointcloud_to_laserscan pointcloud_to_laserscan_node"
-                    + " --ros-args"
-                    + " -r cloud_in:=" + CLOUD_TOPIC
-                    + " -r scan:=/scan"
-                    + " -p min_height:=" + SCAN_MIN_H
-                    + " -p max_height:=" + SCAN_MAX_H
-                    + " -p angle_min:=-3.14159"
-                    + " -p angle_max:=3.14159"
-                    + " -p angle_increment:=0.0087"
-                    + " -p range_min:=0.1"
-                    + " -p range_max:=30.0"
-                    + " -p target_frame:=" + BASE_FRAME
-                    + " -p transform_tolerance:=0.1"
-                    + " -p use_inf:=true";
-            pc2scanProcess = startProcess("pc2scan", pc2scanCmd);
-            Thread.sleep(1000);
-            log.info("✅ 点云→激光: {} → /scan", CLOUD_TOPIC);
+            // 4. ✅ 更新 last_used.yaml 软链接 → launch 脚本重启时自动恢复此图
+            updateLastUsedSymlink(mapName);
 
-            // ─────────────────────────────────────────────────────────────
-            // Step 3: 启动 Nav2 bringup（AMCL 定位 + 完整导航栈）
-            //   bringup_launch.py 内含 AMCL，会在初始位姿附近撒粒子
-            //   AMCL 收到 /scan 后开始定位，发布 map→camera_init TF
-            // ─────────────────────────────────────────────────────────────
-            String nav2Cmd = "source " + ROS_BASH
-                    + " && source " + SETUP_BASH
-                    + " && ros2 launch nav2_bringup bringup_launch.py"
-                    + " map:=" + yamlPath
-                    + " use_sim_time:=false"
-                    + " params_file:=" + NAV2_PARAMS_PATH;
-            nav2Process   = startProcess("nav2", nav2Cmd);
+            // 5. 重新生成 params 文件(供下次启动 Nav2 时使用最新配置)
+            writeNav2Params(NAV2_PARAMS_PATH, saved[0], saved[1], saved[2], yamlPath);
+
+            // 6. 启动位姿自动保存
+            startPoseAutoSave(mapName);
+
+            // 7. 异步触发健康检查(供前端轮询查询)
+            scheduleHealthCheck(mapName);
+
             loadedMapName = mapName;
 
-            log.info("✅ 全部启动完成 | 地图:{} | odomFrame:{} | baseFrame:{} | 激光:{}",
-                    mapName, ODOM_FRAME, BASE_FRAME, CLOUD_TOPIC);
-
-            // ─────────────────────────────────────────────────────────────
-            // Step 4: 异步健康检查 + 启动位姿自动保存
-            // ─────────────────────────────────────────────────────────────
-            scheduleHealthCheck(mapName);
-            final String finalMapName = mapName;
-            executor.submit(new Runnable() {
-                public void run() {
-                    try {
-                        Thread.sleep(30000); // 等 Nav2 完全就绪后再开始保存
-                        startPoseAutoSave(finalMapName);
-                    } catch (InterruptedException ignored) {}
-                }
-            });
-
+            // 8. 提示用户:如果机器人位置不准,需调用全局重定位
             Map<String, Object> res = new LinkedHashMap<>();
-            res.put("mapName",      mapName);
-            res.put("yamlPath",     yamlPath);
-            res.put("imageUrl",     "/api/map/image/" + mapName);
-            res.put("nav2Started",  true);
-            res.put("paramsFile",   NAV2_PARAMS_PATH);
-            res.put("scanConvert",  CLOUD_TOPIC + " → /scan");
-            res.put("odomFrame",    ODOM_FRAME);
-            res.put("baseFrame",    BASE_FRAME);
-            res.put("initialPose",  buildInitialPoseInfo(initX, initY, initTheta, hasSavedPose));
-            res.put("healthCheck",  "异步检测中，约20秒后可查询 /api/map/nav2-health");
+            res.put("mapName",       mapName);
+            res.put("yamlPath",      yamlPath);
+            res.put("imageUrl",      "/api/map/image/" + mapName);
+            res.put("hasSavedPose",  hasSavedPose);
+            res.put("savedPose",     buildPoseInfo(saved[0], saved[1], saved[2], hasSavedPose));
+            res.put("nextStep", hasSavedPose
+                    ? "地图已切换,使用上次保存的位姿。如机器人位置偏差,请调用 /api/navigation/global-localization"
+                    : "地图已切换,首次使用默认(0,0,0)。请调用 /api/navigation/global-localization 触发全局重定位,然后遥控机器人慢速转一圈"
+            );
+
+            log.info("✅ 地图切换成功: {} (位姿:{})", mapName,
+                    hasSavedPose ? "从文件恢复" : "默认(0,0,0)");
+
             return Result.OK(res);
 
         } catch (Exception e) {
-            log.error("加载地图失败", e);
-            return Result.error("加载失败: " + e.getMessage());
+            log.error("切换地图失败", e);
+            return Result.error("切换失败: " + e.getMessage());
         }
     }
 
-    private Map<String, Object> buildInitialPoseInfo(double x, double y, double theta, boolean fromFile) {
+    /**
+     * 调用 /map_server/load_map service 热切换地图
+     * 等价于命令: ros2 service call /map_server/load_map nav2_msgs/srv/LoadMap
+     *           '{map_url: "/path/to/map.yaml"}'
+     */
+    private String callMapLoadService(String yamlPath) {
+        try {
+            String cmd = "source " + ROS_BASH + " && source " + SETUP_BASH
+                    + " && ros2 service call /map_server/load_map"
+                    + " nav2_msgs/srv/LoadMap"
+                    + " '{map_url: \"" + yamlPath + "\"}'";
+            return runCommand(cmd, 15);
+        } catch (Exception e) {
+            log.error("调用 /map_server/load_map 失败", e);
+            return null;
+        }
+    }
+
+    /**
+     * 更新 /home/ros/maps/last_used.yaml 软链接,指向当前加载的地图。
+     * launch 脚本重启时优先读取这个软链接,实现"上次用什么图,启动后自动恢复"。
+     *
+     * 用相对路径建链接,这样整个 maps 目录搬到别处也不会失效。
+     * 部分文件系统(如某些 NTFS/FAT)不支持软链接,会回退到文件拷贝模式。
+     */
+    private void updateLastUsedSymlink(String mapName) {
+        Path lastUsed = Paths.get(MAP_DIR, LAST_USED_LINK);
+        Path target   = Paths.get(mapName + ".yaml");      // 相对路径
+
+        try {
+            Files.deleteIfExists(lastUsed);
+            Files.createSymbolicLink(lastUsed, target);
+            log.info("✅ last_used 软链接已更新 → {}.yaml", mapName);
+        } catch (UnsupportedOperationException e) {
+            // 文件系统不支持软链接,回退到拷贝
+            try {
+                Path srcAbs = Paths.get(MAP_DIR, mapName + ".yaml");
+                Files.copy(srcAbs, lastUsed, StandardCopyOption.REPLACE_EXISTING);
+                log.info("✅ last_used.yaml 已更新(拷贝模式) → {}.yaml", mapName);
+            } catch (Exception ex) {
+                log.warn("更新 last_used 失败(不影响本次切图): {}", ex.getMessage());
+            }
+        } catch (Exception e) {
+            log.warn("更新 last_used 软链接失败(不影响本次切图): {}", e.getMessage());
+        }
+    }
+
+    private Map<String, Object> buildPoseInfo(double x, double y, double theta, boolean fromFile) {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("x",        x);
-        m.put("y",        y);
-        m.put("theta",    theta);
-        m.put("source",   fromFile ? "pose_file" : "default(0,0,0)");
+        m.put("x",      x);
+        m.put("y",      y);
+        m.put("theta",  theta);
+        m.put("source", fromFile ? "pose_file" : "default(0,0,0)");
         return m;
+    }
+
+    // ===================== Nav2 服务状态 =====================
+
+    @GetMapping("/nav2-status")
+    @ApiOperation("查询 Nav2 运行状态(兼容 launch 脚本和 systemd 两种启动方式)")
+    public Result<Map<String, Object>> getNav2Status() {
+        Map<String, Object> s = new LinkedHashMap<>();
+        boolean active = isNav2Active();
+        s.put("nav2Running",  active);
+        s.put("loadedMap",    loadedMapName);
+        s.put("poseSaving",   poseAutoSaveScheduler != null
+                && !poseAutoSaveScheduler.isShutdown());
+        s.put("startupHint",  active
+                ? null
+                : "Nav2 未运行,请使用以下方式之一启动:\n"
+                + "  ros2 launch /home/ros/robot_full.launch.py\n"
+                + "  sudo systemctl start " + SYSTEMD_SERVICE);
+        return Result.OK(s);
+    }
+
+    /**
+     * 检查 Nav2 是否在运行,兼容两种启动方式:
+     *   方式 A: systemd 托管 → systemctl is-active robot-nav
+     *   方式 B: 直接 ros2 launch → 检查 /map_server/load_map service 是否注册到 ROS2 graph
+     */
+    private boolean isNav2Active() {
+        // 方式 A: systemd
+        try {
+            String state = runCommand(
+                    "systemctl is-active " + SYSTEMD_SERVICE + " 2>&1", 3
+            ).trim();
+            if ("active".equals(state)) return true;
+        } catch (Exception ignored) {}
+
+        // 方式 B: 检查 map_server 的 load_map service 是否可达
+        try {
+            String cmd = "source " + ROS_BASH + " && source " + SETUP_BASH
+                    + " && timeout 3 ros2 service list 2>&1 | grep -c '/map_server/load_map'";
+            String out = runCommand(cmd, 5).trim();
+            if (!out.isEmpty()) {
+                int n;
+                try {
+                    n = Integer.parseInt(out.replaceAll("\\D", ""));
+                } catch (NumberFormatException nfe) {
+                    n = 0;
+                }
+                return n > 0;
+            }
+        } catch (Exception ignored) {}
+
+        return false;
+    }
+
+    // ===================== Nav2 健康自检 =====================
+
+    @GetMapping("/nav2-health")
+    @ApiOperation("查询 Nav2 健康状态(TF/scan/AMCL)")
+    public Result<Map<String, Object>> getNav2Health() {
+        if (lastHealthCheck == null) {
+            Map<String, Object> pending = new LinkedHashMap<>();
+            pending.put("status",  "pending");
+            pending.put("message", "尚未执行检测,请先调用 /api/map/load 后等待几秒");
+            return Result.OK(pending);
+        }
+        return Result.OK(lastHealthCheck);
+    }
+
+    private void scheduleHealthCheck(String mapName) {
+        final String mName = mapName;
+        executor.submit(() -> {
+            try {
+                // 不像旧版要等 20s 启动,新架构 Nav2 已经在跑了,5s 给 service 切换稳定
+                Thread.sleep(5000);
+
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("mapName",   mName);
+                result.put("checkTime", new java.util.Date().toString());
+
+                // ① fast_lio TF
+                boolean fastLioTfOk = checkTfAvailable(ODOM_FRAME, BASE_FRAME, 5);
+                result.put("fastLioTfAvailable", fastLioTfOk);
+                if (!fastLioTfOk) {
+                    result.put("fastLioWarn", "⚠ " + ODOM_FRAME + "→" + BASE_FRAME
+                            + " TF 不可用,fast_lio 可能未运行。检查启动日志:"
+                            + " ros2 launch 终端输出 或 journalctl -u " + SYSTEMD_SERVICE);
+                }
+
+                // ② /scan
+                boolean scanOk = checkTopicActive("/scan", 5);
+                result.put("scanActive", scanOk);
+                result.put("scanTopic",  CLOUD_TOPIC + " → /scan");
+
+                // ③ AMCL 节点
+                boolean amclOk = checkNodeExists("amcl", 5);
+                result.put("amclRunning", amclOk);
+
+                // ④ map → odom TF(关键)
+                boolean tfOk = checkTfAvailable("map", ODOM_FRAME, 8);
+                result.put("mapTfAvailable", tfOk);
+                if (!tfOk) {
+                    result.put("tfWarn", "⚠ map→" + ODOM_FRAME
+                            + " TF 不可用,可调用 POST /api/navigation/global-localization "
+                            + "触发全局重定位");
+                }
+
+                // ⑤ 位姿文件
+                File poseFile = new File(MAP_DIR + mName + POSE_FILE_SUFFIX);
+                result.put("poseFileSaved", poseFile.exists());
+
+                boolean allOk = fastLioTfOk && scanOk && amclOk && tfOk;
+                result.put("status", allOk ? "healthy" : (amclOk ? "degraded" : "error"));
+                result.put("message", allOk
+                        ? "✅ Nav2 完全就绪,可以设置导航目标"
+                        : (!fastLioTfOk ? "❌ fast_lio 未运行"
+                        : (!tfOk        ? "❌ map TF 未就绪,需全局重定位"
+                        : "⚠ 部分服务异常但导航 TF 已就绪")));
+
+                lastHealthCheck = result;
+                log.info("[健康检查] fastLioTf={}, scan={}, amcl={}, mapTf={}",
+                        fastLioTfOk, scanOk, amclOk, tfOk);
+
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (Exception e) {
+                log.error("[健康检查] 异常", e);
+            }
+        });
     }
 
     // ===================== 位姿持久化 =====================
 
-    /**
-     * 读取上次保存的位姿文件
-     * 返回 [x, y, theta]，若文件不存在或读取失败则返回 [0, 0, 0]
-     */
     private double[] loadSavedPose(String mapName) {
         File f = new File(MAP_DIR + mapName + POSE_FILE_SUFFIX);
         if (!f.exists()) {
-            log.info("[位姿恢复] 无历史记录，使用默认位姿 (0, 0, 0)");
+            log.info("[位姿恢复] 无历史记录,使用默认 (0, 0, 0)");
             return new double[]{0.0, 0.0, 0.0};
         }
         try {
@@ -227,17 +410,14 @@ public class MapController {
             double x     = parseJsonDouble(json, "x");
             double y     = parseJsonDouble(json, "y");
             double theta = parseJsonDouble(json, "theta");
-            log.info("[位姿恢复] 读取成功: x={}, y={}, theta={}", x, y, theta);
+            log.info("[位姿恢复] x={}, y={}, theta={}", x, y, theta);
             return new double[]{x, y, theta};
         } catch (Exception e) {
-            log.warn("[位姿恢复] 读取失败，使用默认位姿 (0, 0, 0): {}", e.getMessage());
+            log.warn("[位姿恢复] 读取失败,使用默认 (0,0,0): {}", e.getMessage());
             return new double[]{0.0, 0.0, 0.0};
         }
     }
 
-    /**
-     * 将当前位姿保存到文件
-     */
     private void savePose(String mapName, double x, double y, double theta) {
         try {
             String json = String.format(
@@ -253,44 +433,31 @@ public class MapController {
         }
     }
 
-    /**
-     * 启动后台定时任务：每 5 秒读取 AMCL 位姿并持久化
-     * 机器人运行中自动保存，断电/重启后自动恢复，无需手动设置初始位置
-     */
     private void startPoseAutoSave(String mapName) {
         if (poseAutoSaveScheduler != null && !poseAutoSaveScheduler.isShutdown()) {
             poseAutoSaveScheduler.shutdownNow();
         }
         poseAutoSaveScheduler = Executors.newSingleThreadScheduledExecutor();
         final String finalMapName = mapName;
-        poseAutoSaveScheduler.scheduleAtFixedRate(new Runnable() {
-            public void run() {
-                try {
-                    // 读取 AMCL 当前位姿（取一帧）
-                    String cmd = "source " + ROS_BASH + " && source " + SETUP_BASH
-                            + " && timeout 3 ros2 topic echo /amcl_pose"
-                            + " --field pose.pose --once 2>&1";
-                    String out = runCommand(cmd, 4);
-                    if (out.contains("position")) {
-                        double x     = parseRosField(out, "x");
-                        double y     = parseRosField(out, "y");
-                        double theta = parseYawFromQuaternion(out);
-                        savePose(finalMapName, x, y, theta);
-                        log.debug("[位姿自动保存] x={:.4f}, y={:.4f}, theta={:.4f}", x, y, theta);
-                    }
-                } catch (Exception e) {
-                    log.debug("[位姿自动保存] 跳过: {}", e.getMessage());
+        poseAutoSaveScheduler.scheduleAtFixedRate(() -> {
+            try {
+                String cmd = "source " + ROS_BASH + " && source " + SETUP_BASH
+                        + " && timeout 3 ros2 topic echo /amcl_pose"
+                        + " --field pose.pose --once 2>&1";
+                String out = runCommand(cmd, 4);
+                if (out.contains("position")) {
+                    double x     = parseRosField(out, "x");
+                    double y     = parseRosField(out, "y");
+                    double theta = parseYawFromQuaternion(out);
+                    savePose(finalMapName, x, y, theta);
                 }
+            } catch (Exception e) {
+                log.debug("[位姿自动保存] 跳过: {}", e.getMessage());
             }
-        }, 0, 5, TimeUnit.SECONDS);
-
-        log.info("✅ 位姿自动保存已启动，每5秒保存到: {}{}{}",
-                MAP_DIR, mapName, POSE_FILE_SUFFIX);
+        }, 5, 5, TimeUnit.SECONDS);
+        log.info("✅ 位姿自动保存已启动 → {}{}{}", MAP_DIR, mapName, POSE_FILE_SUFFIX);
     }
 
-    /**
-     * 停止位姿自动保存（stopNav2 时调用）
-     */
     private void stopPoseAutoSave() {
         if (poseAutoSaveScheduler != null && !poseAutoSaveScheduler.isShutdown()) {
             poseAutoSaveScheduler.shutdownNow();
@@ -302,24 +469,39 @@ public class MapController {
     // ===================== 生成 nav2_params.yaml =====================
 
     /**
-     * 将 nav2 参数写入文件
-     * initX/Y/Theta：AMCL 初始位姿（从历史文件读取，首次默认 0,0,0）
-     * set_initial_pose 始终为 true，AMCL 激活后立即在此位置附近撒粒子并发布 map TF
+     * 生成 nav2_params_fastlio.yaml
+     *
+     * Unitree L1 专项修复 (v2):
+     *   ① obstacle_min_range / raytrace_min_range = 0.40m
+     *      L1 机身宽约 0.35m,腿部扫描点距雷达中心 ≤ 0.4m。
+     *      不设此值时,腿的点云被 obstacle_layer 实时标为障碍,
+     *      导致机器人永远处于"四周被包围"状态,规划/恢复行为全部失败。
+     *
+     *   ② min_obstacle_height = 0.05m
+     *      过滤地面近距离反射(脚垫/地面纹理),避免地面噪点进入代价地图。
+     *
+     *   ③ inflation_radius: 0.20m(原 0.3)
+     *      降低膨胀半径,防止走廊/房间角落因膨胀叠加而完全封堵。
+     *      配合 ① 的 self-filter 后,0.2m 已足够保护机身。
      */
-    private void writeNav2Params(String filePath,
-                                 double initX, double initY, double initTheta) throws IOException {
-        String content = "# Nav2 参数 - 由 Java 自动生成，适配 fast_lio\n"
+    private void writeNav2Params(String filePath, double initX, double initY,
+                                 double initTheta, String mapYamlPath) throws IOException {
+
+        // Unitree L1 专用参数
+
+
+        String content = "# Nav2 参数 - 由 Java MapController 生成,适配 fast_lio + Unitree L1\n"
                 + "# 生成时间: " + new java.util.Date() + "\n"
-                + "# 修改方式: 修改 MapController.java 中的 writeNav2Params() 方法\n"
+                + "# 注意:修改后需重启 Nav2 才生效(systemctl restart robot-nav 或 重启 launch)\n"
                 + "\n"
                 + "amcl:\n"
                 + "  ros__parameters:\n"
                 + "    use_sim_time: false\n"
-                + "    alpha1: 0.2\n"
-                + "    alpha2: 0.2\n"
-                + "    alpha3: 0.2\n"
-                + "    alpha4: 0.2\n"
-                + "    alpha5: 0.2\n"
+                + "    alpha1: 0.1\n"
+                + "    alpha2: 0.1\n"
+                + "    alpha3: 0.1\n"
+                + "    alpha4: 0.1\n"
+                + "    alpha5: 0.1\n"
                 + "    base_frame_id: \"" + BASE_FRAME + "\"\n"
                 + "    global_frame_id: \"map\"\n"
                 + "    odom_frame_id: \"" + ODOM_FRAME + "\"\n"
@@ -327,19 +509,15 @@ public class MapController {
                 + "    laser_model_type: likelihood_field\n"
                 + "    laser_max_range: 30.0\n"
                 + "    laser_min_range: -1.0\n"
-                + "    resample_interval: 1\n"
+                + "    resample_interval: 3\n"
                 + "    max_beams: 360\n"
-                + "    max_particles: 5000\n"
-                + "    min_particles: 1000\n"
+                + "    max_particles: 2000\n"
+                + "    min_particles: 500\n"
                 + "    robot_model_type: nav2_amcl::DifferentialMotionModel\n"
                 + "    transform_tolerance: 1.0\n"
-                + "    update_min_a: 0.0\n"
-                + "    update_min_d: 0.0\n"
+                + "    update_min_a: 0.2\n"
+                + "    update_min_d: 0.25\n"
                 + "    tf_broadcast: true\n"
-                // set_initial_pose 始终 true：
-                //   AMCL 激活后立即在 initial_pose 附近撒粒子，无需等待 /initialpose 消息
-                //   map→camera_init TF 在收到第一帧 /scan 后立刻可用
-                //   首次使用 (0,0,0) 时粒子在地图原点附近，机器人稍微移动即可收敛
                 + "    set_initial_pose: true\n"
                 + "    initial_pose:\n"
                 + "      x: " + String.format("%.4f", initX) + "\n"
@@ -397,6 +575,9 @@ public class MapController {
                 + "      rotate_to_heading_min_angle: 0.785\n"
                 + "      max_angular_accel: 3.2\n"
                 + "\n"
+                // ─────────────────────────────────────────────────────────────
+                // 局部代价地图
+                // ─────────────────────────────────────────────────────────────
                 + "local_costmap:\n"
                 + "  local_costmap:\n"
                 + "    ros__parameters:\n"
@@ -417,18 +598,25 @@ public class MapController {
                 + "        observation_sources: scan\n"
                 + "        scan:\n"
                 + "          topic: /scan\n"
+                + "          data_type: LaserScan\n"
+                + "          min_obstacle_height: 0.05\n"         // ② 过滤地面反射
                 + "          max_obstacle_height: 2.0\n"
+                // ① 核心修复：过滤宇树L1腿部点云（腿展开最宽约0.4m）
+                + "          obstacle_min_range: " + String.format("%.2f", SELF_FILTER_RADIUS) + "\n"
+                + "          obstacle_max_range: 5.5\n"
+                + "          raytrace_min_range: " + String.format("%.2f", SELF_FILTER_RADIUS) + "\n"
+                + "          raytrace_max_range: 8.0\n"
                 + "          clearing: True\n"
                 + "          marking: True\n"
-                + "          data_type: LaserScan\n"
-                + "          raytrace_max_range: 8.0\n"
-                + "          obstacle_max_range: 5.5\n"
                 + "      inflation_layer:\n"
                 + "        plugin: nav2_costmap_2d::InflationLayer\n"
                 + "        cost_scaling_factor: 3.0\n"
-                + "        inflation_radius: " + INFLATE_R + "\n"
+                + "        inflation_radius: " + String.format("%.2f", INFLATE) + "\n"  // ③
                 + "      always_send_full_costmap: True\n"
                 + "\n"
+                // ─────────────────────────────────────────────────────────────
+                // 全局代价地图
+                // ─────────────────────────────────────────────────────────────
                 + "global_costmap:\n"
                 + "  global_costmap:\n"
                 + "    ros__parameters:\n"
@@ -450,22 +638,26 @@ public class MapController {
                 + "        observation_sources: scan\n"
                 + "        scan:\n"
                 + "          topic: /scan\n"
+                + "          data_type: LaserScan\n"
+                + "          min_obstacle_height: 0.05\n"         // ② 过滤地面反射
                 + "          max_obstacle_height: 2.0\n"
+                // ① 核心修复：同局部代价地图，全局也要过滤腿部
+                + "          obstacle_min_range: " + String.format("%.2f", SELF_FILTER_RADIUS) + "\n"
+                + "          obstacle_max_range: 5.5\n"
+                + "          raytrace_min_range: " + String.format("%.2f", SELF_FILTER_RADIUS) + "\n"
+                + "          raytrace_max_range: 8.0\n"
                 + "          clearing: True\n"
                 + "          marking: True\n"
-                + "          data_type: LaserScan\n"
-                + "          raytrace_max_range: 8.0\n"
-                + "          obstacle_max_range: 5.5\n"
                 + "      inflation_layer:\n"
                 + "        plugin: nav2_costmap_2d::InflationLayer\n"
                 + "        cost_scaling_factor: 3.0\n"
-                + "        inflation_radius: " + INFLATE_R + "\n"
+                + "        inflation_radius: " + String.format("%.2f", INFLATE) + "\n"  // ③
                 + "      always_send_full_costmap: True\n"
                 + "\n"
                 + "map_server:\n"
                 + "  ros__parameters:\n"
                 + "    use_sim_time: false\n"
-                + "    yaml_filename: \"\"\n"
+                + "    yaml_filename: \"" + (mapYamlPath == null ? "" : mapYamlPath) + "\"\n"
                 + "\n"
                 + "planner_server:\n"
                 + "  ros__parameters:\n"
@@ -494,26 +686,11 @@ public class MapController {
                 + "      plugin: nav2_behaviors/Wait\n"
                 + "    global_frame: " + ODOM_FRAME + "\n"
                 + "    robot_base_frame: " + BASE_FRAME + "\n"
-                + "    transform_tolerance: 0.1\n"
+                + "    transform_tolerance: 0.5\n"
                 + "    simulate_ahead_time: 2.0\n"
                 + "    max_rotational_vel: 1.0\n"
                 + "    min_rotational_vel: 0.4\n"
                 + "    rotational_acc_lim: 3.2\n"
-                + "\n"
-                + "velocity_smoother:\n"
-                + "  ros__parameters:\n"
-                + "    use_sim_time: false\n"
-                + "    smoothing_frequency: 20.0\n"
-                + "    scale_velocities: False\n"
-                + "    feedback: OPEN_LOOP\n"
-                + "    max_velocity: [0.5, 0.0, 2.0]\n"
-                + "    min_velocity: [-0.5, 0.0, -2.0]\n"
-                + "    max_accel: [2.5, 0.0, 3.2]\n"
-                + "    max_decel: [-2.5, 0.0, -3.2]\n"
-                + "    odom_topic: \"" + ODOM_TOPIC + "\"\n"
-                + "    odom_duration: 0.1\n"
-                + "    deadband_velocity: [0.0, 0.0, 0.0]\n"
-                + "    velocity_timeout: 1.0\n"
                 + "\n"
                 + "waypoint_follower:\n"
                 + "  ros__parameters:\n"
@@ -526,154 +703,43 @@ public class MapController {
                 + "      enabled: True\n"
                 + "      waypoint_pause_duration: 200\n"
                 + "\n"
-                + "smoother_server:\n"
+                + "velocity_smoother:\n"
                 + "  ros__parameters:\n"
                 + "    use_sim_time: false\n"
-                + "    smoother_plugins: [simple_smoother]\n"
-                + "    simple_smoother:\n"
-                + "      plugin: nav2_smoother::SimpleSmoother\n"
-                + "      tolerance: 1.0e-10\n"
-                + "      max_its: 1000\n"
-                + "      do_refinement: True\n";
+                + "    smoothing_frequency: 20.0\n"
+                + "    scale_velocities: false\n"
+                + "    feedback: OPEN_LOOP\n"
+                + "    max_velocity: [0.5, 0.0, 2.0]\n"
+                + "    min_velocity: [-0.5, 0.0, -2.0]\n"
+                + "    deadband_velocity: [0.0, 0.0, 0.0]\n"
+                + "    velocity_timeout: 1.0\n"
+                + "    max_accel: [2.5, 0.0, 3.2]\n"
+                + "    max_decel: [-2.5, 0.0, -3.2]\n"
+                + "    odom_topic: " + ODOM_TOPIC + "\n"
+                + "    odom_duration: 0.1\n"
+                + "\n"
+                + "lifecycle_manager_localization:\n"
+                + "  ros__parameters:\n"
+                + "    use_sim_time: false\n"
+                + "    autostart: true\n"
+                + "    node_names: [\"map_server\", \"amcl\"]\n"
+                + "    bond_timeout: 0.0\n"
+                + "    attempt_respawn_reconnection: false\n"
+                + "\n"
+                + "lifecycle_manager_navigation:\n"
+                + "  ros__parameters:\n"
+                + "    use_sim_time: false\n"
+                + "    autostart: true\n"
+                + "    node_names: [\"controller_server\", \"smoother_server\", \"planner_server\","
+                + " \"behavior_server\", \"bt_navigator\", \"waypoint_follower\", \"velocity_smoother\"]\n"
+                + "    bond_timeout: 0.0\n"
+                + "    attempt_respawn_reconnection: false\n";
 
         File f = new File(filePath);
         if (f.getParentFile() != null && !f.getParentFile().exists()) {
             f.getParentFile().mkdirs();
         }
         Files.write(f.toPath(), content.getBytes(StandardCharsets.UTF_8));
-    }
-
-    // ===================== 停止 Nav2 =====================
-
-    @PostMapping("/stop-nav2")
-    @ApiOperation("停止全部导航进程")
-    public Result<Void> stopNav2() {
-        stopNav2Internal();
-        loadedMapName = null;
-        return Result.OK("Nav2已停止");
-    }
-
-    private void stopNav2Internal() {
-        stopPoseAutoSave();                          // 先停位姿保存
-        killProcess(nav2Process,    "nav2");
-        killProcess(pc2scanProcess, "pc2scan");
-        nav2Process    = null;
-        pc2scanProcess = null;
-    }
-
-    private void killProcess(Process p, String name) {
-        if (p == null || !p.isAlive()) return;
-        p.destroy();
-        try { p.waitFor(3, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
-        if (p.isAlive()) p.destroyForcibly();
-        log.info("⏹ [{}] 已停止", name);
-    }
-
-    // ===================== Nav2 状态 =====================
-
-    @GetMapping("/nav2-status")
-    @ApiOperation("查询Nav2运行状态")
-    public Result<Map<String, Object>> getNav2Status() {
-        Map<String, Object> s = new LinkedHashMap<>();
-        s.put("nav2Running",      nav2Process    != null && nav2Process.isAlive());
-        s.put("pc2scanRunning",   pc2scanProcess != null && pc2scanProcess.isAlive());
-        s.put("loadedMap",        loadedMapName);
-        s.put("poseSaving",       poseAutoSaveScheduler != null && !poseAutoSaveScheduler.isShutdown());
-        return Result.OK(s);
-    }
-
-    // ===================== Nav2 健康自检 =====================
-
-    private volatile Map<String, Object> lastHealthCheck = null;
-
-    @GetMapping("/nav2-health")
-    @ApiOperation("查询Nav2健康状态（AMCL定位/TF/scan）")
-    public Result<Map<String, Object>> getNav2Health() {
-        if (lastHealthCheck == null) {
-            Map<String, Object> pending = new LinkedHashMap<>();
-            pending.put("status",  "pending");
-            pending.put("message", "尚未执行检测，请先调用 /api/map/load");
-            return Result.OK(pending);
-        }
-        return Result.OK(lastHealthCheck);
-    }
-
-    private void scheduleHealthCheck(String mapName) {
-        final String mName = mapName;
-        executor.submit(new Runnable() {
-            public void run() {
-                try {
-                    log.info("[健康检查] 等待 Nav2 完全就绪（20秒）...");
-                    Thread.sleep(20000);
-
-                    Map<String, Object> result = new LinkedHashMap<>();
-                    result.put("mapName",   mName);
-                    result.put("checkTime", new java.util.Date().toString());
-
-                    // ① fast_lio TF：camera_init → body（最基础依赖）
-                    boolean fastLioTfOk = checkTfAvailable(ODOM_FRAME, BASE_FRAME, 5);
-                    result.put("fastLioTfAvailable", fastLioTfOk);
-                    if (!fastLioTfOk) {
-                        result.put("fastLioWarn",
-                                "⚠ " + ODOM_FRAME + "→" + BASE_FRAME + " TF 不可用！"
-                                        + "fast_lio 可能未运行，这是导航失败的根本原因："
-                                        + "无 fast_lio → 无 /scan → AMCL 无法定位 → map 帧不存在");
-                    }
-
-                    // ② /scan 话题是否在发布
-                    boolean scanOk = checkTopicActive("/scan", 5);
-                    result.put("scanActive", scanOk);
-                    result.put("scanTopic",  CLOUD_TOPIC + " → /scan");
-                    if (!scanOk) {
-                        result.put("scanWarn",
-                                "⚠ /scan 无数据。若 fast_lio TF 正常，请确认已安装: "
-                                        + "apt install ros-humble-pointcloud-to-laserscan");
-                    }
-
-                    // ③ AMCL 节点是否存在
-                    boolean amclOk = checkNodeExists("amcl", 5);
-                    result.put("amclRunning", amclOk);
-                    if (!amclOk) {
-                        result.put("amclWarn", "⚠ AMCL 节点未找到，bringup_launch.py 可能未正常加载 AMCL");
-                    }
-
-                    // ④ map → ODOM_FRAME TF（最关键，AMCL 定位结果）
-                    boolean tfOk = checkTfAvailable("map", ODOM_FRAME, 8);
-                    result.put("mapTfAvailable", tfOk);
-                    result.put("mapTfPath",      "map → " + ODOM_FRAME + " → " + BASE_FRAME);
-                    if (!tfOk) {
-                        result.put("tfWarn",
-                                "⚠ map→" + ODOM_FRAME + " TF 不可用。"
-                                        + "AMCL 未收到 /scan 数据，或初始位置偏差过大。"
-                                        + "可调用 POST /api/navigation/global-localization 触发全局重定位");
-                    }
-
-                    // ⑤ 当前位姿文件
-                    File poseFile = new File(MAP_DIR + mName + POSE_FILE_SUFFIX);
-                    result.put("poseFileSaved", poseFile.exists());
-                    if (poseFile.exists()) {
-                        result.put("poseFile", MAP_DIR + mName + POSE_FILE_SUFFIX);
-                    }
-
-                    boolean allOk = fastLioTfOk && scanOk && amclOk && tfOk;
-                    result.put("status",  allOk ? "healthy" : (amclOk ? "degraded" : "error"));
-                    result.put("message", allOk
-                            ? "✅ Nav2 完全就绪，可以设置导航目标"
-                            : (!fastLioTfOk ? "❌ fast_lio 未运行，请先启动建图节点"
-                            : (!tfOk ? "❌ map TF 未就绪，请查看各警告项"
-                            : "⚠ 部分服务异常，但导航 TF 已就绪")));
-
-                    lastHealthCheck = result;
-                    log.info("[健康检查] 完成: fastLioTf={}, scan={}, amcl={}, mapTf={}",
-                            fastLioTfOk, scanOk, amclOk, tfOk);
-
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                } catch (Exception e) {
-                    log.error("[健康检查] 异常", e);
-                }
-            }
-        });
     }
 
     // ===================== ROS2 检测工具 =====================
@@ -684,11 +750,8 @@ public class MapController {
                     + " && timeout " + timeoutSec + " ros2 topic hz " + topic
                     + " --window 3 2>&1 | head -5";
             String output = runCommand(cmd, timeoutSec + 2);
-            boolean ok = output.contains("average rate") || output.contains("hz");
-            log.info("[健康检查] {} 话题: {}", topic, ok ? "✅ 活跃" : "❌ 无数据");
-            return ok;
+            return output.contains("average rate") || output.contains("hz");
         } catch (Exception e) {
-            log.warn("[健康检查] 检测 {} 失败: {}", topic, e.getMessage());
             return false;
         }
     }
@@ -698,11 +761,8 @@ public class MapController {
             String cmd = "source " + ROS_BASH + " && source " + SETUP_BASH
                     + " && ros2 node list 2>&1";
             String output = runCommand(cmd, timeoutSec);
-            boolean ok = output.contains(nodeName);
-            log.info("[健康检查] {} 节点: {}", nodeName, ok ? "✅ 存在" : "❌ 未找到");
-            return ok;
+            return output.contains(nodeName);
         } catch (Exception e) {
-            log.warn("[健康检查] 检测节点 {} 失败: {}", nodeName, e.getMessage());
             return false;
         }
     }
@@ -714,18 +774,15 @@ public class MapController {
                     + " ros2 run tf2_ros tf2_echo " + parentFrame + " " + childFrame
                     + " 2>&1 | head -10";
             String output = runCommand(cmd, timeoutSec + 2);
-            boolean ok = output.contains("Translation") || output.contains("Rotation");
-            log.info("[健康检查] TF {} → {}: {}", parentFrame, childFrame,
-                    ok ? "✅ 可用" : "❌ 不可用 | " + output.replace("\n", " | ").trim());
-            return ok;
+            return output.contains("Translation") || output.contains("Rotation");
         } catch (Exception e) {
-            log.warn("[健康检查] 检测 TF {}→{} 失败: {}", parentFrame, childFrame, e.getMessage());
             return false;
         }
     }
 
     private String runCommand(String cmd, int timeoutSec) throws Exception {
         ProcessBuilder pb = new ProcessBuilder("bash", "-c", cmd);
+        cleanCondaEnv(pb.environment());
         pb.environment().put("QT_QPA_PLATFORM", "offscreen");
         pb.redirectErrorStream(true);
         Process p = pb.start();
@@ -739,19 +796,52 @@ public class MapController {
         return sb.toString();
     }
 
-    // ===================== 解析工具方法 =====================
+    /** 清理 conda 污染的环境变量 */
+    private static void cleanCondaEnv(Map<String, String> env) {
+        env.put("QT_QPA_PLATFORM", "offscreen");
+        env.remove("PYTHONPATH");
+        env.remove("PYTHONHOME");
+        env.remove("CONDA_PREFIX");
+        env.remove("CONDA_DEFAULT_ENV");
+        env.remove("CONDA_PYTHON_EXE");
+        env.remove("CONDA_SHLVL");
+        env.remove("CONDA_PROMPT_MODIFIER");
+        env.remove("_CE_CONDA");
+        env.remove("_CE_M");
 
-    /** 从 JSON 字符串中解析指定 key 的 double 值 */
+        String path = env.getOrDefault("PATH", "");
+        if (!path.isEmpty()) {
+            StringBuilder cleanPath = new StringBuilder();
+            for (String p : path.split(":")) {
+                if (!p.contains("conda") && !p.contains("anaconda")) {
+                    if (cleanPath.length() > 0) cleanPath.append(":");
+                    cleanPath.append(p);
+                }
+            }
+            env.put("PATH", cleanPath.toString());
+        }
+
+        String ld = env.get("LD_LIBRARY_PATH");
+        if (ld != null && !ld.isEmpty()) {
+            StringBuilder cleanLd = new StringBuilder();
+            for (String p : ld.split(":")) {
+                if (!p.contains("conda") && !p.contains("anaconda")) {
+                    if (cleanLd.length() > 0) cleanLd.append(":");
+                    cleanLd.append(p);
+                }
+            }
+            env.put("LD_LIBRARY_PATH", cleanLd.toString());
+        }
+    }
+
+    // ===================== 解析工具 =====================
+
     private double parseJsonDouble(String json, String key) {
         Matcher m = Pattern.compile("\"" + key + "\"\\s*:\\s*([\\-0-9.eE]+)").matcher(json);
         if (m.find()) return Double.parseDouble(m.group(1));
         throw new IllegalArgumentException("JSON key not found: " + key);
     }
 
-    /**
-     * 从 ros2 topic echo 输出中解析指定字段值
-     * 取最后一个匹配，避免嵌套结构取错层
-     */
     private double parseRosField(String out, String key) {
         Matcher m = Pattern.compile("(?m)^\\s*" + key + ":\\s*([\\-0-9.eE]+)").matcher(out);
         double val = 0;
@@ -759,10 +849,6 @@ public class MapController {
         return val;
     }
 
-    /**
-     * 从四元数 z/w 分量解析 yaw（仅 2D 平面导航，roll=pitch=0）
-     * yaw = 2 * atan2(qz, qw)
-     */
     private double parseYawFromQuaternion(String out) {
         try {
             Matcher m = Pattern.compile(
@@ -784,14 +870,14 @@ public class MapController {
     public Result<List<Map<String, Object>>> getMapList() {
         try {
             File dir = new File(MAP_DIR);
-            if (!dir.exists()) return Result.OK(new ArrayList<Map<String, Object>>());
-            File[] files = dir.listFiles(new FilenameFilter() {
-                public boolean accept(File d, String n) { return n.endsWith(".yaml"); }
-            });
-            if (files == null) return Result.OK(new ArrayList<Map<String, Object>>());
+            if (!dir.exists()) return Result.OK(new ArrayList<>());
+            File[] files = dir.listFiles((d, n) -> n.endsWith(".yaml"));
+            if (files == null) return Result.OK(new ArrayList<>());
             List<Map<String, Object>> list = new ArrayList<>();
             for (File f : files) {
                 if (f.getName().startsWith("nav2_params")) continue;
+                // 跳过 last_used.yaml 软链接,它只是指向真实地图的别名
+                if (f.getName().equals(LAST_USED_LINK)) continue;
                 String name = f.getName().replace(".yaml", "");
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("name",          name);
@@ -808,24 +894,23 @@ public class MapController {
         }
     }
 
-    // ===================== 地图图像（pgm → png） =====================
+    // ===================== 地图图像 =====================
 
     @GetMapping("/image/{mapName}")
-    @ApiOperation("获取地图图像（PNG格式）")
+    @ApiOperation("获取地图图像(PNG)")
     public ResponseEntity<byte[]> getMapImage(@PathVariable String mapName) {
         try {
             File pngFile = new File(MAP_DIR + mapName + ".png");
             if (pngFile.exists()) {
-                return new ResponseEntity<>(Files.readAllBytes(pngFile.toPath()), pngHeaders(), HttpStatus.OK);
+                return new ResponseEntity<>(
+                        Files.readAllBytes(pngFile.toPath()), pngHeaders(), HttpStatus.OK);
             }
             File pgmFile = new File(MAP_DIR + mapName + ".pgm");
-            if (!pgmFile.exists()) {
-                return new ResponseEntity<>(HttpStatus.NOT_FOUND);
-            }
-            BufferedImage img   = readPgm(pgmFile);
-            byte[]        bytes = toPng(img);
+            if (!pgmFile.exists()) return new ResponseEntity<>(HttpStatus.NOT_FOUND);
+
+            BufferedImage img = readPgm(pgmFile);
+            byte[] bytes = toPng(img);
             try { Files.write(pngFile.toPath(), bytes); } catch (Exception ignored) {}
-            log.info("地图图像已转换: {} ({}x{})", mapName, img.getWidth(), img.getHeight());
             return new ResponseEntity<>(bytes, pngHeaders(), HttpStatus.OK);
         } catch (Exception e) {
             log.error("获取地图图像失败: {}", mapName, e);
@@ -836,7 +921,7 @@ public class MapController {
     // ===================== 地图元数据 =====================
 
     @GetMapping("/meta/{mapName}")
-    @ApiOperation("获取地图元数据（分辨率+原点+尺寸）")
+    @ApiOperation("获取地图元数据")
     public Result<Map<String, Object>> getMapMeta(@PathVariable String mapName) {
         try {
             File yamlFile = new File(MAP_DIR + mapName + ".yaml");
@@ -851,7 +936,8 @@ public class MapController {
                 while ((line = br.readLine()) != null) {
                     line = line.trim();
                     if (line.startsWith("resolution:")) {
-                        meta.put("resolution", Double.parseDouble(line.substring("resolution:".length()).trim()));
+                        meta.put("resolution",
+                                Double.parseDouble(line.substring("resolution:".length()).trim()));
                     } else if (line.startsWith("origin:")) {
                         String arr = line.replaceAll(".*\\[(.*)\\].*", "$1");
                         String[] parts = arr.split(",");
@@ -876,11 +962,11 @@ public class MapController {
             meta.putIfAbsent("width",      0);
             meta.putIfAbsent("height",     0);
 
-            // 附带最近一次保存的位姿信息
             File poseFile = new File(MAP_DIR + mapName + POSE_FILE_SUFFIX);
             if (poseFile.exists()) {
                 try {
-                    String json = new String(Files.readAllBytes(poseFile.toPath()), StandardCharsets.UTF_8);
+                    String json = new String(
+                            Files.readAllBytes(poseFile.toPath()), StandardCharsets.UTF_8);
                     meta.put("lastPose", json);
                 } catch (Exception ignored) {}
             }
@@ -895,46 +981,42 @@ public class MapController {
     // ===================== 删除地图 =====================
 
     @DeleteMapping("/{mapName}")
-    @ApiOperation("删除地图（yaml + pgm + png + 位姿文件）")
+    @ApiOperation("删除地图(yaml + pgm + png + 位姿文件)")
     public Result<Void> deleteMap(@PathVariable String mapName) {
         try {
+            // 不允许删除当前正在使用的地图
+            if (mapName.equals(loadedMapName)) {
+                return Result.error("不能删除当前正在使用的地图,请先切换到其他地图");
+            }
+            // 不允许通过此接口删除 last_used 软链接
+            if (LAST_USED_LINK.equals(mapName + ".yaml")) {
+                return Result.error("last_used 是系统维护的软链接,不能直接删除");
+            }
             boolean deleted = false;
             for (String ext : new String[]{".yaml", ".pgm", ".png", POSE_FILE_SUFFIX}) {
                 File f = new File(MAP_DIR + mapName + ext);
                 if (f.exists()) deleted |= f.delete();
             }
-            if (deleted) {
-                if (mapName.equals(loadedMapName)) { stopNav2Internal(); loadedMapName = null; }
-                return Result.OK("地图已删除");
-            }
-            return Result.error("地图文件不存在: " + mapName);
+            // 如果删除的恰好是 last_used 当前指向的地图,把链接也清掉,避免悬空
+            try {
+                Path link = Paths.get(MAP_DIR, LAST_USED_LINK);
+                if (Files.isSymbolicLink(link)) {
+                    Path target = Files.readSymbolicLink(link);
+                    if (target.getFileName().toString().equals(mapName + ".yaml")) {
+                        Files.deleteIfExists(link);
+                        log.info("已清理悬空的 last_used 软链接(原指向已删除的 {})", mapName);
+                    }
+                }
+            } catch (Exception ignored) {}
+            return deleted ? Result.OK("地图已删除")
+                    : Result.error("地图文件不存在: " + mapName);
         } catch (Exception e) {
             log.error("删除地图失败", e);
             return Result.error("删除失败: " + e.getMessage());
         }
     }
 
-    // ===================== 工具方法 =====================
-
-    private Process startProcess(String name, String cmd) throws IOException {
-        log.info("▶ 启动 [{}]", name);
-        ProcessBuilder pb = new ProcessBuilder("bash", "-c", cmd);
-        pb.directory(new File(System.getProperty("user.home")));
-        pb.environment().put("QT_QPA_PLATFORM", "offscreen");
-        pb.redirectErrorStream(true);
-        Process p = pb.start();
-        final String pName = name;
-        executor.submit(new Runnable() {
-            public void run() {
-                try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
-                    String line;
-                    while ((line = r.readLine()) != null) log.info("[{}] {}", pName, line);
-                } catch (IOException ignored) {}
-            }
-        });
-        log.info("✅ [{}] 已启动", name);
-        return p;
-    }
+    // ===================== PGM/PNG 工具 =====================
 
     private HttpHeaders pngHeaders() {
         HttpHeaders h = new HttpHeaders();
@@ -964,7 +1046,6 @@ public class MapController {
                     int v = data[y * w + x] & 0xFF;
                     img.setRGB(x, y, (v << 16) | (v << 8) | v);
                 }
-            log.info("PGM 读取完成: {}x{}", w, h);
             return img;
         }
     }
@@ -988,7 +1069,9 @@ public class MapController {
     private String readAsciiLine(BufferedInputStream bis) throws IOException {
         StringBuilder sb = new StringBuilder();
         int b;
-        while ((b = bis.read()) != -1 && b != '\n') { if (b != '\r') sb.append((char) b); }
+        while ((b = bis.read()) != -1 && b != '\n') {
+            if (b != '\r') sb.append((char) b);
+        }
         return sb.toString().trim();
     }
 }

@@ -92,4 +92,17 @@ public class TabAudioDevice implements Serializable {
 	@Excel(name = "文字转语音", width = 15)
     @ApiModelProperty(value = "文字转语音")
     private java.lang.String isAudio;
+
+
+    @Excel(name = "速度", width = 15)
+    @ApiModelProperty(value = "速度")
+    private Integer  speed;
+
+    @Excel(name = "音量", width = 15)
+    @ApiModelProperty(value = "音量")
+    private Integer  volume;
+
+    @Excel(name = "测试播放内容", width = 15)
+    @ApiModelProperty(value = "测试播放内容")
+    private String  testPlay;
 }

@@ -4,10 +4,8 @@ import java.io.Serializable;
 import java.io.UnsupportedEncodingException;
 import java.util.Date;
 import java.math.BigDecimal;
-import com.baomidou.mybatisplus.annotation.IdType;
-import com.baomidou.mybatisplus.annotation.TableId;
-import com.baomidou.mybatisplus.annotation.TableName;
-import com.baomidou.mybatisplus.annotation.TableLogic;
+
+import com.baomidou.mybatisplus.annotation.*;
 import lombok.Data;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -161,4 +159,10 @@ public class TabAiVideoSetting implements Serializable {
     @ApiModelProperty(value = "是否播报")
     private Integer isAudio;
 
+
+    @Dict(dicCode = "audio_device")
+    private java.lang.String audioDevice;
+    /** 音频设备名称（多个用英文逗号拼接，仅用于回显，不映射数据库） */
+    @TableField(exist = false)
+    private String audioDeviceName;
 }

@@ -40,7 +40,19 @@ public class ROS2BridgeService {
     private WebSocketSession session;
     private final Gson gson = new Gson();
     private final AtomicInteger reconnectAttempts = new AtomicInteger(0);
+    private ROS2WebSocketHandler webSocketHandler;
+    public void setWebSocketHandler(ROS2WebSocketHandler handler) {
+        this.webSocketHandler = handler;
+    }
 
+    // === 加个对外的开关方法 ===
+    public void setNavMode(boolean nav) {
+        if (webSocketHandler != null) {
+            webSocketHandler.setNavMode(nav);
+        } else {
+            log.warn("setNavMode 调用时 handler 还未注入,跳过");
+        }
+    }
     @PostConstruct
     public void init() {
         if (ros2Config.isAutoConnect()) {
@@ -130,7 +142,13 @@ public class ROS2BridgeService {
         // ⑤ 速度监控（只读，用于前端显示当前速度，不用于控制）
         subscribe("/cmd_vel", "geometry_msgs/Twist", 200);
 
-        log.info("✅ 话题订阅完成: /cloud_registered /Odometry /amcl_pose /plan /cmd_vel");
+        // ⑥ ✅ 【新增】导航动作状态（到达/失败/取消 → 前端弹提示+清路径线）
+        //    Nav2 在以下情况推送：
+        //      status=4 到达目标 → 前端弹"导航完成"、清除路径线
+        //      status=6 导航失败 → 前端弹"导航失败"警告
+        subscribe("/navigate_to_pose/_action/status", "action_msgs/GoalStatusArray", 500);
+
+        log.info("✅ 话题订阅完成: /cloud_registered /Odometry /amcl_pose /plan /cmd_vel /navigate_to_pose/_action/status");
     }
 
     private void subscribe(String topic, String type, int throttleRate) {
@@ -160,7 +178,37 @@ public class ROS2BridgeService {
             log.error("发送消息失败: {}", e.getMessage());
         }
     }
+    /**
+     * 重新订阅 Nav2 相关 topic
+     * 必须在 Nav2 完全启动后调用,否则订阅会绑到不存在的 publisher 上
+     */
+    public void resubscribeNav2Topics() {
+        if (!isConnected()) {
+            log.warn("rosbridge 未连接,无法重新订阅");
+            return;
+        }
+        log.info("🔄 重新订阅 Nav2 相关 topic(确保绑到新启动的 publisher)...");
 
+        // 先 unsubscribe(rosbridge 协议支持)
+        for (String topic : new String[]{
+                "/plan", "/amcl_pose", "/navigate_to_pose/_action/status"
+        }) {
+            JsonObject json = new JsonObject();
+            json.addProperty("op", "unsubscribe");
+            json.addProperty("topic", topic);
+            send(json.toString());
+        }
+
+        // 等 50ms 让 rosbridge 处理 unsubscribe
+        try { Thread.sleep(50); } catch (InterruptedException ignored) {}
+
+        // 再 subscribe(此时 Nav2 已起来,DDS discovery 能正确握手)
+        subscribe("/plan",        "nav_msgs/Path", 500);
+        subscribe("/amcl_pose",   "geometry_msgs/PoseWithCovarianceStamped", 200);
+        subscribe("/navigate_to_pose/_action/status",
+                "action_msgs/GoalStatusArray", 500);
+        log.info("✅ Nav2 topic 已重新订阅");
+    }
     /**
      * 预先声明话题类型
      * rosbridge 在第一次 publish 时如果话题还没被其他节点广播，

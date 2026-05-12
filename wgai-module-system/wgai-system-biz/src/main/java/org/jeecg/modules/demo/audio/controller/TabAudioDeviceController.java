@@ -36,7 +36,9 @@ import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import org.jeecg.common.aspect.annotation.AutoLog;
 
- /**
+import static org.jeecg.modules.demo.audio.util.audioSend.sendAudio;
+
+/**
  * @Description: 播报设备
  * @Author: wggg
  * @Date:   2025-03-07
@@ -76,7 +78,21 @@ public class TabAudioDeviceController extends JeecgController<TabAudioDevice, IT
 
 
 
-
+	 /**
+	  *   测试播放
+	  *
+	  * @param tabAudioDevice
+	  * @return
+	  */
+	 @AutoLog(value = "播报设备-测试播放")
+	 @ApiOperation(value="播报设备-测试播放", notes="播报设备-测试播放")
+	 //@RequiresPermissions("org.jeecg.modules.demo:tab_audio_device:add")
+	 @PostMapping(value = "/testPlay")
+	 public Result<String> testPlay(@RequestBody TabAudioDevice tabAudioDevice) {
+		 List<TabAudioDevice> tabAudioDeviceList=tabAudioDeviceService.list(new QueryWrapper<TabAudioDevice>().eq("id",tabAudioDevice.getId()));
+		 sendAudio(tabAudioDeviceList,tabAudioDevice.getTestPlay());
+		 return Result.OK("添加成功！");
+	 }
 	/**
 	 *   添加
 	 *

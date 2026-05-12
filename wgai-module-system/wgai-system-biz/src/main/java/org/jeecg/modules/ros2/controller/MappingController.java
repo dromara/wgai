@@ -45,7 +45,14 @@ public class MappingController {
     ROS2BridgeService ros2BridgeService;
 
     // ==================== 启动建图 ====================
-
+    @PostMapping("/connection")
+    @ApiOperation("启动 fast_lio 建图")
+    public Result<Map<String, Object>> connection(){
+        if(ros2BridgeService.isConnected()==false){
+                ros2BridgeService.connect();
+        }
+        return Result.OK("开始连接");
+    }
     @PostMapping("/start")
     @ApiOperation("启动 fast_lio 建图")
     public Result<Map<String, Object>> startMapping(
@@ -74,6 +81,8 @@ public class MappingController {
             pb.environment().put("QT_QPA_PLATFORM", "offscreen");
 
             fastlioProcess = pb.start();
+            // ⭐ 进入建图模式,前端 robot_pose 改用 /Odometry 来源
+            ros2BridgeService.setNavMode(false);
 
             // ✅ Java 8 兼容：用反射获取 PID（仅用于日志，不做关键逻辑）
             long pid = getProcessPid(fastlioProcess);

@@ -7,6 +7,7 @@ import io.swagger.annotations.ApiModelProperty;
 import lombok.Data;
 import lombok.ToString;
 import org.jeecg.common.aspect.annotation.Dict;
+import org.jeecg.modules.demo.audio.entity.TabAudioDevice;
 import org.jeecg.modules.demo.video.entity.TabAiSubscriptionNew;
 import org.jeecg.modules.demo.video.entity.TabAiVideoSetting;
 import org.jeecg.modules.demo.video.entity.TabVideoUtil;
@@ -121,4 +122,10 @@ public class NetPush {
     @JsonIgnore  // JSON 序列化时忽略
     @ToString.Exclude  // toString() 方法中排除 - 防止循环引用
     TabAiSubscriptionNew tabAiSubscriptionNew;
+
+    @JsonIgnore  // JSON 序列化时忽略
+    @ToString.Exclude  // toString() 方法中排除 - 防止自引用循环
+    List<TabAudioDevice> tabAudioDevices;
+
+
 }

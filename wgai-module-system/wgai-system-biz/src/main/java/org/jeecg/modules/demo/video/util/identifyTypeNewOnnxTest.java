@@ -46,8 +46,7 @@ import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
-import static org.jeecg.modules.demo.audio.util.audioSend.getToken;
-import static org.jeecg.modules.demo.audio.util.audioSend.postAudioText;
+import static org.jeecg.modules.demo.audio.util.audioSend.*;
 import static org.jeecg.modules.tab.AIModel.AIModelYolo3.CommonColors;
 import static org.jeecg.modules.tab.AIModel.AIModelYolo3.base64Image;
 import static org.jeecg.modules.tab.AIModel.pose.FallDetectionResult.detectFallOrStand;
@@ -1462,7 +1461,7 @@ public class identifyTypeNewOnnxTest {
         String warnName = "";
 
         void accumulate(TabAiBase aiBase) {
-            audioText += aiBase.getRemark() + aiBase.getSpaceOne();
+            audioText += aiBase.getSpaceOne();
             warnNumber += aiBase.getSpaceTwo() == null ? 1 : aiBase.getSpaceTwo();
             warnText = setNmsName(warnText,
                     StringUtils.isEmpty(aiBase.getRemark()) ?
@@ -1681,6 +1680,15 @@ public class identifyTypeNewOnnxTest {
                     log.info("【区域报警】命中区域: {}", modelArea);
                 }
 
+                //`使用播报
+                if(netPush.getTabAiVideoSetting().getIsAudio() == 0){
+                    String audio=audioText;
+                    //开启区域推送 开启后播报区域内容消息
+                    if(netPush.getTabAiVideoSetting().getIsBy() == 0 && netPush.getTabAiVideoSetting().getIsByPush() == 0){
+                        audio=modelArea;
+                    }
+                    sendAudio(netPush.getTabAudioDevices(),audio);
+                }
 
                 String recordVideo = "";
                 //是否录像
@@ -1700,16 +1708,7 @@ public class identifyTypeNewOnnxTest {
                     log.info("[未开启录像]");
                 }
 
-                //`临时使用播报
-                if(netPush.getTabAiVideoSetting().getIsAudio() == 0){
-                    log.info("开始播报！~~~~~~播报内容！~~~~~~{}",audioText);
-                    if(StringUtils.isNotEmpty(audioText)){
-                        TabAudioDevice tabAudioDevice=new TabAudioDevice();
-                        tabAudioDevice.setDeivceUrl("http://192.168.0.160:8307");
-                        String token= getToken(tabAudioDevice);
-                        postAudioText(token,tabAudioDevice,audioText);
-                    }
-                }
+
 
                 if (pushInfo.getPushStatic() == 0) {// 0 开启 1未开启
                     log.info("[已经开启推送第三方]：");
