@@ -46,7 +46,6 @@
 | 📺 **语音在线识别与配置**                            | [点击查看](https://www.bilibili.com/video/BV1Dn2wBzENj) |
 | 📺 **实时视频分析预警**                             | [点击查看](https://www.bilibili.com/video/BV1gn2wB6EQN/) |
 | 📺 **在线训练演示全过程**                            | [点击查看](https://www.bilibili.com/video/BV1EJwheEEYq/) |
-| 📺 **语音在线识别与配置**                            | [点击查看](https://www.bilibili.com/video/BV1Dn2wBzENj) |
 | 📺 <span style="color:red">*</span> **地图扫描** | [点击查看](https://www.bilibili.com/video/BV1syGW6CEY1) |
 | 📺 <span style="color:red">*</span> **路径规划**  | [点击查看](https://www.bilibili.com/video/BV1xyGW6CEMD) |
 | 📺 <span style="color:red">*</span> **人员跟踪** | [点击查看](https://www.bilibili.com/video/BV11yGW6CEKj) |
