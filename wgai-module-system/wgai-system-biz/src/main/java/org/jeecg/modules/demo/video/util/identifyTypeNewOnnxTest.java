@@ -209,11 +209,14 @@ public class identifyTypeNewOnnxTest {
         DetectionStats stats = new DetectionStats();
         int validCount = 0;
 
-        // ✅ 是否需要将区域名写入推送（前提：开启区域识别 AND 开启区域推送）
+        //   是否需要将区域名写入推送（前提：开启区域识别 AND 开启区域推送）
         boolean needAreaPush = netPush.getIsBy() == 0 && netPush.getTabAiVideoSetting().getIsByPush() == 0;
 
-        // ✅ 收集当前帧所有命中的区域名称（去重、保留顺序）
+        //   收集当前帧所有命中的区域名称（去重、保留顺序）
         Set<String> hitAreaNames = new LinkedHashSet<>();
+
+        //   新增：收集当前帧所有命中区域的播报配置（用于计算最终语音播报内容）
+        List<ShapeBroadcastInfo> hitBroadcastInfos = new ArrayList<>();
 
         // 延迟绘制队列：先收集，跟踪完再画（以便在标签上显示编号）
         // 每个元素: [BoundingBox, baseLabel, confidence, color, DetectedTarget]
@@ -236,16 +239,28 @@ public class identifyTypeNewOnnxTest {
             // 坐标还原到原图
             BoundingBox originalBox = restoreCoordinates(box, scale, dx, dy, image);
 
-            // ✅ 区域过滤：null=丢弃；非null=有效，值为区域名（可能为""）
+            //   区域过滤：null=丢弃；非null=有效，值为区域名（可能为""）
             String areaName = isValidDetection(pushInfo, netPush, retureBoxInfos, originalBox, box);
             if (areaName == null) {
                 log.info("不在区域内，跳过");
                 continue;
             }
 
-            // ✅ 当开启区域推送时，收集命中区域名称
+            //   当开启区域推送时，收集命中区域名称
             if (needAreaPush && !areaName.isEmpty()) {
                 hitAreaNames.add(areaName);
+
+                //   新增：查询该命中区域的播报配置（仅新版 shapeData 模式下有效）
+                TabVideoUtil _vuBc = netPush.getTabVideoUtil();
+                if (_vuBc != null && _vuBc.getBzType() != null
+                        && StringUtils.isNotEmpty(_vuBc.getShapeData())) {
+                    ShapeBroadcastInfo _bi = matchShapeAreaInfo(
+                            originalBox.x, originalBox.y, originalBox.width, originalBox.height,
+                            _vuBc.getShapeData(), false);
+                    if (_bi != null) {
+                        hitBroadcastInfos.add(_bi);
+                    }
+                }
             }
 
 
@@ -350,13 +365,18 @@ public class identifyTypeNewOnnxTest {
                 warnText = String.format("检测到%d个新目标进入监控区域！%s", newTargetCount, stats.warnText);
             }
 
-            // ✅ 拼接命中区域名称（多个区域用逗号分隔）
+            //   拼接命中区域名称（多个区域用逗号分隔）
             String modelArea = (needAreaPush && !hitAreaNames.isEmpty())
                     ? String.join(",", hitAreaNames) : "";
             log.info("【区域推送】needAreaPush={} 命中区域: [{}]", needAreaPush, modelArea);
 
+            //   新增：按区域级播报开关 / 自定义内容计算最终语音播报文本
+            //   - 命中开启播报的区域且有自定义内容 → 区域内容（区域大于默认）
+            //   - 命中区域但均关闭播报 / 未设自定义内容 / 未开区域推送 → 默认识别内容
+            String finalAudio = computeFinalAudioText(needAreaPush, hitBroadcastInfos, stats.audioText);
+
             isOk(pushInfo, netPush, redisTemplate, savedImagePath, tabAiModel,
-                    stats.audioText, stats.warnNumber, warnText, stats.warnName, savePath, modelArea);
+                    finalAudio, stats.warnNumber, warnText, stats.warnName, savePath, modelArea);
             return true;
         } catch (Exception ex) {
             log.error("推送失败", ex);
@@ -449,14 +469,14 @@ public class identifyTypeNewOnnxTest {
                         System.out.println("实际数组维度: [" + batch.length + "]["
                                 + batch[0].length + "][" + batch[0][0].length + "]");
 
-                        // ✅ 根据实际维度判断数据格式
+                        //   根据实际维度判断数据格式
                         int dim0 = batch.length;        // 通常是 1
                         int dim1 = batch[0].length;     // 可能是 56 或 8400
                         int dim2 = batch[0][0].length;  // 可能是 8400 或 56
                         int debugCount = 0; // 用于控制调试输出数量
 
                         if (dim1 == 56 && dim2 > 1000) {
-                            System.out.println("✅ 检测到格式: [batch][features][detections]");
+                            System.out.println("  检测到格式: [batch][features][detections]");
                             float[][] detections = batch[0];
 
 
@@ -480,7 +500,7 @@ public class identifyTypeNewOnnxTest {
 
 
 
-                                    // ✅ 验证关键点有效性
+                                    //   验证关键点有效性
                                     int validCoordCount = 0;
                                     int highVisibilityCount = 0;
                                     float minX = Float.MAX_VALUE, maxX = Float.MIN_VALUE;
@@ -513,7 +533,7 @@ public class identifyTypeNewOnnxTest {
                                         }
                                     }
 
-                                    // ⭐ 计算关键点分布范围
+                                    //  计算关键点分布范围
                                     float keypointWidth = (maxX == Float.MIN_VALUE) ? 0 : (maxX - minX);
                                     float keypointHeight = (maxY == Float.MIN_VALUE) ? 0 : (maxY - minY);
 
@@ -530,7 +550,7 @@ public class identifyTypeNewOnnxTest {
                                         debugCount++;
                                     }
 
-                                    // ⭐⭐⭐ 关键过滤条件 ⭐⭐⭐
+                                    //  关键过滤条件 
                                     boolean hasValidKeypoints = false;
 
                                     if (highVisibilityCount >= 3) {
@@ -579,7 +599,7 @@ public class identifyTypeNewOnnxTest {
                                         boxes2d.add(new Rect2d(left, top, width, height));
                                         keypoints.add(kpts);
 
-                                        log.info("✅ 检测到有效人体: 置信度={}, 坐标=({},{},{},{}), 关键点覆盖={}x{}",
+                                        log.info("  检测到有效人体: 置信度={}, 坐标=({},{},{},{}), 关键点覆盖={}x{}",
                                                 confidence, left, top, width, height,
                                                 String.format("%.0f%%", widthRatio * 100),
                                                 String.format("%.0f%%", heightRatio * 100));
@@ -678,11 +698,13 @@ public class identifyTypeNewOnnxTest {
 
             boolean needAreaPush = needPushArea(netPush);
             Set<String> hitAreaNames = new LinkedHashSet<>();
+            //   新增：收集当前帧所有命中区域的播报配置（用于计算最终语音播报内容）
+            List<ShapeBroadcastInfo> hitBroadcastInfos = new ArrayList<>();
             DetectionStats stats = new DetectionStats();
 
-            // ✅ 收集当前帧所有有效目标（用于目标跟踪，与 detectObjectsDifyOnnxV5 保持一致）
+            //   收集当前帧所有有效目标（用于目标跟踪，与 detectObjectsDifyOnnxV5 保持一致）
             List<DetectedTarget> currentFrameTargets = new ArrayList<>();
-            // ✅ 延迟绘制队列：先收集，跟踪完再画，以便在标签上显示跟踪编号
+            //   延迟绘制队列：先收集，跟踪完再画，以便在标签上显示跟踪编号
             // 每个元素: [BoundingBox, baseLabel, confidence, color, DetectedTarget]
             List<Object[]> drawQueue = new ArrayList<>();
             int validCount = 0;
@@ -713,6 +735,18 @@ public class identifyTypeNewOnnxTest {
                 }
                 if (needAreaPush && StringUtils.isNotEmpty(areaName)) {
                     hitAreaNames.add(areaName);
+
+                    //   新增：查询该命中区域的播报配置
+                    TabVideoUtil _vuBc = netPush.getTabVideoUtil();
+                    if (_vuBc != null && _vuBc.getBzType() != null
+                            && StringUtils.isNotEmpty(_vuBc.getShapeData())) {
+                        ShapeBroadcastInfo _bi = matchShapeAreaInfo(
+                                originalBox.x, originalBox.y, originalBox.width, originalBox.height,
+                                _vuBc.getShapeData(), false);
+                        if (_bi != null) {
+                            hitBroadcastInfos.add(_bi);
+                        }
+                    }
                 }
 
                 // 执行跌倒检测
@@ -737,11 +771,11 @@ public class identifyTypeNewOnnxTest {
                 }
                 stats.accumulate(aiBase);
 
-                // ✅ 计算目标中心点（用于目标跟踪）
+                //   计算目标中心点（用于目标跟踪）
                 double centerX = x + width / 2.0;
                 double centerY = y + height / 2.0;
 
-                // ✅ 创建检测目标对象
+                //   创建检测目标对象
                 // className 使用姿态状态（如"跌倒"/"站立"），保证同类目标才会匹配
                 DetectedTarget target = new DetectedTarget();
                 target.setCenterX(centerX);
@@ -752,7 +786,7 @@ public class identifyTypeNewOnnxTest {
                 target.setDetectedTime(System.currentTimeMillis());
                 currentFrameTargets.add(target);
 
-                // ✅ 加入延迟绘制队列（trackNum 等跟踪完成后补充）
+                //   加入延迟绘制队列（trackNum 等跟踪完成后补充）
                 Scalar color = getColor(aiBase.getRgbColor());
                 drawQueue.add(new Object[]{originalBox, aiBase.getChainName(), conf, color, target});
 
@@ -834,8 +868,11 @@ public class identifyTypeNewOnnxTest {
                         ? String.join(",", hitAreaNames) : "";
                 log.info("【区域推送-Pose】needAreaPush={} 命中区域: [{}]", needAreaPush, modelArea);
 
+                //   新增：按区域级播报开关 / 自定义内容计算最终语音播报文本
+                String finalAudio = computeFinalAudioText(needAreaPush, hitBroadcastInfos, stats.audioText);
+
                 isOk(pushInfo, netPush, redisTemplate, savedImagePath, tabAiModel,
-                        stats.audioText, stats.warnNumber, warnText, stats.warnName, savePath, modelArea);
+                        finalAudio, stats.warnNumber, warnText, stats.warnName, savePath, modelArea);
                 return true;
             } catch (Exception ex) {
                 log.error("推送失败", ex);
@@ -904,7 +941,7 @@ public class identifyTypeNewOnnxTest {
         log.info("当前需要放大的数量：{}", retureBoxInfos.size());
         for (int roiIndex = 0; roiIndex < retureBoxInfos.size(); roiIndex++) {
             retureBoxInfo personBox = retureBoxInfos.get(roiIndex);
-            // ✅ 跳过太小的 ROI
+            //   跳过太小的 ROI
             if (personBox.getWidth() < 50 && personBox .getHeight() < 50) {
                 log.warn("ROI[{}]太小，跳过{}x{}", roiIndex,personBox.getWidth(), personBox.getHeight() );
                 continue;
@@ -913,7 +950,7 @@ public class identifyTypeNewOnnxTest {
                     roiIndex, personBox.getX(), personBox.getY(),
                     personBox.getWidth(), personBox.getHeight());
 
-            // ✅ 核心改进：智能裁剪策略
+            //   核心改进：智能裁剪策略
             CropResult cropResult = smartCropROI(personBox, image, netPush);
             if (cropResult == null) {
                 log.warn("ROI[{}]裁剪失败，跳过", roiIndex);
@@ -923,15 +960,15 @@ public class identifyTypeNewOnnxTest {
             Mat croppedMat = cropResult.croppedImage;
             Rect cropRect = cropResult.cropRect;
 
-            // ✅ 保存调试图（可选）
+            //   保存调试图（可选）
             if (netPush.getTabAiSubscriptionNew().getSaveRoiPic() == 0) {
                 saveDebugImg(croppedMat, roiIndex, netPush.getTabAiSubscriptionNew().getPathSave(),"ROIDebug");
             }
 
-            // ✅ 智能缩放：保持宽高比
+            //   智能缩放：保持宽高比
             ResizeResult resizeResult = smartResize(croppedMat, 640);
             Mat resizedMat = resizeResult.resizedImage;
-            // ✅ 修复：BGR → RGB
+            //   修复：BGR → RGB
             Imgproc.cvtColor(resizedMat, resizedMat, Imgproc.COLOR_BGR2RGB);
             // 预处理
             float[] inputData = preprocessImage(resizedMat);
@@ -959,7 +996,7 @@ public class identifyTypeNewOnnxTest {
             int[] nmsIndices = performNMS(detectionResult, confThreshold, nmsThreshold);
             log.info("ROI[{}]经NMS后保留{}个检测框", roiIndex, nmsIndices.length);
 
-            // ✅ 坐标转换：考虑letterbox的padding
+            //   坐标转换：考虑letterbox的padding
             for (int idx : nmsIndices) {
                 Rect2d box = detectionResult.boxes2d.get(idx);
 
@@ -1013,7 +1050,7 @@ public class identifyTypeNewOnnxTest {
         DetectionResult result = new DetectionResult();
         float confThreshold = 0.35f;
 
-        // ✅ 创建新的FloatBuffer并确保position为0
+        //   创建新的FloatBuffer并确保position为0
         FloatBuffer buffer = FloatBuffer.allocate(inputData.length);
         buffer.put(inputData);
         buffer.flip(); // 重置position到0,这很关键!
@@ -1039,7 +1076,7 @@ public class identifyTypeNewOnnxTest {
     }
 
     /**
-     * ✅ 智能裁剪：根据ROI大小和任务类型决定裁剪策略
+     *   智能裁剪：根据ROI大小和任务类型决定裁剪策略
      */
     private CropResult smartCropROI(retureBoxInfo personBox, Mat image, NetPush netPush) {
         int boxWidth = (int) personBox.getWidth();
@@ -1122,7 +1159,7 @@ public class identifyTypeNewOnnxTest {
     }
 
     /**
-     * ✅ 智能缩放：保持宽高比，用letterbox填充
+     *   智能缩放：保持宽高比，用letterbox填充
      */
     private ResizeResult smartResize(Mat src, int targetSize) {
         double srcWidth = src.cols();
@@ -1198,6 +1235,8 @@ public class identifyTypeNewOnnxTest {
         int validCount = 0;
         boolean needAreaPush = needPushArea(netPush);
         Set<String> hitAreaNames = new LinkedHashSet<>();
+        //   新增：收集当前帧所有命中区域的播报配置（用于计算最终语音播报内容）
+        List<ShapeBroadcastInfo> hitBroadcastInfos = new ArrayList<>();
 
         if (netPush.getTabAiSubscriptionNew().getSaveBeforePic() == 0) {
             saveDebugImg(image, 10000, netPush.getTabAiSubscriptionNew().getPathSave(),"before");
@@ -1218,6 +1257,18 @@ public class identifyTypeNewOnnxTest {
             }
             if (needAreaPush && StringUtils.isNotEmpty(areaName)) {
                 hitAreaNames.add(areaName);
+
+                //   新增：查询该命中区域的播报配置
+                TabVideoUtil _vuBc = netPush.getTabVideoUtil();
+                if (_vuBc != null && _vuBc.getBzType() != null
+                        && StringUtils.isNotEmpty(_vuBc.getShapeData())) {
+                    ShapeBroadcastInfo _bi = matchShapeAreaInfo(
+                            bbox.x, bbox.y, bbox.width, bbox.height,
+                            _vuBc.getShapeData(), false);
+                    if (_bi != null) {
+                        hitBroadcastInfos.add(_bi);
+                    }
+                }
             }
 
             // 2. 前置模型关联过滤（如果使用了ROI检测）
@@ -1270,8 +1321,12 @@ public class identifyTypeNewOnnxTest {
         try {
             String modelArea = (needAreaPush && !hitAreaNames.isEmpty())
                     ? String.join(",", hitAreaNames) : "";
+
+            //   新增：按区域级播报开关 / 自定义内容计算最终语音播报文本
+            String finalAudio = computeFinalAudioText(needAreaPush, hitBroadcastInfos, stats.audioText);
+
             isOk(pushInfo, netPush, redisTemplate, savedImagePath, tabAiModel,
-                    stats.audioText, stats.warnNumber, stats.warnText, stats.warnName, savePath, modelArea);
+                    finalAudio, stats.warnNumber, stats.warnText, stats.warnName, savePath, modelArea);
             return true;
         } catch (Exception ex) {
             log.error("推送失败", ex);
@@ -1674,7 +1729,7 @@ public class identifyTypeNewOnnxTest {
                 push.setModelName(warnName);
                 push.setAiNumber(warnNumber);
                 push.setModelText(warnText);
-                // ✅ 区域名称（仅开启了 isByPush 且命中区域时才有值）
+                //   区域名称（仅开启了 isByPush 且命中区域时才有值）
                 if (modelArea != null && !modelArea.isEmpty()) {
                     push.setModelArea(modelArea);
                     log.info("【区域报警】命中区域: {}", modelArea);
@@ -1682,12 +1737,20 @@ public class identifyTypeNewOnnxTest {
 
                 //`使用播报
                 if(netPush.getTabAiVideoSetting().getIsAudio() == 0){
-                    String audio=audioText;
-                    //开启区域推送 开启后播报区域内容消息
-                    if(netPush.getTabAiVideoSetting().getIsBy() == 0 && netPush.getTabAiVideoSetting().getIsByPush() == 0){
-                        audio=modelArea;
+                    //   audioText 由调用方按"区域级播报开关 + 自定义内容"预先算好：
+                    //   - 命中开启播报的区域且有自定义内容 → 区域内容（区域大于默认）
+                    //   - 命中区域但都关闭播报 / 未设自定义内容 / 未开区域推送 → 识别配置内容
+                    // 这里不再被 modelArea 覆盖，让区域级控制生效。
+                    String audio = audioText;
+                    // 兼容兜底：调用方未传有效 audioText 时，沿用旧的"播报区域名"行为
+                    if ((audio == null || audio.isEmpty())
+                            && netPush.getTabAiVideoSetting().getIsBy() == 0
+                            && netPush.getTabAiVideoSetting().getIsByPush() == 0
+                            && modelArea != null && !modelArea.isEmpty()) {
+                        audio = modelArea;
                     }
-                    sendAudio(netPush.getTabAudioDevices(),audio);
+                    log.info("【开始播报】:{}",audio);
+                //    sendAudio(netPush.getTabAudioDevices(),audio);
                 }
 
                 String recordVideo = "";
@@ -1998,12 +2061,12 @@ public class identifyTypeNewOnnxTest {
             return inputData;
 
         } finally {
-            // ✅ 释放 blob
+            //   释放 blob
             if (blob != null) {
                 blob.release();
             }
 
-            // ✅ 释放所有 channels
+            //   释放所有 channels
             if (channels != null) {
                 for (Mat channel : channels) {
                     if (channel != null) {
@@ -2284,7 +2347,7 @@ public class identifyTypeNewOnnxTest {
                 // 旧版无名称，返回空串表示"有效但无区域名"
                 return "";
             } else {
-                // ✅ 新版 shapeData：委托 matchShapeArea，同时拿到区域名称
+                //   新版 shapeData：委托 matchShapeArea，同时拿到区域名称
                 String areaName = matchShapeArea(
                         originalBox.x, originalBox.y, originalBox.width, originalBox.height,
                         videoUtil.getShapeData(), false);
@@ -2301,7 +2364,7 @@ public class identifyTypeNewOnnxTest {
     }
 
     /**
-     * ✅ 坐标缩放转换：从模型输出坐标系转换到原图坐标系
+     *   坐标缩放转换：从模型输出坐标系转换到原图坐标系
      * @param coord 模型输出的坐标（640×640）
      * @param modelSize 模型输出尺寸（通常是640）
      * @param originalSize 原图对应维度的尺寸
@@ -2346,19 +2409,44 @@ public class identifyTypeNewOnnxTest {
      * @param strictMode   true=严格（完全包含），false=宽松（5%重叠即可）
      * @return 命中区域的名称（空名称时返回默认编号名），未命中返回 {@code null}
      */
-    public static String matchShapeArea(
+    /**
+     *   新增：区域匹配的完整结果，包含播报相关配置。
+     *
+     * <p>用于在命中区域后，调用方按区域级 broadcastEnabled / broadcastContent 决定语音播报内容。</p>
+     */
+    public static class ShapeBroadcastInfo {
+        public final String  areaName;            // 区域名称（已对空名做兜底）
+        public final String  areaId;              // 区域 ID（第三方接口控制用）
+        public final boolean broadcastEnabled;    // 是否启用语音播报，旧数据缺省时 true（向后兼容）
+        public final String  broadcastContent;    // 区域自定义播报内容（可空 → 走默认识别内容）
+
+        public ShapeBroadcastInfo(String areaName, String areaId,
+                                  boolean broadcastEnabled, String broadcastContent) {
+            this.areaName         = areaName;
+            this.areaId           = areaId;
+            this.broadcastEnabled = broadcastEnabled;
+            this.broadcastContent = broadcastContent;
+        }
+    }
+
+    /**
+     *   新增：matchShapeArea 的"富信息"版本——命中后额外返回该区域的播报配置。
+     * <p>原 {@link #matchShapeArea(double, double, double, double, String, boolean)} 改为本方法的薄包装，
+     * 因此现有调用方（如 isValidDetection）无需任何改动。</p>
+     */
+    public static ShapeBroadcastInfo matchShapeAreaInfo(
             double x1, double y1, double w, double h,
             String shapeDataJson, boolean strictMode) {
 
         if (StringUtils.isEmpty(shapeDataJson)) {
-            log.warn("【matchShapeArea】shapeDataJson 为空");
+            log.warn("【matchShapeAreaInfo】shapeDataJson 为空");
             return null;
         }
         try {
             JSONObject shapeData = JSON.parseObject(shapeDataJson);
             JSONArray  shapes    = shapeData.getJSONArray("shapes");
             if (shapes == null || shapes.isEmpty()) {
-                log.warn("【matchShapeArea】shapeData 中没有定义任何形状");
+                log.warn("【matchShapeAreaInfo】shapeData 中没有定义任何形状");
                 return null;
             }
 
@@ -2375,7 +2463,7 @@ public class identifyTypeNewOnnxTest {
                 String     type        = shape.getString("type");
                 JSONObject coordinates = shape.getJSONObject("coordinates");
 
-                // ✅ 读取区域名称，空时回退为默认编号
+                //   读取区域名称，空时回退为默认编号
                 String rawName  = shape.getString("name");
                 String areaName = (rawName != null && !rawName.trim().isEmpty())
                         ? rawName.trim()
@@ -2400,7 +2488,7 @@ public class identifyTypeNewOnnxTest {
                                 i+1, areaName,
                                 (int)x1,(int)y1,(int)x2,(int)y2,
                                 (int)areaMinX,(int)areaMinY,(int)areaMaxX,(int)areaMaxY,
-                                matched ? "✅ 命中" : "❌ 未命中");
+                                matched ? "  命中" : "❌ 未命中");
                     } else {
                         double iw = Math.min(x2, areaMaxX) - Math.max(x1, areaMinX);
                         double ih = Math.min(y2, areaMaxY) - Math.max(y1, areaMinY);
@@ -2412,7 +2500,7 @@ public class identifyTypeNewOnnxTest {
                                     (int)x1,(int)y1,(int)x2,(int)y2,
                                     (int)areaMinX,(int)areaMinY,(int)areaMaxX,(int)areaMaxY,
                                     String.format("%.1f", ratio * 100),
-                                    matched ? "✅ 命中" : "❌ 未命中");
+                                    matched ? "  命中" : "❌ 未命中");
                         } else {
                             log.info("矩形[{}]「{}」宽松判断: 无交集 → ❌ 未命中", i+1, areaName);
                         }
@@ -2428,7 +2516,7 @@ public class identifyTypeNewOnnxTest {
                                 && isPointInPolygon(x1, y2, points)
                                 && isPointInPolygon(x2, y2, points);
                         log.info("多边形[{}]「{}」严格判断: → {}", i+1, areaName,
-                                matched ? "✅ 命中" : "❌ 未命中");
+                                matched ? "  命中" : "❌ 未命中");
                     } else {
                         int sampleN = 10, insideCount = 0, totalCount = 0;
                         double stepX = w / sampleN, stepY = h / sampleN;
@@ -2445,13 +2533,22 @@ public class identifyTypeNewOnnxTest {
                         log.info("多边形[{}]「{}」宽松判断: 采样={}/{} 占比={}% → {}",
                                 i+1, areaName, insideCount, totalCount,
                                 String.format("%.1f", ratio * 100),
-                                matched ? "✅ 命中" : "❌ 未命中");
+                                matched ? "  命中" : "❌ 未命中");
                     }
                 }
 
                 if (matched) {
-                    log.info("✅ 目标框命中区域[{}]「{}」", i+1, areaName);
-                    return areaName;
+                    //   新增：读取该区域的播报配置（旧数据无 broadcastEnabled 字段时默认 true）
+                    Boolean rawEnabled = shape.getBoolean("broadcastEnabled");
+                    boolean broadcastEnabled = (rawEnabled == null) || rawEnabled;
+                    String  broadcastContent = shape.getString("broadcastContent");
+                    String  areaId           = shape.getString("id");
+
+                    log.info("  目标框命中区域[{}]「{}」 id={}, 播报开关={}, 自定义内容={}",
+                            i+1, areaName, areaId, broadcastEnabled,
+                            (broadcastContent == null || broadcastContent.isEmpty()) ? "<空>" : broadcastContent);
+
+                    return new ShapeBroadcastInfo(areaName, areaId, broadcastEnabled, broadcastContent);
                 }
             }
 
@@ -2459,9 +2556,72 @@ public class identifyTypeNewOnnxTest {
             return null;
 
         } catch (Exception e) {
-            log.error("【matchShapeArea】解析失败", e);
+            log.error("【matchShapeAreaInfo】解析失败", e);
             return null;
         }
+    }
+
+    /**
+     * 【兼容入口】判断目标框与 shapeData 中哪个区域匹配，返回该区域名称。
+     *
+     * <p>本方法保持原签名不变，内部委托 {@link #matchShapeAreaInfo}。</p>
+     */
+    public static String matchShapeArea(
+            double x1, double y1, double w, double h,
+            String shapeDataJson, boolean strictMode) {
+        ShapeBroadcastInfo info = matchShapeAreaInfo(x1, y1, w, h, shapeDataJson, strictMode);
+        return info == null ? null : info.areaName;
+    }
+
+    /**
+     *   新增：根据"本帧所有命中区域的播报配置"决定最终语音播报内容。
+     *
+     * <p>语义（与产品需求严格对应）：</p>
+     * <ul>
+     *   <li>未开启区域推送 → 默认识别配置内容</li>
+     *   <li>命中的区域中没有任何一个开启播报 → 默认识别配置内容
+     *       <br>（典型场景：摄像头三个区域全部关闭播报，但摄像头播报开关仍开启）</li>
+     *   <li>命中了开启播报的区域，且这些区域设置了自定义内容 → 自定义内容（多区域去重并以逗号拼接）
+     *       <br>（"区域大于默认播报内容"）</li>
+     *   <li>命中了开启播报的区域，但都没设置自定义内容 → 默认识别配置内容</li>
+     * </ul>
+     *
+     * <p>注意：本方法只影响"语音播报内容"。推送 / 识别 / 区域名展示等行为不受影响。</p>
+     *
+     * @param needAreaPush    是否开启了区域推送（{@link #needPushArea}）
+     * @param hitInfos        本帧所有命中区域的播报信息（命中顺序，含重复）
+     * @param defaultAudio    识别累积出来的默认音频文本（一般传 stats.audioText）
+     */
+    public static String computeFinalAudioText(boolean needAreaPush,
+                                               List<ShapeBroadcastInfo> hitInfos,
+                                               String defaultAudio) {
+        if (!needAreaPush || hitInfos == null || hitInfos.isEmpty()) {
+            return defaultAudio;
+        }
+        boolean anyEnabled = false;
+        LinkedHashSet<String> customContents = new LinkedHashSet<>();
+        for (ShapeBroadcastInfo bi : hitInfos) {
+            if (bi == null) continue;
+            if (bi.broadcastEnabled) {
+                anyEnabled = true;
+                if (bi.broadcastContent != null && !bi.broadcastContent.trim().isEmpty()) {
+                    customContents.add(bi.broadcastContent.trim());
+                }
+            }
+        }
+        if (!anyEnabled) {
+            // 所有命中区域都关闭了播报 → 走默认（识别配置内容）
+            log.info("【播报决策】命中区域均关闭播报 → 使用默认识别内容");
+            return defaultAudio;
+        }
+        if (customContents.isEmpty()) {
+            // 开启了播报但没有任何自定义内容 → 走默认
+            log.info("【播报决策】开启播报的区域未设置自定义内容 → 使用默认识别内容");
+            return defaultAudio;
+        }
+        String finalText = String.join(",", customContents);
+        log.info("【播报决策】使用区域自定义播报内容: {}", finalText);
+        return finalText;
     }
 
     /**
@@ -2619,7 +2779,7 @@ public class identifyTypeNewOnnxTest {
                     JSONObject shape     = shapes.getJSONObject(i);
                     String type          = shape.getString("type");
                     JSONObject coords    = shape.getJSONObject("coordinates");
-                    // ✅ 优先使用用户自定义名称，无名称时回退编号
+                    //   优先使用用户自定义名称，无名称时回退编号
                     String rawName   = shape.getString("name");
                     String areaLabel = (rawName != null && !rawName.trim().isEmpty())
                             ? rawName.trim() : "区域" + (i + 1);
@@ -2832,7 +2992,7 @@ public class identifyTypeNewOnnxTest {
         // 3. 匹配当前目标与历史目标
         List<TrackedTarget> updatedTargets = new ArrayList<>();
         List<DetectedTarget> newTargets = new ArrayList<>();
-        // ⭐ 用 IdentityHashMap 保证以对象引用为 key（DetectedTarget 未重写 equals）
+        //  用 IdentityHashMap 保证以对象引用为 key（DetectedTarget 未重写 equals）
         Map<DetectedTarget, Integer> targetNumMap = new java.util.IdentityHashMap<>();
 
         for (DetectedTarget currentTarget : currentTargets) {
@@ -3015,7 +3175,7 @@ public class identifyTypeNewOnnxTest {
     private TrackedTarget createNewTrackedTarget(DetectedTarget currentTarget, long currentTime) {
         TrackedTarget newTarget = new TrackedTarget();
         newTarget.setTargetId(generateTargetId());
-        // ⭐ 分配4位显示编号（循环 1-9999）
+        //  分配4位显示编号（循环 1-9999）
         newTarget.setTrackNum(TRACK_COUNTER.incrementAndGet() % 10000);
         newTarget.setCenterX(currentTarget.getCenterX());
         newTarget.setCenterY(currentTarget.getCenterY());

@@ -21,7 +21,7 @@ public class test {
         String tokens = path+"tokens.txt";
 
         String waveFilename =
-                path+  "test_wavs\\25.wav";
+                path+  "\\test_wavs\\1779413057666_wgaiaudio.wav";
 
         WaveReader reader = new WaveReader(waveFilename);
 

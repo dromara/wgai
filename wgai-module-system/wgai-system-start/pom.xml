@@ -55,7 +55,7 @@
             </plugin>
         </plugins>
     </build>
-<!--    极简打包 打包命令 mvn clean package-->
+<!--    java -Dloader.path=D:\javaai\lib  -jar wgai-system-start-3.4.3.jar 极简打包 打包命令 mvn clean package-->
 <!--    <build>-->
 <!--        <plugins>-->
 <!--            <plugin>-->

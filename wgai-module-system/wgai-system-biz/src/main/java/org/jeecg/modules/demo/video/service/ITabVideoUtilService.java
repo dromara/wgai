@@ -19,4 +19,7 @@ public interface ITabVideoUtilService extends IService<TabVideoUtil> {
     //结束区域检测内容
     public Result<?> endVideoUtil(TabVideoUtil tabVideoUtil);
 
+    //结束区域检测内容
+    public Result<?> getBoxSetting();
+
 }

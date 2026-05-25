@@ -32,6 +32,7 @@ import org.jeecg.modules.demo.tab.entity.TabAiSubscription;
 import org.jeecg.modules.demo.tab.mapper.TabAiBaseMapper;
 import org.jeecg.modules.demo.tab.mapper.TabAiHistoryMapper;
 import org.jeecg.modules.demo.tab.service.ITabAiHistoryService;
+import org.jeecg.modules.demo.tab.util.FfmpegPcmLoader;
 import org.jeecg.modules.demo.video.entity.TabAiSubscriptionNew;
 import org.jeecg.modules.demo.video.entity.TabVideoUtil;
 import org.jeecg.modules.demo.video.service.impl.TabVideoUtilServiceImpl;
@@ -109,25 +110,16 @@ public class TabAiHistoryServiceImpl extends ServiceImpl<TabAiHistoryMapper, Tab
     public String WGAIAudio="wgaiaudio";
 
     @Override
-    public Result<?> aiAudioSetting(TabAuditSetting tabAuditSetting,String audioPath, String uplopadPath) {
+    public Result<?> aiAudioSetting(TabAuditSetting tabAuditSetting, String audioPath, String uplopadPath) {
         try {
             String waveFilename = uplopadPath + File.separator + audioPath;
-            Result<String> result = waveInt16(waveFilename, uplopadPath, System.currentTimeMillis() + "_" + WGAIAudio + ".wav");
-            if (result.isSuccess()) {
-                waveFilename = uplopadPath + File.separator + result.getMessage();
-                log.info("【转换16通道音频完成 删除原版文件重新保存】");
-            } else {
-                log.error("【转换16通道音频出现问题】");
-            }
-            WaveReader reader = new WaveReader(waveFilename);
-            log.info("【waveFilename:{}】",waveFilename);
-            log.info("【getEncoder:{}】",uplopadPath + File.separator + tabAuditSetting.getEncoderPath());
-            log.info("【getDecoderPath:{}】",uplopadPath + File.separator + tabAuditSetting.getDecoderPath());
-            log.info("【getJoinerPath:{}】",uplopadPath + File.separator + tabAuditSetting.getJoinerPath());
-            log.info("【getTokenPath:{}】",uplopadPath + File.separator + tabAuditSetting.getTokenPath());
-            log.info("【getModeLing:{}】",tabAuditSetting.getModeLing());
-            log.info("【getHotWord:{}】",uplopadPath + File.separator + tabAuditSetting.getHotWord());
-            log.info("【getDecodingMethod:{}】",tabAuditSetting.getDecodingMethod());
+
+            // 直接拿到 float[],不再用 waveInt16 + WaveReader
+            FfmpegPcmLoader.AudioData audio = FfmpegPcmLoader.load(waveFilename);
+            log.info("【samples.length={}, sampleRate={}, 时长={}s】",
+                    audio.samples.length, audio.sampleRate,
+                    audio.samples.length / (float) audio.sampleRate);
+
             OfflineTransducerModelConfig transducer =
                     OfflineTransducerModelConfig.builder()
                             .setEncoder(uplopadPath + File.separator + tabAuditSetting.getEncoderPath())
@@ -138,29 +130,29 @@ public class TabAiHistoryServiceImpl extends ServiceImpl<TabAiHistoryMapper, Tab
                     OfflineModelConfig.builder()
                             .setTransducer(transducer)
                             .setTokens(uplopadPath + File.separator + tabAuditSetting.getTokenPath())
-                            .setNumThreads(4)
+                            .setNumThreads(1)
                             .setDebug(true)
                             .setModelingUnit(tabAuditSetting.getModeLing())
                             .build();
-            // .build();
             OfflineRecognizerConfig config =
                     OfflineRecognizerConfig.builder()
                             .setOfflineModelConfig(modelConfig)
                             .setDecodingMethod(tabAuditSetting.getDecodingMethod())
                             .setHotwordsFile(uplopadPath + File.separator + tabAuditSetting.getHotWord())
-                            .setHotwordsScore(20.0f)
+                            .setHotwordsScore(2.0f)
                             .build();
+
             OfflineRecognizer recognizer = new OfflineRecognizer(config);
             OfflineStream stream = recognizer.createStream();
-            stream.acceptWaveform(reader.getSamples(), reader.getSampleRate());
+            stream.acceptWaveform(audio.samples, audio.sampleRate);
             recognizer.decode(stream);
             String text = recognizer.getResult(stream).getText();
             System.out.printf("filename:%s\nresult:%s\n", waveFilename, text);
             stream.release();
             recognizer.release();
-            log.info("当前结束时间{}",System.currentTimeMillis());
+            log.info("当前结束时间{}", System.currentTimeMillis());
             return Result.OK(changeInfo(text));
-        }catch (Exception ex){
+        } catch (Exception ex) {
             ex.printStackTrace();
         }
         return Result.error("识别失败");
@@ -231,7 +223,7 @@ public class TabAiHistoryServiceImpl extends ServiceImpl<TabAiHistoryMapper, Tab
                         .setOfflineModelConfig(modelConfig)
                         .setDecodingMethod("modified_beam_search")
                         .setHotwordsFile(hotwords)
-                        .setHotwordsScore(20.0f)
+                        .setHotwordsScore(5.0f)
                         .build();
         OfflineRecognizer recognizer = new OfflineRecognizer(config);
         OfflineStream stream = recognizer.createStream();
@@ -247,7 +239,7 @@ public class TabAiHistoryServiceImpl extends ServiceImpl<TabAiHistoryMapper, Tab
 
 
     public  String  changeInfo(String text){
-
+        log.info("未转换{}",text);
         if(text!=null){
             List<TabKeyWords> tabKeyWords=(List<TabKeyWords>) redisTemplate.opsForValue().get("KeyWord");
             for (TabKeyWords keyword:tabKeyWords) {

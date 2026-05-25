@@ -5116,110 +5116,136 @@ public class AIModelYolo3 {
      * 人脸检测 - 使用 SCRFD-10G
      */
     public static List<FaceBox> detectFaces(String modelPath, String imagePath,
-                                      String uploadpath, boolean useGpu) throws Exception {
+                                            String uploadpath, boolean useGpu) throws Exception {
 
-        Mat image = Imgcodecs.imread(uploadpath + File.separator + imagePath);
-        if (image.empty()) {
-            throw new RuntimeException("无法读取图像: " + imagePath);
-        }
-
-        int originalWidth = image.cols();
-        int originalHeight = image.rows();
-
-        // 预处理
-        Mat processedImage = letterboxResize(image, 640, 640);
-        Imgproc.cvtColor(processedImage, processedImage, Imgproc.COLOR_BGR2RGB);
-
-        // SCRFD 归一化
-        Mat blob = new Mat();
-        processedImage.convertTo(blob, CvType.CV_32F);
-        Core.subtract(blob, new Scalar(127.5, 127.5, 127.5), blob);
-        Core.divide(blob, new Scalar(128.0, 128.0, 128.0), blob);
-
-        // HWC -> CHW
-        float[] inputData = matToFloatArrayCHW(blob, 640, 640);
-
-        // ONNX 推理
-        OrtEnvironment env = OrtEnvironment.getEnvironment();
-        OrtSession.SessionOptions options = new OrtSession.SessionOptions();
-        if (useGpu) {
-            options.addCUDA();
-        } else {
-            options.setInterOpNumThreads(4);
-            options.setIntraOpNumThreads(8);
-            options.addCPU(true);
-        }
-
+        Mat image = null;
+        Mat processedImage = null;
+        Mat blob = null;
         List<FaceBox> faceBoxes = new ArrayList<>();
 
-        try (OrtSession session = env.createSession(uploadpath + File.separator + modelPath, options)) {
-            long[] shape = {1, 3, 640, 640};
-            OnnxTensor inputTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputData), shape);
-            Map<String, OnnxTensor> inputs = Collections.singletonMap(
-                    session.getInputNames().iterator().next(), inputTensor
-            );
+        try {
+            image = Imgcodecs.imread(uploadpath + File.separator + imagePath);
+            if (image.empty()) {
+                throw new RuntimeException("无法读取图像: " + imagePath);
+            }
 
-            try (OrtSession.Result results = session.run(inputs)) {
-                // 收集输出
-                Map<String, OnnxTensor> outputMap = new HashMap<>();
-                for (Map.Entry<String, OnnxValue> entry : results) {
-                    if (entry.getValue() instanceof OnnxTensor) {
-                        outputMap.put(entry.getKey(), (OnnxTensor) entry.getValue());
+            int originalWidth = image.cols();
+            int originalHeight = image.rows();
+
+            // 预处理
+            processedImage = letterboxResize(image, 640, 640);
+            Imgproc.cvtColor(processedImage, processedImage, Imgproc.COLOR_BGR2RGB);
+
+            // SCRFD 归一化
+            blob = new Mat();
+            processedImage.convertTo(blob, CvType.CV_32F);
+            Core.subtract(blob, new Scalar(127.5, 127.5, 127.5), blob);
+            Core.divide(blob, new Scalar(128.0, 128.0, 128.0), blob);
+
+            // HWC -> CHW
+            float[] inputData = matToFloatArrayCHW(blob, 640, 640);
+
+            // ONNX 推理
+            OrtEnvironment env = OrtEnvironment.getEnvironment();
+            OrtSession.SessionOptions options = new OrtSession.SessionOptions();
+            if (useGpu) {
+                options.addCUDA();
+            } else {
+                options.setInterOpNumThreads(4);
+                options.setIntraOpNumThreads(8);
+                options.addCPU(true);
+            }
+
+            try (OrtSession session = env.createSession(uploadpath + File.separator + modelPath, options)) {
+                long[] shape = {1, 3, 640, 640};
+                OnnxTensor inputTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputData), shape);
+                Map<String, OnnxTensor> inputs = Collections.singletonMap(
+                        session.getInputNames().iterator().next(), inputTensor
+                );
+
+                try (OrtSession.Result results = session.run(inputs)) {
+                    // 收集输出
+                    Map<String, OnnxTensor> outputMap = new HashMap<>();
+                    for (Map.Entry<String, OnnxValue> entry : results) {
+                        if (entry.getValue() instanceof OnnxTensor) {
+                            outputMap.put(entry.getKey(), (OnnxTensor) entry.getValue());
+                        }
+                    }
+
+                    List<String> outputNames = new ArrayList<>(outputMap.keySet());
+                    Collections.sort(outputNames);
+
+                    // 提取 score 和 bbox
+                    float[][] scores_s8  = (float[][]) outputMap.get(outputNames.get(0)).getValue();
+                    float[][] bboxes_s8  = (float[][]) outputMap.get(outputNames.get(1)).getValue();
+                    float[][] scores_s16 = (float[][]) outputMap.get(outputNames.get(3)).getValue();
+                    float[][] bboxes_s16 = (float[][]) outputMap.get(outputNames.get(4)).getValue();
+                    float[][] scores_s32 = (float[][]) outputMap.get(outputNames.get(6)).getValue();
+                    float[][] bboxes_s32 = (float[][]) outputMap.get(outputNames.get(7)).getValue();
+
+                    // 坐标转换参数
+                    double scale = Math.min(640.0 / originalWidth, 640.0 / originalHeight);
+                    double dx = (640 - originalWidth * scale) / 2;
+                    double dy = (640 - originalHeight * scale) / 2;
+
+                    List<Rect2d> boxes2d = new ArrayList<>();
+                    List<Float> confidences = new ArrayList<>();
+
+                    // 处理三个尺度
+                    processSCRFDStride(scores_s8,  bboxes_s8,  8,  80, boxes2d, confidences,
+                            scale, dx, dy, originalWidth, originalHeight);
+                    processSCRFDStride(scores_s16, bboxes_s16, 16, 40, boxes2d, confidences,
+                            scale, dx, dy, originalWidth, originalHeight);
+                    processSCRFDStride(scores_s32, bboxes_s32, 32, 20, boxes2d, confidences,
+                            scale, dx, dy, originalWidth, originalHeight);
+
+                    // NMS —— 先判空再构造,避免空 List 触发 m.dims >= 2 断言
+                    List<Integer> keepIndices = new ArrayList<>();
+                    if (!confidences.isEmpty()) {
+                        MatOfRect2d boxesMat = new MatOfRect2d();
+                        boxesMat.fromList(boxes2d);
+
+                        // 用 float[] 构造,绕开 MatOfFloat(Mat) 的维度检查
+                        float[] confArr = new float[confidences.size()];
+                        for (int i = 0; i < confArr.length; i++) {
+                            confArr[i] = confidences.get(i);
+                        }
+                        MatOfFloat confidencesMat = new MatOfFloat(confArr);
+
+                        MatOfInt indices = new MatOfInt();
+                        try {
+                            Dnn.NMSBoxes(boxesMat, confidencesMat, 0.65f, 0.4f, indices);
+                            for (int idx : indices.toArray()) {
+                                keepIndices.add(idx);
+                            }
+                        } finally {
+                            boxesMat.release();
+                            confidencesMat.release();
+                            indices.release();
+                        }
+                    }
+
+                    for (int idx : keepIndices) {
+                        Rect2d box = boxes2d.get(idx);
+                        FaceBox faceBox = new FaceBox();
+                        faceBox.setX(box.x);
+                        faceBox.setY(box.y);
+                        faceBox.setWidth(box.width);
+                        faceBox.setHeight(box.height);
+                        faceBox.setConfidence(confidences.get(idx));
+                        faceBoxes.add(faceBox);
                     }
                 }
-
-                List<String> outputNames = new ArrayList<>(outputMap.keySet());
-                Collections.sort(outputNames);
-
-                // 提取 score 和 bbox
-                float[][] scores_s8 = (float[][]) outputMap.get(outputNames.get(0)).getValue();
-                float[][] bboxes_s8 = (float[][]) outputMap.get(outputNames.get(1)).getValue();
-                float[][] scores_s16 = (float[][]) outputMap.get(outputNames.get(3)).getValue();
-                float[][] bboxes_s16 = (float[][]) outputMap.get(outputNames.get(4)).getValue();
-                float[][] scores_s32 = (float[][]) outputMap.get(outputNames.get(6)).getValue();
-                float[][] bboxes_s32 = (float[][]) outputMap.get(outputNames.get(7)).getValue();
-
-                // 坐标转换参数
-                double scale = Math.min(640.0 / originalWidth, 640.0 / originalHeight);
-                double dx = (640 - originalWidth * scale) / 2;
-                double dy = (640 - originalHeight * scale) / 2;
-
-                List<Rect2d> boxes2d = new ArrayList<>();
-                List<Float> confidences = new ArrayList<>();
-
-                // 处理三个尺度
-                processSCRFDStride(scores_s8, bboxes_s8, 8, 80, boxes2d, confidences,
-                        scale, dx, dy, originalWidth, originalHeight);
-                processSCRFDStride(scores_s16, bboxes_s16, 16, 40, boxes2d, confidences,
-                        scale, dx, dy, originalWidth, originalHeight);
-                processSCRFDStride(scores_s32, bboxes_s32, 32, 20, boxes2d, confidences,
-                        scale, dx, dy, originalWidth, originalHeight);
-
-                // NMS
-                MatOfRect2d boxesMat = new MatOfRect2d();
-                boxesMat.fromList(boxes2d);
-                MatOfFloat confidencesMat = new MatOfFloat(Converters.vector_float_to_Mat(confidences));
-                MatOfInt indices = new MatOfInt();
-
-                if (!boxesMat.empty() && !confidencesMat.empty()) {
-                    Dnn.NMSBoxes(boxesMat, confidencesMat, 0.65f, 0.4f, indices);
-                }
-
-                int[] indicesArr = indices.toArray();
-                for (int idx : indicesArr) {
-                    Rect2d box = boxes2d.get(idx);
-                    FaceBox faceBox = new FaceBox();
-                    faceBox.setX(box.x);
-                    faceBox.setY(box.y);
-                    faceBox.setWidth(box.width);
-                    faceBox.setHeight(box.height);
-                    faceBox.setConfidence(confidences.get(idx));
-                    faceBoxes.add(faceBox);
-                }
             }
-        }
 
-        return faceBoxes;
+            return faceBoxes;
+
+        } finally {
+            // 释放 Mat 堆外内存,避免长跑内存暴涨
+            if (image != null) image.release();
+            if (processedImage != null) processedImage.release();
+            if (blob != null) blob.release();
+        }
     }
 
     /**

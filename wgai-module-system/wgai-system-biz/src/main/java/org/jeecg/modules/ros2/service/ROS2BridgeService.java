@@ -141,6 +141,7 @@ public class ROS2BridgeService {
 
         // ⑤ 速度监控（只读，用于前端显示当前速度，不用于控制）
         subscribe("/cmd_vel", "geometry_msgs/Twist", 200);
+        subscribe("/cmd_vel_smoothed", "geometry_msgs/Twist", 200);
 
         // ⑥ ✅ 【新增】导航动作状态（到达/失败/取消 → 前端弹提示+清路径线）
         //    Nav2 在以下情况推送：
@@ -263,18 +264,18 @@ public class ROS2BridgeService {
         hardwareService.sendVelocity(linear, angular);
 
         // ② 同步发到 ROS2 /cmd_vel（让 Nav2 感知当前速度，可选）
-        JsonObject linearVec  = new JsonObject();
-        linearVec.addProperty("x", linear);
-        linearVec.addProperty("y", 0.0);
-        linearVec.addProperty("z", 0.0);
-        JsonObject angularVec = new JsonObject();
-        angularVec.addProperty("x", 0.0);
-        angularVec.addProperty("y", 0.0);
-        angularVec.addProperty("z", angular);
-        JsonObject twist = new JsonObject();
-        twist.add("linear",  linearVec);
-        twist.add("angular", angularVec);
-        publish("/cmd_vel", "geometry_msgs/Twist", twist);
+//        JsonObject linearVec  = new JsonObject();
+//        linearVec.addProperty("x", linear);
+//        linearVec.addProperty("y", 0.0);
+//        linearVec.addProperty("z", 0.0);
+//        JsonObject angularVec = new JsonObject();
+//        angularVec.addProperty("x", 0.0);
+//        angularVec.addProperty("y", 0.0);
+//        angularVec.addProperty("z", angular);
+//        JsonObject twist = new JsonObject();
+//        twist.add("linear",  linearVec);
+//        twist.add("angular", angularVec);
+//        publish("/cmd_vel", "geometry_msgs/Twist", twist);
     }
 
     public boolean isConnected() {

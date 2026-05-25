@@ -33,6 +33,7 @@ import org.opencv.imgcodecs.Imgcodecs;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import javax.annotation.PostConstruct;
@@ -692,6 +693,25 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
     @Override
     public Result<?> test(String id) {
         return Result.OK("test");
+    }
+
+    @Async
+    @Override
+    public void restartAi(String videoId) {
+        try{
+
+            TabAiSubscriptionNew obj =
+                    this.getById(videoId);
+
+            log.info("停止执行");
+            this.stopAi(obj);
+            Thread.sleep(3000);
+            log.info("开始执行");
+            this.startAi(obj);
+
+        }catch(Exception e){
+            log.error("重启失败",e);
+        }
     }
 
 

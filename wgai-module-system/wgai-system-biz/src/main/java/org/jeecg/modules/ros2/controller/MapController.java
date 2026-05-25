@@ -542,7 +542,7 @@ public class MapController {
                 + "controller_server:\n"
                 + "  ros__parameters:\n"
                 + "    use_sim_time: false\n"
-                + "    controller_frequency: 20.0\n"
+                + "    controller_frequency: 10.0\n"
                 + "    min_x_velocity_threshold: 0.001\n"
                 + "    min_y_velocity_threshold: 0.5\n"
                 + "    min_theta_velocity_threshold: 0.001\n"
@@ -887,6 +887,10 @@ public class MapController {
                 m.put("hasSavedPose",  new File(MAP_DIR + name + POSE_FILE_SUFFIX).exists());
                 list.add(m);
             }
+            list.sort((a, b) -> Long.compare(
+                    (Long) b.get("createTime"),
+                    (Long) a.get("createTime")
+            ));
             return Result.OK(list);
         } catch (Exception e) {
             log.error("获取地图列表失败", e);

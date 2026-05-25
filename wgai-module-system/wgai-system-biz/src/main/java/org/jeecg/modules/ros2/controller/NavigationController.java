@@ -7,6 +7,7 @@ import org.jeecg.common.api.vo.Result;
 import org.jeecg.modules.ros2.model.NavigationGoalDTO;
 import org.jeecg.modules.ros2.service.NavigationService;
 import org.jeecg.modules.ros2.service.ROS2BridgeService;
+import org.jeecg.modules.ros2.service.RobotHardwareService;
 import org.jeecg.modules.ros2.service.WebSocketPushService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.validation.annotation.Validated;
@@ -327,5 +328,50 @@ public class NavigationController {
         } else {
             return Result.error("无效模式,可选: nav | mapping");
         }
+    }
+
+
+    @Autowired
+    private RobotHardwareService hardwareService;
+
+// ─── 新接口 1: 紧急停车 ───────────────────────────────────────────────────
+
+    /**
+     * 硬件级紧急停车。
+     * 立即清除 PLC 全部方向 M 位 + 速度归零。
+     * 比 cancel() 更彻底: cancel() 依赖 Nav2 Action; 此接口直达 PLC。
+     */
+    @PostMapping("/emergency-stop")
+    @ApiOperation("硬件紧急停车 (直达 PLC)")
+    public Result<Void> emergencyStop() {
+        hardwareService.emergencyStop();
+        navigationService.cancelNavigation();  // 同步停 Nav2
+        return Result.OK("🛑 紧急停车已执行");
+    }
+
+// ─── 新接口 2: PLC 实时状态查询 (前端每秒轮询) ───────────────────────────
+
+    /**
+     * 查询底盘 PLC 实时状态。
+     * 前端用于在导航监控面板显示:
+     *   - 当前驱动模式 (STRAIGHT_FORWARD / ROTATE_LEFT 等)
+     *   - 实际 RPM 和转向角
+     *   - V 区反馈位 (真实运行状态)
+     *   - 障碍物最近距离 + 是否触发停车
+     */
+    @GetMapping("/plc-status")
+    @ApiOperation("查询底盘 PLC 实时状态")
+    public Result<?> getPlcStatus() {
+        return Result.OK(hardwareService.readStatus());
+    }
+
+// ─── 新接口 3: 设置障碍物停车阈值 ─────────────────────────────────────────
+
+    @PostMapping("/obstacle-threshold")
+    @ApiOperation("设置障碍物紧急停车距离阈值(m)")
+    public Result<Void> setObstacleThreshold(@RequestParam double distanceMeters) {
+        // 动态调整 (需在 RobotHardwareService 增加 setter)
+        hardwareService.setObstacleStopDistance(distanceMeters);
+        return Result.OK("障碍物停车阈值已设为 " + distanceMeters + "m");
     }
 }

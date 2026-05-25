@@ -138,28 +138,29 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
             JsonObject msg = json.getAsJsonObject("msg");
 
             switch (topic) {
-                case "/cloud_registered":
+                case "/cloud_registered": //点云数据
                     handlePointCloud(msg);
                     break;
-                case "/Odometry":
+                case "/Odometry": //OD坐标
                     handleOdometry(msg);
                     break;
-                case "/amcl_pose":
+                case "/amcl_pose":// 初始化位姿
                     handleAmclPose(msg);
                     break;
-                case "/plan":
+                case "/plan": //规划路线
                     handleNavPlan(msg);
                     break;
-                case "/path":
+                case "/path": //规划路径
                     handlePath(msg);
                     break;
-                case "/navigate_to_pose/_action/status":
+                case "/navigate_to_pose/_action/status": //导航状态位姿
                     handleNavStatus(msg);
                     break;
-                case "/cmd_vel":
+                case "/cmd_vel": //速度命令
+                case "/cmd_vel_smoothed":
                     handleCmdVel(msg);
                     break;
-                case "/map":
+                case "/map": //地图数据
                     handleMapUpdate(msg);
                     break;
                 default:

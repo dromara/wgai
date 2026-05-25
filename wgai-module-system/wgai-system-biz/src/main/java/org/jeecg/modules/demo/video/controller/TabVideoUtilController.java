@@ -12,11 +12,15 @@ import java.net.URLDecoder;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
 import org.apache.commons.lang.StringUtils;
 import org.jeecg.common.api.vo.Result;
 import org.jeecg.common.system.query.QueryGenerator;
 import org.jeecg.common.util.oConvertUtils;
+import org.jeecg.modules.demo.video.entity.TabAiSubscriptionNew;
 import org.jeecg.modules.demo.video.entity.TabVideoUtil;
+import org.jeecg.modules.demo.video.service.ITabAiSubscriptionNewService;
 import org.jeecg.modules.demo.video.service.ITabVideoUtilService;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -206,6 +210,62 @@ public class TabVideoUtilController extends JeecgController<TabVideoUtil, ITabVi
 		 }
 		 return Result.OK("编辑成功!");
 	 }
+
+
+
+	 @AutoLog(value = "识别区域配置获取")
+	 @ApiOperation(value="区域入侵配置-获取", notes="区域入侵配置-获取")
+	 @RequestMapping(value = "/getBoxSetting", method = {RequestMethod.GET,RequestMethod.POST})
+	 public Result<?> getBoxSetting() {
+		 return tabVideoUtilService.getBoxSetting();
+	 }
+
+
+	 @AutoLog(value = "识别区域配置获取")
+	 @ApiOperation(value="区域入侵配置-配置", notes="区域入侵配置-配置")
+	 @RequestMapping(value = "/setBoxSetting", method = {RequestMethod.GET,RequestMethod.POST})
+	 public Result<?> setBoxSetting(@RequestParam(name="id",required=true) String id,
+									@RequestParam(name="shapeId",required=true) String shapeId,
+									@RequestParam(name="name",required=true) String name,
+									@RequestParam(name="broadcastContent",required=true) String broadcastContent,
+									@RequestParam(name="broadcastEnabled",required=true) Boolean broadcastEnabled
+									) {
+
+		TabVideoUtil tabVideoUtil=tabVideoUtilService.getById(id);
+		JSONObject shapeData = JSON.parseObject(tabVideoUtil.getShapeData());
+  		JSONArray shapes    = shapeData.getJSONArray("shapes");
+		 for (int i = 0; i < shapes.size(); i++) {
+			 JSONObject shape = shapes.getJSONObject(i);
+			 String shapeid = shape.getString("id");
+			 if(shapeid.equals(shapeId)){
+				 shape.put("name",name);
+				 shape.put("broadcastEnabled",broadcastEnabled);
+				 shape.put("broadcastContent",broadcastContent);
+			 }
+
+		 }
+		 tabVideoUtil.setShapeData(shapeData.toJSONString());
+		 tabVideoUtilService.updateById(tabVideoUtil);
+
+		 tabAiSubscriptionNewService.restartAi(tabVideoUtil.getVideoId());
+//		 new Thread(() -> {
+//
+//			 TabAiSubscriptionNew tabAiSubscriptionNew=tabAiSubscriptionNewService.getById(tabVideoUtil.getVideoId());
+//			 try {
+//				 log.info("停止执行");
+//				 tabAiSubscriptionNewService.stopAi(tabAiSubscriptionNew);
+//				 Thread.sleep(3000);
+//				 log.info("开始执行");
+//				 tabAiSubscriptionNewService.startAi(tabAiSubscriptionNew);
+//			 } catch (Exception e) {
+//				 throw new RuntimeException(e);
+//			 }
+//		 }).start();
+
+		 return Result.OK("配置成功!");
+	 }
+	 @Autowired
+	 private ITabAiSubscriptionNewService tabAiSubscriptionNewService;
 
 	 @Value(value = "${jeecg.path.upload}")
 	 private String uploadpath;

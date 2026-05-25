@@ -1,59 +1,60 @@
 package org.jeecg.modules.ros2.service;
 
+import com.github.s7connector.api.DaveArea;
+import com.github.s7connector.api.S7Connector;
+import com.github.s7connector.api.factory.S7ConnectorFactory;
+import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
-import java.util.concurrent.*;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * 机器人底盘硬件控制服务 —— 西门子 PLC 版
+ * AGV 底盘硬件服务 — Siemens Smart 200 PLC 接口 (v3)
  *
- * 通信协议：S7 Protocol（Siemens 原生协议，TCP 端口 102）
- * Java 库：Moka7（纯 Java 实现，无需安装 snap7 本地库）
+ * ─── PLC 地址规范 ─────────────────────────────────────────────────────────
  *
- * Maven 依赖（pom.xml 添加）：
- * <dependency>
- *     <groupId>com.github.s7connector</groupId>
- *     <artifactId>s7connector</artifactId>
- *     <version>2.1</version>
- * </dependency>
+ *  ◆ 方向控制 M 区 (置1启动, 置0停止):
+ *    M1.0  前进
+ *    M1.1  后退
+ *    M1.2  左转  (单独=原地左转; + M1.0=左前转)
+ *    M1.3  右转  (单独=原地右转; + M1.0=右前转)
+ *    M1.4  直行模式  (先置1切到直行, 再配合 M1.0/M1.1)
+ *    M1.5  平移模式  (先置1切到平移, 再配合 M1.0/M1.1)
  *
- * 或者使用 Moka7：
- * <dependency>
- *     <groupId>org.moka7</groupId>
- *     <artifactId>moka7</artifactId>
- *     <version>1.0.2</version>
- * </dependency>
+ *  ◆ 速度/角度 V 区 Word (2字节有符号整数, 大端):
+ *    VW500  目标速度  0 ~ 3000 RPM
+ *    VW550  转弯角度  ±45°(直行模式) / ±12°(平移模式)
  *
- * PLC 侧需要在 DB 块中定义以下变量：
- * +------+--------+---------+----------------------------+
- * | 偏移 | 类型   | 变量名  | 说明                       |
- * +------+--------+---------+----------------------------+
- * | 0.0  | REAL   | LinearV | 线速度 m/s（前进+/后退-）  |
- * | 4.0  | REAL   | AngularW| 角速度 rad/s（左转+/右转-）|
- * | 8.0  | BOOL   | Enable  | 使能位（true=允许运动）    |
- * | 10.0 | INT    | HeartBeat| 心跳计数（Java每秒+1）   |
- * +------+--------+---------+----------------------------+
+ *  ◆ 状态反馈 V 区 (只读位):
+ *    V1.2  前进运行中
+ *    V1.3  后退运行中
+ *    V1.4  左转运行中
+ *    V1.5  右转运行中
+ *    V1.6  直行运行中
+ *    V1.7  平移运行中
  *
- * application.properties 配置：
- *   plc.host=192.168.0.1       PLC IP 地址
- *   plc.rack=0                 机架号（通常为0）
- *   plc.slot=1                 槽号（S7-300通常为2，S7-1200/1500通常为1）
- *   plc.db=100                 速度控制 DB 块号（DB100）
- *   plc.enabled=true           false=调试模式（只打日志不写PLC）
- *   plc.watchdog.ms=500        看门狗超时（ms），超时自动停车
+ * ─── S7-200 Smart V 区访问说明 ────────────────────────────────────────────
+ *  在 Dave/libnodave 协议中, S7-200 的 V 内存以 DB1 形式访问:
+ *    DaveArea.DB, areaNumber=1, byteOffset = VW地址
+ *  若 s7connector 版本不支持, 可将 VW500/VW550 改映射到 MW500/MW550
+ *  (DaveArea.FLAGS), 并同步修改 PLC 程序中的地址。
+ * ─────────────────────────────────────────────────────────────────────────
  */
 @Slf4j
 @Service
 public class RobotHardwareService {
 
-    // ===================== 可修改的配置 =====================
+    // ======================== 配置项 ========================
 
-    @Value("${plc.host:192.168.0.1}")
+    @Value("${plc.host:192.168.0.242}")
     private String plcHost;
 
     @Value("${plc.rack:0}")
@@ -62,254 +63,562 @@ public class RobotHardwareService {
     @Value("${plc.slot:1}")
     private int plcSlot;
 
-    /** DB 块编号，例如 100 代表 DB100 */
-    @Value("${plc.db:100}")
-    private int dbNumber;
-
-    /** false=调试模式，只打印日志，不实际写PLC，上线前改为true */
     @Value("${plc.enabled:false}")
     private boolean plcEnabled;
 
-    /** 看门狗超时时间(ms)，超过此时间没收到新指令就发停车 */
+    /** 看门狗超时(ms): 超过此时间无新指令则自动停车 */
     @Value("${plc.watchdog.ms:500}")
     private long watchdogMs;
 
-    // ─── DB 内变量偏移量（按你实际 DB 定义修改）───────────────────────
-    private static final int OFFSET_LINEAR   = 0;   // REAL, 4字节，线速度
-    private static final int OFFSET_ANGULAR  = 4;   // REAL, 4字节，角速度
-    private static final int OFFSET_ENABLE   = 8;   // BOOL, 1字节，使能位
-    private static final int OFFSET_HEARTBEAT= 10;  // INT,  2字节，心跳
+    /** 最大线速度(m/s), 对应 3000 RPM */
+    @Value("${plc.max.linear.vel:0.8}")
+    private double maxLinearVel;
 
-    // ===================== PLC 连接 =====================
+    /** 角速度(rad/s) → 转向角(°) 缩放系数, 根据实际底盘调整 */
+    @Value("${plc.angular.scale:30.0}")
+    private double angularToDegreesScale;
 
-    /** Moka7 S7Client 实例（通过反射调用避免编译期强依赖） */
-    private Object s7Client = null;
-    private final AtomicBoolean connected = new AtomicBoolean(false);
+    /** 被认为是"直行"的角度阈值(°), 小于此值走直行模式 M1.4 */
+    @Value("${plc.straight.threshold.deg:5}")
+    private int straightThresholdDeg;
 
-    // ===================== 速度限流 & 看门狗 =====================
+    /** 障碍物紧急停车距离(m), 0 = 禁用 */
+    @Value("${plc.obstacle.stop.distance:0.35}")
+    private double obstacleStopDistance;
 
-    private volatile double pendingLinear  = 0;
-    private volatile double pendingAngular = 0;
-    private final AtomicBoolean hasPending = new AtomicBoolean(false);
-    private volatile long lastCmdTimeMs    = 0;
-    private volatile int heartbeatCount    = 0;
+    // ======================== M 区位地址 (编码: 高字节=字节号, 低字节=位号) ========================
 
-    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
+    private static final int M_FORWARD    = 0x10;  // M1.0 前进
+    private static final int M_BACKWARD   = 0x11;  // M1.1 后退
+    private static final int M_TURN_LEFT  = 0x12;  // M1.2 左转
+    private static final int M_TURN_RIGHT = 0x13;  // M1.3 右转
+    private static final int M_STRAIGHT   = 0x14;  // M1.4 直行模式
+    private static final int M_LATERAL    = 0x15;  // M1.5 平移模式
 
-    // ===================== 初始化 =====================
+    // ======================== V 区字地址 (VW = 2字节有符号整数) ========================
 
-   // @PostConstruct
+    private static final int VW_SPEED = 500;   // VW500 速度 0~3000 RPM
+    private static final int VW_ANGLE = 550;   // VW550 转弯角度 °
+
+    // ======================== V 区状态反馈位地址 ========================
+
+    private static final int V_FORWARD_RUN  = 0x12;  // V1.2
+    private static final int V_BACKWARD_RUN = 0x13;  // V1.3
+    private static final int V_LEFT_RUN     = 0x14;  // V1.4
+    private static final int V_RIGHT_RUN    = 0x15;  // V1.5
+    private static final int V_STRAIGHT_RUN = 0x16;  // V1.6
+    private static final int V_LATERAL_RUN  = 0x17;  // V1.7
+
+    // ======================== Ramp 限制 (每 20ms tick 最大变化量) ========================
+
+    private static final int RPM_RAMP   = 100;  // RPM/tick
+    private static final int ANGLE_RAMP = 3;    // °/tick
+
+    // ======================== 运行模式枚举 ========================
+
+    public enum DriveMode {
+        STOP,
+        STRAIGHT_FORWARD,   // M1.4 + M1.0
+        STRAIGHT_BACKWARD,  // M1.4 + M1.1
+        LEFT_FORWARD,       // M1.2 + M1.0
+        RIGHT_FORWARD,      // M1.3 + M1.0
+        LEFT_BACKWARD,      // M1.2 + M1.1
+        RIGHT_BACKWARD,     // M1.3 + M1.1
+        ROTATE_LEFT,        // M1.2 单独 (原地左转)
+        ROTATE_RIGHT        // M1.3 单独 (原地右转)
+    }
+
+    // ======================== 内部指令封装 ========================
+
+    private static class PlcCommand {
+        final DriveMode mode;
+        final int rpm;
+        final int angleDeg;
+
+        PlcCommand(DriveMode mode, int rpm, int angleDeg) {
+            this.mode     = mode;
+            this.rpm      = rpm;
+            this.angleDeg = angleDeg;
+        }
+
+        @Override
+        public String toString() {
+            return "PlcCommand{mode=" + mode + ", rpm=" + rpm + ", angle=" + angleDeg + "°}";
+        }
+    }
+
+    // ======================== PLC 状态 DTO ========================
+
+    @Data
+    public static class PlcStatus {
+        private boolean connected;
+        private String  mode;
+        private int     rpm;
+        private int     angleDeg;
+        private double  obstacleDistance;   // -1 表示无数据
+        private boolean obstacleOverride;   // true 表示因障碍物触发了停车
+        // V 区反馈位
+        private boolean forwardRunning;
+        private boolean backwardRunning;
+        private boolean leftRunning;
+        private boolean rightRunning;
+        private boolean straightRunning;
+        private boolean lateralRunning;
+    }
+
+    // ======================== 运行状态 ========================
+
+    private S7Connector s7Connector;
+    private final AtomicBoolean connected    = new AtomicBoolean(false);
+    private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
+
+    /** 待下发指令缓冲 */
+    private volatile double  pendingLinear  = 0;
+    private volatile double  pendingAngular = 0;
+    private final AtomicBoolean hasPending  = new AtomicBoolean(false);
+    private final AtomicLong lastCmdTimeMs  = new AtomicLong(0);
+
+    /** 上次实际下发值 (用于 Ramp 平滑) */
+    private volatile int       lastSentRpm   = 0;
+    private volatile int       lastSentAngle = 0;
+    private volatile DriveMode currentMode   = DriveMode.STOP;
+
+    /** 障碍物距离监控 */
+    private volatile double  minObstacleDistance = Double.MAX_VALUE;
+    private volatile boolean obstacleOverride    = false;
+
+    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2, r -> {
+        Thread t = new Thread(r, "plc-worker");
+        t.setDaemon(true);
+        return t;
+    });
+
+    // ======================== 生命周期 ========================
+
+    @PostConstruct
     public void init() {
-        // ① 连接 PLC
         connectPlc();
-
-        // ② 50Hz 定时发送速度（限流，合并高频指令）
-        scheduler.scheduleAtFixedRate(new Runnable() {
-            public void run() {
-                // 看门狗：超时停车
-                if (lastCmdTimeMs > 0
-                        && System.currentTimeMillis() - lastCmdTimeMs > watchdogMs) {
-                    writeToPLC(0, 0);
-                    lastCmdTimeMs = 0;
-                    log.debug("[看门狗] 超过{}ms无指令，已停车", watchdogMs);
-                    return;
-                }
-                if (hasPending.getAndSet(false)) {
-                    writeToPLC(pendingLinear, pendingAngular);
-                }
-            }
-        }, 0, 20, TimeUnit.MILLISECONDS);
-
-        // ③ 1秒更新一次心跳（PLC侧可据此判断 Java 是否在线）
-        scheduler.scheduleAtFixedRate(new Runnable() {
-            public void run() {
-                writeHeartbeat();
-            }
-        }, 1, 1, TimeUnit.SECONDS);
+        scheduler.scheduleAtFixedRate(this::sendTick,      100, 20, TimeUnit.MILLISECONDS);
+        scheduler.scheduleAtFixedRate(this::statusReadTick,  1,  1, TimeUnit.SECONDS);
+        log.info("✅ AGV 底盘服务已启动 | host={} | debug={} | watchdog={}ms",
+                plcHost, !plcEnabled, watchdogMs);
     }
 
     @PreDestroy
     public void destroy() {
-        log.info("[PLC] 关闭连接，停车");
-        writeToPLC(0, 0);
+        shuttingDown.set(true);
+        log.info("⏹ 底盘服务关闭中...");
+        try { forceStop(); } catch (Exception ignored) {}
         scheduler.shutdownNow();
         disconnectPlc();
     }
 
-    // ===================== 核心接口 =====================
+    // ======================== 对外接口 ========================
 
     /**
-     * 发送速度指令（由 ROS2WebSocketHandler 和 RobotController 调用）
+     * 接收来自 Nav2 /cmd_vel 或手动遥控的速度指令。
      *
-     * @param linear  线速度 m/s（正=前进，负=后退）
-     * @param angular 角速度 rad/s（正=左转，负=右转）
+     * @param linear  线速度 m/s  (正=前进, 负=后退)
+     * @param angular 角速度 rad/s (正=左转, 负=右转)
      */
     public void sendVelocity(double linear, double angular) {
-        // 安全限速（按 PLC 允许范围修改）
-        linear  = clamp(linear,  -1.0, 1.0);
-        angular = clamp(angular, -2.0, 2.0);
-
+        if (shuttingDown.get()) return;
         pendingLinear  = linear;
         pendingAngular = angular;
         hasPending.set(true);
-        lastCmdTimeMs = System.currentTimeMillis();
+        lastCmdTimeMs.set(System.currentTimeMillis());
     }
 
-    public boolean isConnected() {
-        return connected.get();
-    }
-
-    // ===================== PLC 连接管理 =====================
-
-    private void connectPlc() {
-        if (!plcEnabled) {
-            log.info("[PLC] 调试模式，不实际连接 PLC（plc.enabled=false）");
-            return;
-        }
+    /** 硬件级紧急停车: 直接清除所有 M 位 + 速度归零, 不经过任何缓冲 */
+    public void emergencyStop() {
+        log.warn("🛑 紧急停车触发!");
         try {
-            // 使用 Moka7 的 S7Client（需在 pom.xml 中引入 moka7 依赖）
-            Class<?> clientClass = Class.forName("org.moka7.S7Client");
-            s7Client = clientClass.getDeclaredConstructor().newInstance();
-
-            // ConnectTo(ip, rack, slot) → 0 = 成功
-            java.lang.reflect.Method connectMethod = clientClass
-                    .getMethod("ConnectTo", String.class, int.class, int.class);
-            int result = (int) connectMethod.invoke(s7Client, plcHost, plcRack, plcSlot);
-
-            if (result == 0) {
-                connected.set(true);
-                log.info("✅ [PLC] 连接成功: {} rack={} slot={} DB={}", plcHost, plcRack, plcSlot, dbNumber);
-                // 上电时写使能位
-                writeEnable(true);
-            } else {
-                log.error("❌ [PLC] 连接失败，错误码: {} (host={})", result, plcHost);
-            }
-        } catch (ClassNotFoundException e) {
-            log.error("[PLC] Moka7 库未找到，请在 pom.xml 添加依赖:\n"
-                    + "  <dependency>\n"
-                    + "    <groupId>org.moka7</groupId>\n"
-                    + "    <artifactId>moka7</artifactId>\n"
-                    + "    <version>1.0.2</version>\n"
-                    + "  </dependency>");
+            forceStop();
         } catch (Exception e) {
-            log.error("[PLC] 连接异常: {}", e.getMessage());
+            log.error("急停失败, 请立即手动断电! {}", e.getMessage());
         }
     }
-
-    private void disconnectPlc() {
-        try {
-            if (s7Client != null) {
-                writeEnable(false); // 关闭使能
-                s7Client.getClass().getMethod("Disconnect").invoke(s7Client);
-                connected.set(false);
-                log.info("[PLC] 已断开连接");
-            }
-        } catch (Exception e) {
-            log.warn("[PLC] 断开异常: {}", e.getMessage());
-        }
-    }
-
-    // ===================== 写入 PLC =====================
 
     /**
-     * 将线速度和角速度写入 PLC DB 块
+     * 注入最新激光/点云最近障碍物距离(m)。
+     * 由 ROS2WebSocketHandler 收到 /scan 后调用。
+     * 内部判断是否需要触发紧急停车。
+     */
+    public void updateObstacleDistance(double minDistM) {
+        this.minObstacleDistance = minDistM;
+        if (obstacleStopDistance > 0 && minDistM < obstacleStopDistance) {
+            if (!obstacleOverride) {
+                obstacleOverride = true;
+                log.warn("⚠ 障碍物 {:.2f}m < 阈值 {:.2f}m, 触发停车", minDistM, obstacleStopDistance);
+                try { forceStop(); } catch (Exception ignored) {}
+            }
+        } else {
+            obstacleOverride = false;
+        }
+    }
+
+    /** 动态设置障碍物停车阈值 */
+    public void setObstacleStopDistance(double distM) {
+        this.obstacleStopDistance = distM;
+        log.info("[PLC] 障碍物停车阈值更新: {}m", distM);
+    }
+
+    /** 读取 PLC 综合状态 (含 V 区反馈位), 供 REST API 返回给前端 */
+    public PlcStatus readStatus() {
+        PlcStatus st = new PlcStatus();
+        st.setConnected(connected.get());
+        st.setMode(currentMode.name());
+        st.setRpm(lastSentRpm);
+        st.setAngleDeg(lastSentAngle);
+        st.setObstacleDistance(minObstacleDistance > 1e6 ? -1 : minObstacleDistance);
+        st.setObstacleOverride(obstacleOverride);
+
+        if (plcEnabled && connected.get()) {
+            try {
+                st.setForwardRunning (readVBit(V_FORWARD_RUN));
+                st.setBackwardRunning(readVBit(V_BACKWARD_RUN));
+                st.setLeftRunning    (readVBit(V_LEFT_RUN));
+                st.setRightRunning   (readVBit(V_RIGHT_RUN));
+                st.setStraightRunning(readVBit(V_STRAIGHT_RUN));
+                st.setLateralRunning (readVBit(V_LATERAL_RUN));
+            } catch (Exception e) {
+                log.trace("读状态位失败: {}", e.getMessage());
+            }
+        }
+        return st;
+    }
+
+    public boolean isConnected()          { return connected.get(); }
+    public DriveMode getCurrentMode()     { return currentMode; }
+    public int  getLastRpm()              { return lastSentRpm; }
+    public int  getLastAngle()            { return lastSentAngle; }
+    public double getMinObstacleDistance(){ return minObstacleDistance; }
+    public boolean isObstacleOverride()   { return obstacleOverride; }
+
+    // ======================== 周期发送 tick ========================
+
+    private void sendTick() {
+        try {
+            // ① 障碍物安全锁 — 已停车, 等障碍移开后 obstacleOverride 自动解除
+            if (obstacleOverride) return;
+
+            // ② 看门狗 — 超过 watchdogMs 无新指令则停车
+            long last = lastCmdTimeMs.get();
+            if (last > 0 && System.currentTimeMillis() - last > watchdogMs) {
+                if (currentMode != DriveMode.STOP) {
+                    log.warn("⚠ 看门狗触发 ({}ms 无新指令), 停车", watchdogMs);
+                    forceStop();
+                }
+                return;
+            }
+
+            if (!hasPending.get()) return;
+            hasPending.set(false);
+
+            // ③ Twist → PLC 指令 → 执行
+            PlcCommand cmd = twistToPlcCommand(pendingLinear, pendingAngular);
+            executeCommand(cmd);
+
+        } catch (Exception e) {
+            log.warn("sendTick 异常: {}", e.getMessage());
+            tryReconnect();
+        }
+    }
+
+    // ======================== Twist → PlcCommand 转换 ========================
+
+    /**
+     * 将 ROS Twist (linear.x / angular.z) 转换为 PLC 指令。
      *
-     * DB 数据布局（按实际修改 OFFSET_* 常量）：
-     *   DB100.DBD0  = LinearV  (REAL, 4字节)
-     *   DB100.DBD4  = AngularW (REAL, 4字节)
-     *   DB100.DBX8.0= Enable   (BOOL, 1字节)
-     *   DB100.DBW10 = HeartBeat(INT,  2字节)
+     * 转换规则:
+     *   RPM   = |linear| / maxLinearVel × 3000   ∈ [0, 3000]
+     *   angle = angular × angularToDegreesScale  ∈ [-45, 45]
+     *   mode  由 linear/angular 的符号与幅值决定
      */
-    private synchronized void writeToPLC(double linear, double angular) {
+    private PlcCommand twistToPlcCommand(double linear, double angular) {
+        final double LIN_DEAD = 0.01;   // 线速度死区 m/s
+        final double ANG_DEAD = 0.02;   // 角速度死区 rad/s
+
+        boolean moving  = Math.abs(linear)  > LIN_DEAD;
+        boolean turning = Math.abs(angular) > ANG_DEAD;
+
+        // 全停
+        if (!moving && !turning) {
+            return new PlcCommand(DriveMode.STOP, 0, 0);
+        }
+
+        // RPM: 线速度 → 转速
+        int rpm = moving
+                ? (int)(Math.abs(linear) / maxLinearVel * 3000)
+                : 150; // 原地旋转给最小驱动 RPM
+        rpm = Math.max(0, Math.min(3000, rpm));
+
+        // 角度: 角速度 → 转向角 (原地旋转时用最大角度)
+        int angleDeg;
+        if (!moving && turning) {
+            angleDeg = 45; // 原地转用最大角
+        } else {
+            angleDeg = (int)(Math.abs(angular) * angularToDegreesScale);
+            angleDeg = Math.min(45, angleDeg);
+        }
+
+        // 模式决策
+        boolean goForward  = linear  >  LIN_DEAD;
+        boolean goBackward = linear  < -LIN_DEAD;
+        boolean turnLeft   = angular >  ANG_DEAD;
+        boolean turnRight  = angular < -ANG_DEAD;
+        boolean isStraight = angleDeg <= straightThresholdDeg;
+
+        DriveMode mode;
+        if (!moving) {
+            mode = turnLeft ? DriveMode.ROTATE_LEFT : DriveMode.ROTATE_RIGHT;
+        } else if (goForward) {
+            if      (isStraight) mode = DriveMode.STRAIGHT_FORWARD;
+            else if (turnLeft)   mode = DriveMode.LEFT_FORWARD;
+            else                 mode = DriveMode.RIGHT_FORWARD;
+        } else { // goBackward
+            if      (isStraight) mode = DriveMode.STRAIGHT_BACKWARD;
+            else if (turnLeft)   mode = DriveMode.LEFT_BACKWARD;
+            else                 mode = DriveMode.RIGHT_BACKWARD;
+        }
+
+        return new PlcCommand(mode, rpm, angleDeg);
+    }
+
+    // ======================== 执行指令 ========================
+
+    /**
+     * 将 PlcCommand 写入 PLC。
+     *
+     * 模式切换流程:
+     *   1. 速度/角度清零
+     *   2. 关旧模式 M 位
+     *   3. 等待 50ms (PLC 响应)
+     *   4. 开新模式 M 位
+     *   5. Ramp 平滑写入速度/角度
+     */
+    private synchronized void executeCommand(PlcCommand cmd) throws Exception {
+        // ─── 模式切换 ────────────────────────────────────────────
+        if (cmd.mode != currentMode) {
+            log.info("[PLC] 模式切换: {} → {}", currentMode, cmd.mode);
+
+            writeVWord(VW_SPEED, 0);
+            writeVWord(VW_ANGLE, 0);
+            lastSentRpm   = 0;
+            lastSentAngle = 0;
+
+            clearAllDirectionBits();
+            Thread.sleep(50);
+
+            applyModeBits(cmd.mode);
+            currentMode = cmd.mode;
+
+            if (cmd.mode == DriveMode.STOP) return;
+            Thread.sleep(30);
+        }
+
+        if (currentMode == DriveMode.STOP) return;
+
+        // ─── Ramp 平滑 ────────────────────────────────────────────
+        int rampedRpm   = rampStep(lastSentRpm,   cmd.rpm,      RPM_RAMP);
+        int rampedAngle = rampStep(lastSentAngle, cmd.angleDeg, ANGLE_RAMP);
+
+        writeVWord(VW_SPEED, rampedRpm);
+        writeVWord(VW_ANGLE, rampedAngle);
+
+        lastSentRpm   = rampedRpm;
+        lastSentAngle = rampedAngle;
+
+        log.debug("[PLC] {} | rpm={} | angle={}°", currentMode, rampedRpm, rampedAngle);
+    }
+
+    /** 打开新模式的 M 位 */
+    private void applyModeBits(DriveMode mode) throws Exception {
+        switch (mode) {
+            case STRAIGHT_FORWARD:
+                writeMBit(M_STRAIGHT, true);
+                writeMBit(M_FORWARD,  true);
+                break;
+            case STRAIGHT_BACKWARD:
+                writeMBit(M_STRAIGHT,  true);
+                writeMBit(M_BACKWARD,  true);
+                break;
+            case LEFT_FORWARD:
+                writeMBit(M_TURN_LEFT, true);
+                writeMBit(M_FORWARD,   true);
+                break;
+            case RIGHT_FORWARD:
+                writeMBit(M_TURN_RIGHT, true);
+                writeMBit(M_FORWARD,    true);
+                break;
+            case LEFT_BACKWARD:
+                writeMBit(M_TURN_LEFT, true);
+                writeMBit(M_BACKWARD,  true);
+                break;
+            case RIGHT_BACKWARD:
+                writeMBit(M_TURN_RIGHT, true);
+                writeMBit(M_BACKWARD,   true);
+                break;
+            case ROTATE_LEFT:
+                writeMBit(M_TURN_LEFT, true);
+                break;
+            case ROTATE_RIGHT:
+                writeMBit(M_TURN_RIGHT, true);
+                break;
+            default:
+                break;
+        }
+    }
+
+    /**
+     * 一次性清除 M1.0 ~ M1.5 (保留 M1.6 M1.7)。
+     * 使用读-改-写减少通信次数。
+     */
+    private synchronized void clearAllDirectionBits() throws Exception {
         if (!plcEnabled) {
-            if (Math.abs(linear) > 0.001 || Math.abs(angular) > 0.001) {
-                log.info("[PLC调试] linear={} m/s  angular={} rad/s  →（调试模式，未写入）",
-                        String.format("%.3f", linear), String.format("%.3f", angular));
-            }
+            currentMode = DriveMode.STOP;
             return;
         }
-
-        if (!connected.get()) {
-            log.warn("[PLC] 未连接，尝试重连...");
-            connectPlc();
-            if (!connected.get()) return;
+        if (connected.get() && s7Connector != null) {
+            byte[] buf = s7Connector.read(DaveArea.FLAGS, 0, 1, 1);
+            buf[0] &= (byte) 0b11000000; // 清 bit0~bit5, 保留 bit6 bit7
+            s7Connector.write(DaveArea.FLAGS, 0, 1, buf);
         }
+        currentMode   = DriveMode.STOP;
+        lastSentRpm   = 0;
+        lastSentAngle = 0;
+    }
 
+    /** 强制停车: 速度清零 + 所有方向 M 位关闭 */
+    private synchronized void forceStop() throws Exception {
+        writeVWord(VW_SPEED, 0);
+        writeVWord(VW_ANGLE, 0);
+        clearAllDirectionBits();
+    }
+
+    private int rampStep(int current, int target, int maxStep) {
+        int diff = target - current;
+        if (Math.abs(diff) <= maxStep) return target;
+        return current + Integer.signum(diff) * maxStep;
+    }
+
+    /** 定时读取 V1 字节状态反馈, 用于日志与前端轮询 */
+    private void statusReadTick() {
+        if (!plcEnabled || !connected.get() || s7Connector == null) return;
         try {
-            // 构造写入缓冲区（8字节：2个 REAL）
-            byte[] buffer = new byte[8];
-            floatToBytes((float) linear,  buffer, 0); // DBD0
-            floatToBytes((float) angular, buffer, 4); // DBD4
-
-            // DBWrite(dbNumber, start, size, buffer) → 0 = 成功
-            java.lang.reflect.Method writeMethod = s7Client.getClass()
-                    .getMethod("DBWrite", int.class, int.class, int.class, byte[].class);
-            int result = (int) writeMethod.invoke(s7Client, dbNumber, OFFSET_LINEAR, 8, buffer);
-
-            if (result != 0) {
-                log.warn("[PLC] 写入失败，错误码: {}，尝试重连", result);
-                connected.set(false);
-                connectPlc();
-            } else {
-                log.debug("[PLC] 写入成功 DB{}.DBD{}: linear={} angular={}",
-                        dbNumber, OFFSET_LINEAR,
-                        String.format("%.3f", linear), String.format("%.3f", angular));
+            byte[] v = s7Connector.read(DaveArea.DB, 1, 1, 1); // V1 字节
+            if (log.isDebugEnabled()) {
+                log.debug("[PLC反馈] 前={} 后={} 左={} 右={} 直行={} 平移={}",
+                        (v[0] & 0x04) != 0, (v[0] & 0x08) != 0,
+                        (v[0] & 0x10) != 0, (v[0] & 0x20) != 0,
+                        (v[0] & 0x40) != 0, (v[0] & 0x80) != 0);
             }
         } catch (Exception e) {
-            log.error("[PLC] 写入异常: {}", e.getMessage());
+            log.trace("状态读取失败: {}", e.getMessage());
+        }
+    }
+
+    // ======================== PLC 连接管理 ========================
+
+    private synchronized void connectPlc() {
+        if (!plcEnabled) {
+            log.info("[PLC] 调试模式 (plc.enabled=false), 不实际连接");
+            return;
+        }
+        try {
+            s7Connector = S7ConnectorFactory
+                    .buildTCPConnector()
+                    .withHost(plcHost)
+                    .withRack(plcRack)
+                    .withSlot(plcSlot)
+                    .withTimeout(2000)
+                    .build();
+            connected.set(true);
+            log.info("✅ [PLC] 连接成功: {} rack={} slot={}", plcHost, plcRack, plcSlot);
+        } catch (Exception e) {
             connected.set(false);
+            log.error("❌ [PLC] 连接失败: {}", e.getMessage());
         }
     }
 
-    /** 写使能位（DB100.DBX8.0） */
-    private void writeEnable(boolean enable) {
-        if (!plcEnabled || !connected.get()) return;
-        try {
-            byte[] buf = new byte[]{ (byte)(enable ? 1 : 0) };
-            java.lang.reflect.Method m = s7Client.getClass()
-                    .getMethod("DBWrite", int.class, int.class, int.class, byte[].class);
-            m.invoke(s7Client, dbNumber, OFFSET_ENABLE, 1, buf);
-            log.info("[PLC] 使能位 = {}", enable);
-        } catch (Exception e) {
-            log.warn("[PLC] 写使能位失败: {}", e.getMessage());
-        }
+    private synchronized void disconnectPlc() {
+        if (s7Connector == null) return;
+        try { s7Connector.close(); } catch (Exception ignored) {}
+        s7Connector = null;
+        connected.set(false);
     }
 
-    /** 写心跳计数（DB100.DBW10），PLC侧可据此判断 Java 是否在线 */
-    private void writeHeartbeat() {
-        if (!plcEnabled || !connected.get()) return;
-        try {
-            heartbeatCount = (heartbeatCount + 1) % 32767;
-            byte[] buf = shortToBytes((short) heartbeatCount);
-            java.lang.reflect.Method m = s7Client.getClass()
-                    .getMethod("DBWrite", int.class, int.class, int.class, byte[].class);
-            m.invoke(s7Client, dbNumber, OFFSET_HEARTBEAT, 2, buf);
-        } catch (Exception e) {
-            log.debug("[PLC] 写心跳失败: {}", e.getMessage());
+    private void tryReconnect() {
+        if (!plcEnabled || shuttingDown.get()) return;
+        log.info("[PLC] 尝试重连...");
+        disconnectPlc();
+        try { Thread.sleep(500); } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return;
         }
+        connectPlc();
     }
 
-    // ===================== 字节转换工具 =====================
+    // ======================== S7 底层读写 ========================
 
     /**
-     * float → 大端字节序（Siemens PLC 使用大端序）
+     * 写 VW (V 区 2字节有符号整数, 大端) 到指定字节地址。
+     * S7-200 Smart V 内存在 Dave 协议中映射为 DB1。
+     *
+     * @param byteAddr VW 字节地址, 如 VW500 → 500
+     * @param value    有符号整数 [-32768, 32767]
      */
-    private void floatToBytes(float value, byte[] buf, int offset) {
-        int bits = Float.floatToIntBits(value);
-        buf[offset]     = (byte)((bits >> 24) & 0xFF); // 大端
-        buf[offset + 1] = (byte)((bits >> 16) & 0xFF);
-        buf[offset + 2] = (byte)((bits >>  8) & 0xFF);
-        buf[offset + 3] = (byte)( bits        & 0xFF);
+    private synchronized void writeVWord(int byteAddr, int value) throws Exception {
+        if (!plcEnabled) {
+            log.trace("[PLC调试] VW{} = {}", byteAddr, value);
+            return;
+        }
+        if (!connected.get() || s7Connector == null) {
+            log.warn("[PLC] 未连接, 跳过 VW{} 写入", byteAddr);
+            return;
+        }
+        if (value > Short.MAX_VALUE) value = Short.MAX_VALUE;
+        if (value < Short.MIN_VALUE) value = Short.MIN_VALUE;
+
+        byte[] buf = new byte[2];
+        buf[0] = (byte)((value >> 8) & 0xFF);  // 大端高字节
+        buf[1] = (byte)(value & 0xFF);
+
+        // V 内存在 S7-200 Smart 中以 DB1 方式访问
+        s7Connector.write(DaveArea.DB, 1, byteAddr, buf);
     }
 
     /**
-     * short → 大端字节序
+     * 写 M 位 (Merker/Flags 区, 读-改-写)。
+     * address 编码: 高字节=字节地址, 低字节=位地址
+     * 示例: M1.0=0x10, M1.4=0x14
      */
-    private byte[] shortToBytes(short value) {
-        return new byte[]{ (byte)((value >> 8) & 0xFF), (byte)(value & 0xFF) };
+    private synchronized void writeMBit(int address, boolean value) throws Exception {
+        if (!plcEnabled) {
+            log.trace("[PLC调试] M{}.{} = {}", address >> 4, address & 0x0F, value);
+            return;
+        }
+        if (!connected.get() || s7Connector == null) return;
+
+        int byteAddr = address >> 4;
+        int bitAddr  = address & 0x0F;
+
+        byte[] cur = s7Connector.read(DaveArea.FLAGS, 0, 1, byteAddr);
+        if (value) cur[0] |=  (byte)(1 << bitAddr);
+        else       cur[0] &= (byte)~(1 << bitAddr);
+        s7Connector.write(DaveArea.FLAGS, 0, byteAddr, cur);
     }
 
-    private double clamp(double v, double min, double max) {
-        return Math.max(min, Math.min(max, v));
+    /**
+     * 读 V 位 (V 区单个位)。
+     * address 编码: 高字节=字节地址, 低字节=位地址
+     * 示例: V1.2=0x12
+     */
+    private synchronized boolean readVBit(int address) throws Exception {
+        if (!plcEnabled || !connected.get() || s7Connector == null) return false;
+        int byteAddr = address >> 4;
+        int bitAddr  = address & 0x0F;
+        byte[] buf = s7Connector.read(DaveArea.DB, 1, 1, byteAddr);
+        return (buf[0] & (1 << bitAddr)) != 0;
     }
 }
