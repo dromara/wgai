@@ -37,16 +37,20 @@
 
 ---
 ## 🎬 演示视频
-| 视频主题 | 链接地址 |
-| :--- | :--- |
-| 📺 **平台整体功能介绍** | [点击查看](https://www.bilibili.com/video/BV1Pcq5B6EJY/) |
-| 📺 **如何标注与训练模型** | [点击查看](https://www.bilibili.com/video/BV13C9BYiEFS/) |
-| 📺 **训练完成如何使用** | [点击查看](https://www.bilibili.com/video/BV1fJwhe7E1G/) |
-| 📺 **OCR 与车牌识别演示** | [点击查看](https://www.bilibili.com/video/BV1Dn2wBzEHg) |
-| 📺 **语音在线识别与配置** | [点击查看](https://www.bilibili.com/video/BV1Dn2wBzENj) |
-| 📺 **实时视频分析预警** | [点击查看](https://www.bilibili.com/video/BV1gn2wB6EQN/) |
-| 📺 **在线训练演示全过程** | [点击查看](https://www.bilibili.com/video/BV1EJwheEEYq/) |
-| 👤 **数字人动态演示** | [点击下载查看](https://img.nj-kj.com/zhangwei_1745562613859_1745465917540_1745567724504.mp4) |
+| 视频主题                                        | 链接地址 |
+|:--------------------------------------------| :--- |
+| 📺 **平台整体功能介绍**                             | [点击查看](https://www.bilibili.com/video/BV1Pcq5B6EJY/) |
+| 📺 **如何标注与训练模型**                            | [点击查看](https://www.bilibili.com/video/BV13C9BYiEFS/) |
+| 📺 **训练完成如何使用**                             | [点击查看](https://www.bilibili.com/video/BV1fJwhe7E1G/) |
+| 📺 **OCR 与车牌识别演示**                          | [点击查看](https://www.bilibili.com/video/BV1Dn2wBzEHg) |
+| 📺 **语音在线识别与配置**                            | [点击查看](https://www.bilibili.com/video/BV1Dn2wBzENj) |
+| 📺 **实时视频分析预警**                             | [点击查看](https://www.bilibili.com/video/BV1gn2wB6EQN/) |
+| 📺 **在线训练演示全过程**                            | [点击查看](https://www.bilibili.com/video/BV1EJwheEEYq/) |
+| 📺 **语音在线识别与配置**                            | [点击查看](https://www.bilibili.com/video/BV1Dn2wBzENj) |
+| 📺 <span style="color:red">*</span> **地图扫描** | [点击查看](https://www.bilibili.com/video/BV1syGW6CEY1) |
+| 📺 <span style="color:red">*</span> **路径规划**  | [点击查看](https://www.bilibili.com/video/BV1xyGW6CEMD) |
+| 📺 <span style="color:red">*</span> **人员跟踪** | [点击查看](https://www.bilibili.com/video/BV11yGW6CEKj) |
+| 👤 **数字人动态演示**                              | [点击下载查看](https://img.nj-kj.com/zhangwei_1745562613859_1745465917540_1745567724504.mp4) |
 
 ---
 
