@@ -34,9 +34,11 @@
 > 欢迎各类 AI 生态、硬件厂商、算力服务商联系合作。
 > 
 > **联系方式：** Email: 1552138571@qq.com
-## 📢 问题文档
-<a href="https://www.yuque.com/oxygen-bw8y8/eda0sn/xrii46vitqfz74h2?singleDoc#"> 《WGAI使用说明与常见问题（图解版本）》</a>
+ ---
+## ❓常见景问题文档(持续更新ing...)
+><a href="https://www.yuque.com/oxygen-bw8y8/eda0sn/xrii46vitqfz74h2?singleDoc#"> 《WGAI使用说明与常见问题（图解版本）》</a>
 ---
+
 ## 🎬 演示视频
 
 | 视频主题 | 链接地址 |
