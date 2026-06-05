@@ -4,6 +4,8 @@ import org.jeecg.common.api.vo.Result;
 import org.jeecg.modules.demo.audio.entity.TabAudioTts;
 import com.baomidou.mybatisplus.extension.service.IService;
 
+import java.util.Map;
+
 /**
  * @Description: 文本转TTS
  * @Author: wggg
@@ -14,4 +16,7 @@ public interface ITabAudioTtsService extends IService<TabAudioTts> {
 
 
     Result<String> textToSpeed(TabAudioTts tabAudioTts);
+
+
+    Map<String, Object> textToSpeedMap();
 }

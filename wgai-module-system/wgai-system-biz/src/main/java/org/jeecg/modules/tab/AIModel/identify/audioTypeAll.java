@@ -7,6 +7,10 @@ import org.jeecg.modules.demo.audio.entity.TabAudioTts;
 
 import javax.sound.sampled.*;
 import java.io.File;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * @author wggg
@@ -15,6 +19,109 @@ import java.io.File;
 @Slf4j
 public class audioTypeAll {
 
+
+
+
+    /**
+     * 由 PCM 样本计算逐帧口型开合包络（与前端旧逻辑等价，挪到后端预生成）。
+     * @param samples    GeneratedAudio.getSamples()，范围约 -1..1
+     * @param sampleRate GeneratedAudio.getSampleRate()
+     * @param frameStep  每帧时长（秒），建议 0.02（20ms）
+     * @return 归一化后的开合度列表，元素 0..1
+     */
+    public static List<Double> computeMouthEnvelope(float[] samples, int sampleRate, double frameStep) {
+        int stepSamples = Math.max(1, (int) (sampleRate * frameStep));
+        List<Double> rmsList = new ArrayList<>();
+        double maxRms = 0;
+
+        for (int start = 0; start < samples.length; start += stepSamples) {
+            int end = Math.min(samples.length, start + stepSamples);
+            double sum = 0;
+            int cnt = 0;
+            for (int i = start; i < end; i++) {
+                double s = samples[i];
+                sum += s * s;
+                cnt++;
+            }
+            double rms = Math.sqrt(sum / Math.max(1, cnt));
+            rmsList.add(rms);
+            if (rms > maxRms) maxRms = rms;
+        }
+
+        double noiseFloor = Math.max(maxRms * 0.02, 0.001);
+        List<Double> out = new ArrayList<>(rmsList.size());
+        for (double rms : rmsList) {
+            double norm = Math.max(0, (rms - noiseFloor) / Math.max(0.0001, maxRms - noiseFloor));
+            // 0.5 次幂提升小音量段的可见度，避免轻声时嘴几乎不动
+            out.add(Math.round(Math.pow(norm, 0.5) * 1000.0) / 1000.0); // 保留 3 位小数，压缩传输体积
+        }
+        return out;
+    }
+
+    /**
+     * 改造后的 TTS：保存 WAV 的同时返回口型包络等同步数据。
+     * 返回 Map，供 Controller 组装进 Result.result。
+     */
+    public static Map<String, Object> textToTtsNotDictMap(String upload, TabAudioTts tabAudioTts) {
+        long starTime = System.currentTimeMillis();
+        String model = upload + File.separator + tabAudioTts.getAudioModel();
+        String tokens = upload + File.separator + tabAudioTts.getAudioToken();
+        String lexicon = upload + File.separator + tabAudioTts.getAudioLexicon();
+        Integer sid = tabAudioTts.getAudioSid();
+        Integer numThread = tabAudioTts.getThreadNum();
+
+        String[] ruleFstsStr = tabAudioTts.getRuleFasts().split(",");
+        StringBuilder rb = new StringBuilder();
+        for (int i = 0; i < ruleFstsStr.length; i++) {
+            rb.append(upload).append(File.separator).append(ruleFstsStr[i]).append(",");
+        }
+        String ruleFsts = rb.substring(0, rb.length() - 1);
+        String text = tabAudioTts.getAudioText();
+
+        OfflineTtsVitsModelConfig vitsModelConfig =
+                OfflineTtsVitsModelConfig.builder()
+                        .setModel(model)
+                        .setTokens(tokens)
+                        .setLexicon(lexicon)
+                        .build();
+
+        OfflineTtsModelConfig modelConfig =
+                OfflineTtsModelConfig.builder()
+                        .setVits(vitsModelConfig)
+                        .setNumThreads(numThread)
+                        .setDebug(true)
+                        .build();
+
+        OfflineTtsConfig config =
+                OfflineTtsConfig.builder().setModel(modelConfig).setRuleFsts(ruleFsts).build();
+
+        OfflineTts tts = new OfflineTts(config);
+        float speed = 1.0f;
+        GeneratedAudio audio = tts.generate(text, sid, speed);
+
+        int sampleRate = audio.getSampleRate();
+        float[] samples = audio.getSamples();
+        double duration = samples.length / (double) sampleRate;
+        double frameStep = 0.02;
+
+        // 关键新增：用同一份 PCM 算口型包络
+        List<Double> mouth = computeMouthEnvelope(samples, sampleRate, frameStep);
+
+        // 建议：文件名带时间戳，避免前端/CDN 缓存到上一条音频
+        String waveFilename = "TextToTts_" + starTime + ".wav";
+        String savePath = upload + File.separator + waveFilename;
+        audio.save(savePath);
+        tts.release();
+
+        Map<String, Object> ret = new HashMap<>();
+        ret.put("fileName", waveFilename);
+        ret.put("text", text);
+        ret.put("sampleRate", sampleRate);
+        ret.put("duration", duration);
+        ret.put("frameStep", frameStep);
+        ret.put("mouth", mouth); // 逐帧开合度数组，0..1
+        return ret;
+    }
 
 
     /***
@@ -69,7 +176,7 @@ public class audioTypeAll {
         float audioDuration = audio.getSamples().length / (float) audio.getSampleRate();
         float real_time_factor = timeElapsedSeconds / audioDuration;
 
-        String waveFilename = System.currentTimeMillis()+".wav";
+        String waveFilename = "TextToTts.wav";
         String savePath=upload+File.separator+waveFilename;
 
         audio.save(savePath);

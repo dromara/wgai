@@ -11,6 +11,8 @@ import org.springframework.stereotype.Service;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 
+import java.util.Map;
+
 /**
  * @Description: 文本转TTS
  * @Author: wggg
@@ -39,6 +41,14 @@ public class TabAudioTtsServiceImpl extends ServiceImpl<TabAudioTtsMapper, TabAu
         }else{
             return Result.OK("转换失败！");
         }
+
+    }
+
+
+    @Override
+    public Map<String, Object> textToSpeedMap() {
+        TabAudioTts tabAudioTts=this.getById("1902621058529599489");
+        return audioTypeAll.textToTtsNotDictMap(upLoadPath,tabAudioTts);
 
     }
 }

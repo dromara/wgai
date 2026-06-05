@@ -106,6 +106,8 @@ public class ShiroConfig {
 
         filterChainDefinitionMap.put("/tab/testAI/**", "anon"); //测试接口
         filterChainDefinitionMap.put("/video/tabAiWarning/addPush", "anon"); //测试接口
+        filterChainDefinitionMap.put("/video/tabVideoUtil/getBoxSetting", "anon"); //测试接口
+        filterChainDefinitionMap.put("/video/tabVideoUtil/setBoxSetting", "anon"); //测试接口
 
         filterChainDefinitionMap.put("/", "anon");
         filterChainDefinitionMap.put("/doc.html", "anon");

@@ -1,6 +1,7 @@
 package org.jeecg.modules.demo.audio.controller;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -100,6 +101,28 @@ public class TabAudioTtsController extends JeecgController<TabAudioTts, ITabAudi
 
 		 return tabAudioTtsService.textToSpeed(tabAudioTts);
 
+
+
+	 }
+
+
+
+	 @AutoLog(value = "文本转TTS-数字人测试")
+	 @ApiOperation(value="数字人测试", notes="数字人测试：先写死一个已有音频文件，前端播放并驱动嘴巴")
+	 @GetMapping(value = "/demoSpeak")
+	 public Result<Map<String, Object>> demoSpeak(HttpServletRequest request) {
+		 try {
+			 Map<String, Object> data = tabAudioTtsService.textToSpeedMap();
+
+			 // 拼成前端可直接 fetch 的可访问 URL（沿用你 manualAudioUrl 那种静态映射）
+			 String audioUrl = "/wgai/sys/common/static/" + data.get("fileName"); // 按你的静态资源映射改
+			 data.put("audioUrl", audioUrl);
+
+			 return Result.OK(data);
+		 } catch (Exception e) {
+			 log.error("数字人测试接口失败", e);
+			 return Result.error("数字人测试接口失败：" + e.getMessage());
+		 }
 	 }
 	
 	/**

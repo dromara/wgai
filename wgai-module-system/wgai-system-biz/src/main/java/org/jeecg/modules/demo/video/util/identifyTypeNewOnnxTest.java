@@ -1736,21 +1736,19 @@ public class identifyTypeNewOnnxTest {
                 }
 
                 //`使用播报
-                if(netPush.getTabAiVideoSetting().getIsAudio() == 0){
-                    //   audioText 由调用方按"区域级播报开关 + 自定义内容"预先算好：
-                    //   - 命中开启播报的区域且有自定义内容 → 区域内容（区域大于默认）
-                    //   - 命中区域但都关闭播报 / 未设自定义内容 / 未开区域推送 → 识别配置内容
-                    // 这里不再被 modelArea 覆盖，让区域级控制生效。
-                    String audio = audioText;
-                    // 兼容兜底：调用方未传有效 audioText 时，沿用旧的"播报区域名"行为
-                    if ((audio == null || audio.isEmpty())
-                            && netPush.getTabAiVideoSetting().getIsBy() == 0
-                            && netPush.getTabAiVideoSetting().getIsByPush() == 0
-                            && modelArea != null && !modelArea.isEmpty()) {
-                        audio = modelArea;
+                if (netPush.getTabAiVideoSetting().getIsAudio() == 0) {
+
+                    // 先清洗调用方传入的播报内容
+                    String audio = cleanAudioText(audioText);
+
+                    // 最终再判断一次，避免 modelArea 也是 null,null
+                    log.info("【准备播报】:{}", audio);
+                    if (!isBlankAudio(audio)) {
+                        log.info("【开始播报】:{}", audio);
+                        sendAudio(netPush.getTabAudioDevices(), audio);
+                    } else {
+                        log.info("[不播报:内容为空]");
                     }
-                    log.info("【开始播报】:{}",audio);
-                //    sendAudio(netPush.getTabAudioDevices(),audio);
                 }
 
                 String recordVideo = "";
@@ -1816,6 +1814,84 @@ public class identifyTypeNewOnnxTest {
         log.error("推送结束-间隔时间{}-{}", pushInfo.getId());
         return true;
     }
+
+    /**
+     * 清洗播报内容：
+     * 1. null -> ""
+     * 2. "null" -> ""
+     * 3. "null,null" -> ""
+     * 4. "抽烟,null,未戴安全帽" -> "抽烟,未戴安全帽"
+     * 5. 支持中文逗号、分号
+     */
+    private String cleanAudioText(String text) {
+        if (text == null) {
+            return "";
+        }
+
+        text = text.trim();
+
+        if (text.length() == 0) {
+            return "";
+        }
+
+        // 先统一空格
+        text = text.replaceAll("\\s+", "");
+
+        // 如果整体全部由 null 组成，例如 null、nullnull、nullnullnull
+        if (text.matches("(?i)^(null)+$")) {
+            return "";
+        }
+
+        // 按常见分隔符拆分
+        String[] arr = text.split("[,，;；、|]+");
+
+        StringBuilder sb = new StringBuilder();
+
+        for (String item : arr) {
+            if (item == null) {
+                continue;
+            }
+
+            String val = item.trim();
+
+            if (val.length() == 0) {
+                continue;
+            }
+
+            // 去掉空格后再次判断
+            String checkVal = val.replaceAll("\\s+", "");
+
+            // 过滤 null、nullnull、nullnullnull
+            if (checkVal.matches("(?i)^(null)+$")) {
+                continue;
+            }
+
+            if (sb.length() > 0) {
+                sb.append(",");
+            }
+
+            sb.append(val);
+        }
+
+        return sb.toString();
+    }
+
+    private boolean isBlankAudio(String text) {
+        if (text == null) {
+            return true;
+        }
+
+        String val = text.trim().replaceAll("\\s+", "");
+
+        if (val.length() == 0) {
+            return true;
+        }
+
+        // 过滤 null、nullnull、nullnullnull
+        return val.matches("(?i)^(null)+$");
+    }
+
+
 
     //开始录像
     public String RecordVideo(String videoUrl, String savePath, long time, String id) {
