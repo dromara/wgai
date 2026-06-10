@@ -11,5 +11,5 @@ ${AnsiColor.BRIGHT_GREEN}
 Java  Boot Version: 3.4.3
 Spring Boot Version: ${spring-boot.version}${spring-boot.formatted-version}
 OpenCV Version：3.4.1+
-JAVAAI制作人:WG
+WGAI制作人:WG
 ${AnsiColor.BLACK}
