@@ -46,6 +46,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.jeecg.modules.demo.video.util.frame.FrameQualityFilter.printAverageRGB;
@@ -115,12 +116,19 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
     // 原有缓存
     private static final ConcurrentHashMap<String, Net> GLOBAL_NET_CACHE = new ConcurrentHashMap<>();
     private static final Map<String, OnnxModelWrapper> GLOBAL_NET_CACHE_ONNX = new ConcurrentHashMap<>();
+    private static final ExecutorService MODEL_PRELOAD_EXECUTOR = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "subscription-model-preload");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private final AtomicBoolean modelPreloadStarted = new AtomicBoolean(false);
 
     @Autowired TabAiVideoSettingMapper tabAiVideoSettingMapper;
 
     @Autowired
     TabAudioDeviceMapper tabAudioDeviceMapper;
     @Autowired TabAiModelMapper tabAiModelMapper;
+    @Autowired OnnxModelCacheService onnxModelCacheService;
     @Autowired TabAiBaseServiceImpl tabAiBaseService;
     @Autowired TabVideoUtilServiceImpl tabVideoUtilServiceImpl;
     @Autowired private BatchInferenceScheduler batchScheduler;
@@ -130,6 +138,7 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
 
     @PostConstruct
     public void init() {
+        startModelPreloadAsync();
 
         log.info("[视频流服务V2.1] 64路视频专用优化版");
         log.info("[线程池配置] 核心:64 | 最大:128 | 队列:64");
@@ -137,6 +146,92 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
         log.info("[最大容量] 支持最多64路视频同时运行");
         log.info("[预计启动时间] 批量启动64路: ~8分钟");
 
+    }
+
+    private void startModelPreloadAsync() {
+        if (!modelPreloadStarted.compareAndSet(false, true)) {
+            return;
+        }
+        MODEL_PRELOAD_EXECUTOR.submit(this::preloadSubscriptionModels);
+    }
+
+    private void preloadSubscriptionModels() {
+        long startMs = System.currentTimeMillis();
+        int success = 0;
+        int failed = 0;
+        int skipped = 0;
+        try {
+            List<TabAiSubscriptionNew> subscriptions = this.list();
+            log.info("[订阅模型启动预热] 订阅数量={}", subscriptions.size());
+
+            for (TabAiSubscriptionNew subscription : subscriptions) {
+                if (subscription == null || StringUtils.isBlank(subscription.getId())) {
+                    skipped++;
+                    continue;
+                }
+                List<TabAiVideoSetting> settings = tabAiVideoSettingMapper.selectList(
+                        new QueryWrapper<TabAiVideoSetting>().eq("sub_id", subscription.getId())
+                );
+                Set<String> modelIds = collectPreloadModelIds(settings);
+                if (modelIds.isEmpty()) {
+                    skipped++;
+                    log.info("[订阅模型启动预热跳过] 订阅ID={}, 订阅名称={}, 未配置模型",
+                            subscription.getId(), subscription.getName());
+                    continue;
+                }
+
+                for (String modelId : modelIds) {
+                    TabAiModel model = tabAiModelMapper.selectById(modelId);
+                    if (model == null) {
+                        skipped++;
+                        log.warn("[订阅模型启动预热跳过] 订阅ID={}, 模型ID={}, 模型不存在",
+                                subscription.getId(), modelId);
+                        continue;
+                    }
+
+                    long modelStartMs = System.currentTimeMillis();
+                    try {
+                        TabAiModel preloadModel = getTabAiModelInfo(model, "");
+                        if (subscription.getModelJmType() != null && subscription.getModelJmType() == 20) {
+                            getOnnxModel(subscription, preloadModel);
+                        } else {
+                            getNetModel(subscription, preloadModel);
+                        }
+                        success++;
+                        log.info("[订阅模型启动预热完成] 订阅ID={}, 订阅名称={}, 模型ID={}, 模型名称={}, 耗时={}ms",
+                                subscription.getId(), subscription.getName(), modelId, model.getAiName(),
+                                System.currentTimeMillis() - modelStartMs);
+                    } catch (Exception e) {
+                        failed++;
+                        log.warn("[订阅模型启动预热失败] 订阅ID={}, 订阅名称={}, 模型ID={}, 模型名称={}, 原因={}",
+                                subscription.getId(), subscription.getName(), modelId, model.getAiName(), e.getMessage());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[订阅模型启动预热异常] {}", e.getMessage());
+        }
+        log.info("[订阅模型启动预热结束] 成功={}, 跳过={}, 失败={}, 总耗时={}ms",
+                success, skipped, failed, System.currentTimeMillis() - startMs);
+    }
+
+    private Set<String> collectPreloadModelIds(List<TabAiVideoSetting> settings) {
+        Set<String> modelIds = new LinkedHashSet<>();
+        if (settings == null) {
+            return modelIds;
+        }
+        for (TabAiVideoSetting setting : settings) {
+            if (setting == null) {
+                continue;
+            }
+            if ("0".equals(setting.getIsBefor()) && StringUtils.isNotBlank(setting.getModelId())) {
+                modelIds.add(setting.getModelId());
+            }
+            if (StringUtils.isNotBlank(setting.getNextMode())) {
+                modelIds.add(setting.getNextMode());
+            }
+        }
+        return modelIds;
     }
 
     @PreDestroy
@@ -154,6 +249,7 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
         }
         log.info("[已停止{}路视频]", count);
 
+        MODEL_PRELOAD_EXECUTOR.shutdownNow();
         executor.shutdown();
         try {
             if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
@@ -474,7 +570,7 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
     }
 
     public TabAiModel getTabAiModelInfo(TabAiModel tabAiModel, String name) {
-        if (tabAiModel.getSpareOne().equals("1")) {
+        if ("1".equals(tabAiModel.getSpareOne())) {
             tabAiModel.setAiConfig(upLoadPath + File.separator + tabAiModel.getAiConfig());
         }
         tabAiModel.setAiWeights(upLoadPath + File.separator + tabAiModel.getAiWeights());
@@ -490,16 +586,16 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
     public Net getNetModel(TabAiSubscriptionNew tabAiSubscriptionNew, TabAiModel tabAiModel) {
         Net net = GLOBAL_NET_CACHE.get(tabAiSubscriptionNew.getId() + "_" + tabAiModel.getId());
         if (net == null) {
-            if (tabAiModel.getSpareOne().equals("1")) {
+            if ("1".equals(tabAiModel.getSpareOne())) {
                 net = Dnn.readNetFromDarknet(tabAiModel.getAiConfig(), tabAiModel.getAiWeights());
-            } else if (tabAiModel.getSpareOne().equals("2") || tabAiModel.getSpareOne().equals("3") || tabAiModel.getSpareOne().equals("11")) {
+            } else if ("2".equals(tabAiModel.getSpareOne()) || "3".equals(tabAiModel.getSpareOne()) || "11".equals(tabAiModel.getSpareOne())) {
                 net = Dnn.readNetFromONNX(tabAiModel.getAiWeights());
             }
 
-            if (tabAiModel.getModelJmType().equals("1")) {  //GPU
+            if (tabAiModel.getModelJmType() != null && tabAiModel.getModelJmType() == 1) {  //GPU
                 net.setPreferableBackend(Dnn.DNN_BACKEND_CUDA);
                 net.setPreferableTarget(Dnn.DNN_TARGET_CUDA);
-            } else if (tabAiModel.getModelJmType().equals("0")) { //cpu
+            } else if (tabAiModel.getModelJmType() != null && tabAiModel.getModelJmType() == 0) { //cpu
                 net.setPreferableBackend(Dnn.DNN_BACKEND_OPENCV);
                 net.setPreferableTarget(Dnn.DNN_TARGET_CPU);
             }
@@ -509,6 +605,10 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
     }
 
     public OnnxModelWrapper getOnnxModel(TabAiSubscriptionNew tabAiSubscriptionNew, TabAiModel tabAiModel) {
+        return onnxModelCacheService.getOnnxModel(tabAiModel);
+    }
+
+    public OnnxModelWrapper getOnnxModelLocal(TabAiSubscriptionNew tabAiSubscriptionNew, TabAiModel tabAiModel) {
         String cacheKey = tabAiSubscriptionNew.getId() + "_" + tabAiModel.getId();
         OnnxModelWrapper wrapper = GLOBAL_NET_CACHE_ONNX.get(cacheKey);
 
@@ -520,10 +620,10 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
                         OrtEnvironment env = OrtEnvironment.getEnvironment();
                         OrtSession.SessionOptions options = new OrtSession.SessionOptions();
 
-                        if (tabAiModel.getModelJmType().equals("1")) {
+                        if (tabAiModel.getModelJmType() != null && tabAiModel.getModelJmType() == 1) {
                             log.info("开启GPU加速");
                             options.addCUDA();
-                        } else if (tabAiModel.getModelJmType().equals("0")) {
+                        } else if (tabAiModel.getModelJmType() != null && tabAiModel.getModelJmType() == 0) {
                             log.info("开启CPU加速");
                             options.setIntraOpNumThreads(1);
                             options.setInterOpNumThreads(1);

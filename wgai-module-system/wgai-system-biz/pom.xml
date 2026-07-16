@@ -34,6 +34,12 @@
 			<artifactId>disruptor</artifactId>
 			<version>3.4.4</version>
 		</dependency>
+
+		<dependency>
+			<groupId>com.github.s7connector</groupId>
+			<artifactId>s7connector</artifactId>
+			<version>2.1</version>
+		</dependency>
 		<!-- easyAi -->
 <!--		<dependency>-->
 <!--			<groupId>com.wlld</groupId>-->
@@ -54,19 +60,19 @@
 		</dependency>
 
 
-		<dependency>
-			<groupId>sherpa.onnx.java</groupId>
-			<artifactId>k2fsa.native.win</artifactId>
-			<version>1.12.10</version>
-		</dependency>
-
-
-
 <!--		<dependency>-->
 <!--			<groupId>sherpa.onnx.java</groupId>-->
-<!--			<artifactId>k2fsa.native.linux</artifactId>-->
+<!--			<artifactId>k2fsa.native.win</artifactId>-->
 <!--			<version>1.12.10</version>-->
 <!--		</dependency>-->
+
+
+
+		<dependency>
+			<groupId>sherpa.onnx.java</groupId>
+			<artifactId>k2fsa.native.linux</artifactId>
+			<version>1.12.10</version>
+		</dependency>
 		<!-- 企业微信/钉钉 api -->
 		<dependency>
 			<groupId>org.jeecgframework</groupId>
@@ -84,17 +90,24 @@
 			<!--			<version>3.4.16</version>-->
 
 		</dependency>
-		<!-- cuda 12.x gpu cuda加速-->
+		<!-- cuda 12.x gpu cuda加速  50 系列-->
+
+		<dependency>
+			<groupId>com.microsoft.onnxruntime</groupId>
+			<artifactId>onnxruntime_gpu</artifactId>
+			<version>1.27.0</version>
+		</dependency>
+
 <!--		<dependency>-->
 <!--			<groupId>com.microsoft.onnxruntime</groupId>-->
 <!--			<artifactId>onnxruntime_gpu</artifactId>-->
 <!--			<version>1.23.0</version>-->
 <!--		</dependency>-->
-		<dependency>
-			<groupId>com.microsoft.onnxruntime</groupId>
-			<artifactId>onnxruntime</artifactId>
-			<version>1.19.2</version>
-		</dependency>
+<!--		<dependency>-->
+<!--			<groupId>com.microsoft.onnxruntime</groupId>-->
+<!--			<artifactId>onnxruntime</artifactId>-->
+<!--			<version>1.19.2</version>-->
+<!--		</dependency>-->
 
 		<!--当前1.17干掉-->
 <!--		<dependency>-->

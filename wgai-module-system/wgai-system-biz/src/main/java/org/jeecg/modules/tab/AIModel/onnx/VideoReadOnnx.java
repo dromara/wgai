@@ -20,6 +20,7 @@ import org.jeecg.modules.demo.video.util.reture.retureBoxInfo;
 import org.jeecg.modules.message.websocket.WebSocket;
 import org.jeecg.modules.tab.AIModel.NetPush;
 import org.jeecg.modules.tab.AIModel.VideoSendReadCfg;
+import org.jeecg.modules.tab.entity.TabAiModel;
 import org.opencv.core.*;
 import org.opencv.dnn.Dnn;
 import org.opencv.utils.Converters;
@@ -73,6 +74,11 @@ public class VideoReadOnnx implements Runnable {
     public TabAudioDevice tabAudioDevice;
     NetPush netpush;
     String uuid;
+    private String codecName;
+    private static final long STREAM_PTS_BASE_UNSET = Long.MIN_VALUE;
+    private volatile long streamPtsBaseMs = STREAM_PTS_BASE_UNSET;
+    private final AtomicInteger startupProcessLogCounter = new AtomicInteger();
+    private final AtomicInteger emptyDetectionLogCounter = new AtomicInteger();
 
     private final Java2DFrameConverter converter = new Java2DFrameConverter();
 
@@ -108,6 +114,7 @@ public class VideoReadOnnx implements Runnable {
 
         /** 快照保留帧数：20 × 300ms = 6s */
         private static final int   LOST_KEEP_FRAMES = 20;
+        private static final int   BRIDGE_MISSING_FRAMES = 3;
         /** 动态阈值基础值 */
         private static final float BASE_MATCH_DIST  = 80f;
         /** 动态阈值系数：max(w,h) × DYNAMIC_FACTOR，适应近大远小 */
@@ -118,7 +125,17 @@ public class VideoReadOnnx implements Runnable {
         static class LostSnapshot {
             int   permId;
             float cx, cy, w, h;
+            int   classId;
+            float conf;
             int   framesLost;
+        }
+
+        static class LostRender {
+            int permId;
+            BoundingBox box;
+            int classId;
+            float conf;
+            int framesLost;
         }
 
         /**
@@ -204,6 +221,8 @@ public class VideoReadOnnx implements Runnable {
                 s.cy         = (float)(c.box.y + c.box.height / 2);
                 s.w          = (float) c.box.width;
                 s.h          = (float) c.box.height;
+                s.classId    = c.classId;
+                s.conf       = c.conf;
                 s.framesLost = 0;
             }
 
@@ -216,6 +235,22 @@ public class VideoReadOnnx implements Runnable {
         /** 无检测帧：仅老化快照，避免空场景后旧快照无限留存 */
         void tickEmpty() {
             recentLost.values().removeIf(s -> ++s.framesLost > LOST_KEEP_FRAMES);
+        }
+
+        List<LostRender> bridgeMissingDetections() {
+            tickEmpty();
+            List<LostRender> renders = new ArrayList<>();
+            for (LostSnapshot s : recentLost.values()) {
+                if (s.framesLost > BRIDGE_MISSING_FRAMES) continue;
+                LostRender render = new LostRender();
+                render.permId = s.permId;
+                render.box = new BoundingBox(s.cx - s.w / 2, s.cy - s.h / 2, s.w, s.h);
+                render.classId = s.classId;
+                render.conf = s.conf;
+                render.framesLost = s.framesLost;
+                renders.add(render);
+            }
+            return renders;
         }
     }
 
@@ -240,8 +275,14 @@ public class VideoReadOnnx implements Runnable {
     public void run() {
         FFmpegFrameGrabber grabber = null;
         int consecutiveNullFrames  = 0;
+        long streamOpenStartMs = System.currentTimeMillis();
+        boolean firstImageLogged = false;
+        boolean startupAckSent = false;
         try {
             grabber = createOptimizedGrabber();
+            log.info("[视频流打开完成] 耗时={}ms, 地址={}", System.currentTimeMillis() - streamOpenStartMs, videoUrl);
+            lastFrameTime = 0;
+            resetStreamPtsBase();
             while (true) {
                 if (!isStreamActive()) { log.warn("[主动停止推送]{}", uuid); break; }
 
@@ -249,13 +290,25 @@ public class VideoReadOnnx implements Runnable {
                 if (frame == null) {
                     if (++consecutiveNullFrames > 10) {
                         log.info("[连续空帧过多，重启视频流]");
+                        streamOpenStartMs = System.currentTimeMillis();
                         grabber = restartGrabber(grabber);
+                        resetStreamPtsBase();
+                        log.info("[视频流重连完成] 耗时={}ms, 地址={}", System.currentTimeMillis() - streamOpenStartMs, videoUrl);
+                        firstImageLogged = false;
                         consecutiveNullFrames = 0;
                     }
                     Thread.sleep(100);
                     continue;
                 }
                 consecutiveNullFrames = 0;
+                if (!firstImageLogged) {
+                    long firstFrameCostMs = System.currentTimeMillis() - streamOpenStartMs;
+                    log.info("[首帧图像已读取] 耗时={}ms, 流时间戳={}ms", firstFrameCostMs, grabber.getTimestamp() / 1000L);
+                    if (firstFrameCostMs > 3000) {
+                        log.warn("[首帧图像读取较慢] 耗时={}ms, 通常是在等待RTSP关键帧/IDR，请检查摄像头GOP/I帧间隔", firstFrameCostMs);
+                    }
+                    firstImageLogged = true;
+                }
 
                 long currentTime = System.currentTimeMillis();
                 if (currentTime - lastFrameTime < TARGET_FRAME_INTERVAL) {
@@ -265,17 +318,34 @@ public class VideoReadOnnx implements Runnable {
                 lastFrameTime = currentTime;
 
                 long grabTimestamp = System.currentTimeMillis();
-                long streamPts     = grabber.getTimestamp() / 1000L;
-                processFrame(frame, grabTimestamp, streamPts);
+                long rawStreamPts  = grabber.getTimestamp() / 1000L;
+                long streamPts     = normalizeStreamPts(rawStreamPts);
+                if (!startupAckSent) {
+                    sendEmptyVideoFrame(grabTimestamp, streamPts, rawStreamPts, "startup");
+                    startupAckSent = true;
+                }
+                processFrame(frame, grabTimestamp, streamPts, rawStreamPts);
             }
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
-    private void processFrame(Frame frame, long grabTimestamp, long streamPts) {
+    private void resetStreamPtsBase() {
+        streamPtsBaseMs = STREAM_PTS_BASE_UNSET;
+    }
+
+    private long normalizeStreamPts(long rawStreamPts) {
+        if (streamPtsBaseMs == STREAM_PTS_BASE_UNSET) {
+            streamPtsBaseMs = rawStreamPts;
+        }
+        return rawStreamPts - streamPtsBaseMs;
+    }
+
+    private void processFrame(Frame frame, long grabTimestamp, long streamPts, long rawStreamPts) {
         Frame frameClone = null;
         Mat   matInfo    = null;
+        long frameStartMs = System.currentTimeMillis();
         try {
             frameClone = frame.clone();
             frame.close();
@@ -286,20 +356,38 @@ public class VideoReadOnnx implements Runnable {
             matInfo = bufferedImageToMat(image);
             if (matInfo == null || matInfo.empty()) return;
 
-            detectObjectsDifyOnnx(matInfo, netpush, redisTemplate, null, grabTimestamp, streamPts);
+            detectObjectsDifyOnnx(matInfo, netpush, redisTemplate, null, grabTimestamp, streamPts, rawStreamPts);
 
         } catch (Exception e) {
             log.error("[processFrame 异常]", e);
         } finally {
+            int frameIndex = startupProcessLogCounter.incrementAndGet();
+            long costMs = System.currentTimeMillis() - frameStartMs;
+            if (frameIndex <= 10 || costMs > 1000) {
+                log.info("[视频帧处理完成] 序号={}, 耗时={}ms, 流时间戳={}ms", frameIndex, costMs, streamPts);
+            }
             if (frameClone != null) try { frameClone.close(); } catch (Exception ignored) {}
             if (matInfo   != null) matInfo.release();
         }
     }
 
+    private void sendEmptyVideoFrame(long grabTimestamp, long streamPts, long rawStreamPts, String reason) {
+        JSONObject bja = new JSONObject();
+        bja.put("cmd",       "video");
+        bja.put("number",    grabTimestamp);
+        bja.put("streamPts", rawStreamPts);
+        bja.put("rawStreamPts", rawStreamPts);
+        bja.put("spaceFive", getSpaceFiveValue());
+        bja.put("tracking",  true);
+        bja.put("list",      new ArrayList<>());
+        bja.put("reason",    reason);
+        webSocket.sendMessage(bja.toJSONString());
+    }
+
     public boolean detectObjectsDifyOnnx(Mat image, NetPush netPush,
                                          RedisTemplate redisTemplate,
                                          List<retureBoxInfo> retureBoxInfos,
-                                         long grabTimestamp, long streamPts) {
+                                         long grabTimestamp, long streamPts, long rawStreamPts) {
         List<String> classNames = netPush.getClaseeNames();
         Integer expectedClassCount = classNames.size();
         long startTime = System.currentTimeMillis();
@@ -313,10 +401,12 @@ public class VideoReadOnnx implements Runnable {
 
             OrtSession     session = netPush.getSession();
             OrtEnvironment env     = netPush.getEnv();
+            float confThreshold = getConfThreshold(netPush);
+            float nmsThreshold = getNmsThreshold(netPush);
 
             DetectionResult detectionResult;
             try {
-                detectionResult = runOnnxInference(session, env, inputData, expectedClassCount);
+                detectionResult = runOnnxInference(session, env, inputData, expectedClassCount, confThreshold);
             } catch (Exception ex) {
                 log.error("ONNX推理失败", ex);
                 return false;
@@ -325,18 +415,18 @@ public class VideoReadOnnx implements Runnable {
             int detectionCount = detectionResult.confidences.size();
             if (detectionCount <= 0) {
                 // 无检测：仍老化快照，防止空场景后旧快照无限留存
-                getIdMapper(netPush).tickEmpty();
-                JSONObject bja = new JSONObject();
-                bja.put("cmd",       "video");
-                bja.put("number",    grabTimestamp);
-                bja.put("streamPts", streamPts);
-                bja.put("list",      new ArrayList<>());
+                JSONObject bja = buildBridgeFrame(netPush, classNames, grabTimestamp, rawStreamPts);
+                long inferMs = System.currentTimeMillis() - startTime;
+                int emptyIndex = emptyDetectionLogCounter.incrementAndGet();
+                if (emptyIndex <= 10 || inferMs > 1000) {
+                    log.info("目标检测耗时: {}ms, 检测: 0, 追踪: 0, emptyIndex={}", inferMs, emptyIndex);
+                }
                 webSocket.sendMessage(bja.toJSONString());
                 return true;
             }
             if (detectionCount > 200) { log.warn("检测数量异常: {}", detectionCount); return false; }
 
-            int[] nmsIndices = performNMS(detectionResult, 0.35f, 0.35f);
+            int[] nmsIndices = performNMS(detectionResult, confThreshold, nmsThreshold);
             if (nmsIndices.length > 50) { log.warn("NMS后检测框数量过多: {}", nmsIndices.length); return false; }
 
             double scale = Math.min(640.0 / image.cols(), 640.0 / image.rows());
@@ -371,6 +461,12 @@ public class VideoReadOnnx implements Runnable {
             }
 
             // ── ByteTracker 仍运行（不用于 permId 分配）────────────────────
+            if (cache.isEmpty()) {
+                JSONObject bja = buildBridgeFrame(netPush, classNames, grabTimestamp, rawStreamPts);
+                webSocket.sendMessage(bja.toJSONString());
+                return true;
+            }
+
             ByteTracker tracker = getTracker(netPush);
             List<ByteTracker.TrackResult> trackResults = tracker.update(detections);
 
@@ -393,11 +489,14 @@ public class VideoReadOnnx implements Runnable {
                 bj.put("height",    c.box.height);
                 bj.put("url",       videoUrl);
                 bj.put("name",      className + "_" + permId);
-                bj.put("className", className);
+                bj.put("className", aiBase.getChainName());
                 bj.put("color",     CommonColorsVue(c.classId));
                 bj.put("number",    grabTimestamp);
-                bj.put("streamPts", streamPts);
+                bj.put("streamPts", rawStreamPts);
+                bj.put("rawStreamPts", rawStreamPts);
                 bj.put("trackId",   permId);
+                bj.put("spaceFive", getSpaceFiveValue());
+                bj.put("tracking",  true);
                 bj.put("conf",      String.format("%.2f", c.conf));
                 jsonlist.add(bj);
             }
@@ -405,7 +504,10 @@ public class VideoReadOnnx implements Runnable {
             JSONObject bja = new JSONObject();
             bja.put("cmd",       "video");
             bja.put("number",    grabTimestamp);
-            bja.put("streamPts", streamPts);
+            bja.put("streamPts", rawStreamPts);
+            bja.put("rawStreamPts", rawStreamPts);
+            bja.put("spaceFive", getSpaceFiveValue());
+            bja.put("tracking",  true);
             bja.put("list",      jsonlist);
 
             long inferMs = System.currentTimeMillis() - startTime;
@@ -427,10 +529,10 @@ public class VideoReadOnnx implements Runnable {
      * ONNX推理 - 支持YOLOv5/v8/v11多种格式
      */
     private DetectionResult runOnnxInference(OrtSession session, OrtEnvironment env,
-                                             float[] inputData, Integer expectedClassCount) throws Exception {
+                                             float[] inputData, Integer expectedClassCount,
+                                             float confThreshold) throws Exception {
         long[] shape = {1, 3, 640, 640};
         DetectionResult result = new DetectionResult();
-        float confThreshold = 0.45f;
 
         try (OnnxTensor inputTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputData), shape)) {
             Map<String, OnnxTensor> inputs = Collections.singletonMap(
@@ -617,6 +719,65 @@ public class VideoReadOnnx implements Runnable {
         return new BoundingBox(x, y, w, h);
     }
 
+    private String getSpaceFiveValue() {
+        return tabAiModelBund == null ? null : tabAiModelBund.getSpaceFive();
+    }
+
+    private float getConfThreshold(NetPush netPush) {
+        TabAiModel tabAiModel = netPush == null ? null : netPush.getTabAiModel();
+        return tabAiModel == null || tabAiModel.getThreshold() == null
+                ? 0.45f
+                : tabAiModel.getThreshold().floatValue();
+    }
+
+    private float getNmsThreshold(NetPush netPush) {
+        TabAiModel tabAiModel = netPush == null ? null : netPush.getTabAiModel();
+        return tabAiModel == null || tabAiModel.getNmsThreshold() == null
+                ? 0.4f
+                : tabAiModel.getNmsThreshold().floatValue();
+    }
+
+    private JSONObject buildBridgeFrame(NetPush netPush, List<String> classNames,
+                                        long grabTimestamp, long rawStreamPts) {
+        List<JSONObject> jsonlist = new ArrayList<>();
+        for (PermanentIdMapper.LostRender lost : getIdMapper(netPush).bridgeMissingDetections()) {
+            if (lost.classId < 0 || lost.classId >= classNames.size()) continue;
+            String className = classNames.get(lost.classId);
+            TabAiBase aiBase = getAiBaseConfig(className);
+
+            JSONObject bj = new JSONObject();
+            bj.put("x", lost.box.x);
+            bj.put("y", lost.box.y);
+            bj.put("width", lost.box.width);
+            bj.put("height", lost.box.height);
+            bj.put("url", videoUrl);
+            bj.put("name", className + "_" + lost.permId);
+            bj.put("className", aiBase.getChainName());
+            bj.put("color", CommonColorsVue(lost.classId));
+            bj.put("number", grabTimestamp);
+            bj.put("streamPts", rawStreamPts);
+            bj.put("rawStreamPts", rawStreamPts);
+            bj.put("trackId", lost.permId);
+            bj.put("spaceFive", getSpaceFiveValue());
+            bj.put("tracking", true);
+            bj.put("conf", String.format("%.2f", lost.conf));
+            bj.put("predicted", true);
+            bj.put("lostFrames", lost.framesLost);
+            jsonlist.add(bj);
+        }
+
+        JSONObject bja = new JSONObject();
+        bja.put("cmd", "video");
+        bja.put("number", grabTimestamp);
+        bja.put("streamPts", rawStreamPts);
+        bja.put("rawStreamPts", rawStreamPts);
+        bja.put("spaceFive", getSpaceFiveValue());
+        bja.put("tracking", true);
+        bja.put("list", jsonlist);
+        bja.put("bridgeMissing", !jsonlist.isEmpty());
+        return bja;
+    }
+
     private FFmpegFrameGrabber restartGrabber(FFmpegFrameGrabber grabber) throws Exception {
         if (grabber != null) { grabber.stop(); grabber.release(); }
         return createOptimizedGrabber();
@@ -626,21 +787,138 @@ public class VideoReadOnnx implements Runnable {
         catch (Exception e) { log.warn("[检查流状态异常]", e); return false; }
     }
     public FFmpegFrameGrabber createOptimizedGrabber() throws Exception {
-        FFmpegFrameGrabber probe = new FFmpegFrameGrabber(videoUrl);
-        probe.setOption("rtsp_transport", "tcp");
-        probe.setOption("stimeout", "5000000");
-        probe.start();
-        String codecName = probe.getVideoCodecName();
-        int    codecId   = probe.getVideoCodec();
-        probe.stop(); probe.close(); probe.release();
-        log.info("检测到视频编码: {} (ID={})", codecName, codecId);
+        Exception lastException = null;
 
+        try {
+            return startGrabber("NVIDIA", "cuda", resolveNvidiaCodecName());
+        } catch (Exception e) {
+            lastException = e;
+            log.warn("[NVIDIA解码失败，切换Intel解码] {}", e.getMessage());
+        }
+
+        try {
+            return startGrabber("Intel", "qsv", resolveQsvCodecName());
+        } catch (Exception e) {
+            lastException = e;
+            log.warn("[Intel解码失败，切换CPU解码] {}", e.getMessage());
+        }
+
+        try {
+            return startGrabber("CPU", null, null);
+        } catch (Exception e) {
+            if (lastException != null) {
+                e.addSuppressed(lastException);
+            }
+            throw e;
+        }
+    }
+
+    private FFmpegFrameGrabber startGrabber(String mode, String hwaccel, String videoCodecName) throws Exception {
+        FFmpegFrameGrabber grabber = new FFmpegFrameGrabber(videoUrl);
+        try {
+            if (isHttpFlvUrl()) {
+                grabber.setFormat("flv");
+            }
+            applyLowLatencyOptions(grabber);
+            if (hwaccel != null && hwaccel.length() > 0) {
+                grabber.setOption("hwaccel", hwaccel);
+            }
+            if (videoCodecName != null && videoCodecName.length() > 0) {
+                grabber.setVideoCodecName(videoCodecName);
+            }
+            log.info("[尝试{}解码] 硬件加速={}, 编码器={}", mode, hwaccel, videoCodecName);
+            grabber.start();
+            codecName = grabber.getVideoCodecName();
+            log.info("[{}解码已启动] 视频编码={}, 编码ID={}", mode, codecName, grabber.getVideoCodec());
+            return grabber;
+        } catch (Exception e) {
+            releaseGrabberQuietly(grabber);
+            throw e;
+        }
+    }
+
+    private void applyLowLatencyOptions(FFmpegFrameGrabber grabber) {
+        grabber.setOption("loglevel",       "-8");
+        grabber.setOption("stimeout",       "3000000");
+        grabber.setOption("rw_timeout",     "3000000");
+        grabber.setOption("allowed_media_types", "video");
+        grabber.setPixelFormat(avutil.AV_PIX_FMT_BGR24);
+        grabber.setOption("flags",          "low_delay");
+        grabber.setOption("buffer_size",    "512000");
+     //   grabber.setOption("use_wallclock_as_timestamps", "1");
+        grabber.setOption("flags2",         "fast");
+        grabber.setOption("err_detect",     "compliant");
+        grabber.setOption("framedrop",      "1");
+
+        if (isHttpFlvUrl()) {
+            grabber.setOption("probesize",      "5000000");
+            grabber.setOption("analyzeduration","5000000");
+            grabber.setOption("max_delay",      "500000");
+            grabber.setOption("fflags",         "flush_packets+discardcorrupt");
+            return;
+        }
+
+        grabber.setOption("rtsp_transport", "tcp");
+        grabber.setOption("rtsp_flags",     "prefer_tcp");
+        grabber.setOption("probesize",      "100000");
+        grabber.setOption("analyzeduration","500000");
+        grabber.setOption("avioflags",      "direct");
+        grabber.setOption("max_delay",      "0");
+        grabber.setOption("reorder_queue_size", "0");
+        grabber.setOption("fflags",         "nobuffer+flush_packets+discardcorrupt");
+    }
+
+    private boolean isHttpFlvUrl() {
+        if (videoUrl == null) {
+            return false;
+        }
+        String lowerUrl = videoUrl.toLowerCase(Locale.ROOT);
+        return (lowerUrl.startsWith("http://") || lowerUrl.startsWith("https://"))
+                && lowerUrl.contains(".flv");
+    }
+
+    private String resolveNvidiaCodecName() {
+        if ("h264".equalsIgnoreCase(codecName)) {
+            return "h264_cuvid";
+        }
+        if ("hevc".equalsIgnoreCase(codecName) || "hevc1".equalsIgnoreCase(codecName)) {
+            return "hevc_cuvid";
+        }
+        return null;
+    }
+
+    private String resolveQsvCodecName() {
+        if ("h264".equalsIgnoreCase(codecName)) {
+            return "h264_qsv";
+        }
+        if ("hevc".equalsIgnoreCase(codecName) || "hevc1".equalsIgnoreCase(codecName)) {
+            return "hevc_qsv";
+        }
+        return null;
+    }
+
+    private void releaseGrabberQuietly(FFmpegFrameGrabber grabber) {
+        if (grabber == null) {
+            return;
+        }
+        try {
+            grabber.stop();
+        } catch (Exception ignored) {
+        }
+        try {
+            grabber.release();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private FFmpegFrameGrabber createLegacyOptimizedGrabber() throws Exception {
         FFmpegFrameGrabber grabber = new FFmpegFrameGrabber(videoUrl);
         grabber.setOption("hwaccel", "qsv");
-        if ("h264".equalsIgnoreCase(codecName))
+        if ("h264".equalsIgnoreCase(codecName)) {
             grabber.setVideoCodecName("h264_qsv");
-        else if ("hevc".equalsIgnoreCase(codecName) || "hevc1".equalsIgnoreCase(codecName))
+        } else if ("hevc".equalsIgnoreCase(codecName) || "hevc1".equalsIgnoreCase(codecName)) {
             grabber.setVideoCodecName("hevc_qsv");
+        }
         log.info("[使用Intel加速解码]");
         grabber.setOption("loglevel",       "-8");
         grabber.setOption("rtsp_transport", "tcp");
@@ -655,6 +933,8 @@ public class VideoReadOnnx implements Runnable {
         grabber.setOption("err_detect",     "compliant");
         grabber.setOption("framedrop",      "1");
         grabber.start();
+        codecName = grabber.getVideoCodecName();
+        log.info("检测到视频编码: {} (ID={})", codecName, grabber.getVideoCodec());
         return grabber;
     }
 }

@@ -1,5 +1,6 @@
 package org.jeecg.modules.demo.tab.service.impl;
 
+import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtSession;
 import com.alibaba.fastjson.JSONArray;
@@ -43,6 +44,7 @@ import org.jeecg.modules.system.controller.wavUtil;
 import org.jeecg.modules.system.entity.SysAnnouncementSend;
 import org.jeecg.modules.tab.AIModel.AIModelYolo3;
 import org.jeecg.modules.tab.AIModel.NetPush;
+import org.jeecg.modules.tab.AIModel.OnnxModelCacheService;
 import org.jeecg.modules.tab.AIModel.OnnxModelWrapper;
 import org.jeecg.modules.tab.AIModel.VideoSendReadCfg;
 import org.jeecg.modules.tab.AIModel.push.AiImgResult;
@@ -62,9 +64,11 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import javax.annotation.Resource;
 import java.io.*;
 import java.nio.ByteBuffer;
+import java.nio.FloatBuffer;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
@@ -91,6 +95,8 @@ public class TabAiHistoryServiceImpl extends ServiceImpl<TabAiHistoryMapper, Tab
     TabAiBaseMapper tabAiBaseMapper;
     @Autowired
     TabAiModelMapper modelMapper;
+    @Autowired
+    OnnxModelCacheService onnxModelCacheService;
     @Autowired
     TabAiHistoryMapper tabAiHistoryMapper;
 
@@ -774,7 +780,7 @@ public class TabAiHistoryServiceImpl extends ServiceImpl<TabAiHistoryMapper, Tab
     public int saveIdentifyLocalVideoThreadOnnx(TabAiModelBund tabAiModelBund, String path, String userId) {
 
 
-        log.info("V5识别内容开始！！！！！！！！！！！！！！！！！！！！！！！！！！！！！");
+        log.info("视频识别内容开始！！！！！！！！！！！！！！！！！！！！！！！！！！！！！");
         TabAiModel tabAiModel1=getTabAiModelInfo(modelMapper.selectById(tabAiModelBund.getModelName()),"xxx",path);
         AIModelYolo3  modelYolo3=new AIModelYolo3();
         //处置结束符
@@ -810,6 +816,8 @@ public class TabAiHistoryServiceImpl extends ServiceImpl<TabAiHistoryMapper, Tab
             beforePush.setSession(endNet.getSession());
             beforePush.setEnv(endNet.getEnv());
             beforePush.setClaseeNames(Files.readAllLines(Paths.get(tabAiModel1.getAiNameName())));
+            beforePush.setIsFollow(0);
+            beforePush.setFollowPosition(300);
             TabVideoUtil tabVideoUtil = new TabVideoUtil();
 
             if (tabAiModelBund.getIsBy() != null && tabAiModelBund.getIsBy() == 0) {
@@ -860,6 +868,10 @@ public class TabAiHistoryServiceImpl extends ServiceImpl<TabAiHistoryMapper, Tab
         return  tabAiModel;
     }
     public OnnxModelWrapper getOnnxModel( TabAiModel tabAiModel) {
+        return onnxModelCacheService.getOnnxModel(tabAiModel);
+    }
+
+    public OnnxModelWrapper getOnnxModelLocal( TabAiModel tabAiModel) {
         String cacheKey =  tabAiModel.getId();
         OnnxModelWrapper wrapper = GLOBAL_NET_CACHE_ONNX.get(cacheKey);
 
@@ -869,23 +881,22 @@ public class TabAiHistoryServiceImpl extends ServiceImpl<TabAiHistoryMapper, Tab
                 if (wrapper == null) {
                     try {
                         OrtEnvironment env = OrtEnvironment.getEnvironment();
-                        OrtSession.SessionOptions options = new OrtSession.SessionOptions();
-
-                        if (tabAiModel.getModelJmType()!=null&&tabAiModel.getModelJmType()==1) { // GPU
-                            options.addCUDA();
-                            log.info("[ONNX推理规则：GPU]");
-                        } else { // CPU
-                            options.setIntraOpNumThreads(1); // 每个session单算子只用1核
-                            options.setInterOpNumThreads(1);
-                            options.setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL);
-                            options.addCPU(true);
-
+                        OrtSession session;
+                        boolean preferCuda = tabAiModel.getModelJmType() == null || tabAiModel.getModelJmType() == 1;
+                        if (preferCuda) {
+                            try {
+                                session = env.createSession(tabAiModel.getAiWeights(), createCudaSessionOptions());
+                                log.info("[ONNX推理规则：CUDA GPU]");
+                            } catch (Exception cudaEx) {
+                                log.warn("[ONNX推理规则：CUDA创建Session失败，回退CPU] {}", cudaEx.getMessage());
+                                session = env.createSession(tabAiModel.getAiWeights(), createCpuSessionOptions());
+                                log.info("[ONNX推理规则：CPU]");
+                            }
+                        } else {
+                            session = env.createSession(tabAiModel.getAiWeights(), createCpuSessionOptions());
                             log.info("[ONNX推理规则：CPU]");
                         }
-
-                        System.out.println(OrtEnvironment.getEnvironment().getVersion());
-
-                        OrtSession session = env.createSession(tabAiModel.getAiWeights(), options);
+                        warmupOnnxSession(env, session);
                         wrapper = new OnnxModelWrapper(env, session);
                         GLOBAL_NET_CACHE_ONNX.put(cacheKey, wrapper);
                         log.info("【ONNX模型加载成功并缓存】key: {}", cacheKey);
@@ -900,6 +911,39 @@ public class TabAiHistoryServiceImpl extends ServiceImpl<TabAiHistoryMapper, Tab
         }
 
         return wrapper;
+    }
+
+    private OrtSession.SessionOptions createCudaSessionOptions() throws Exception {
+        OrtSession.SessionOptions options = createBaseSessionOptions();
+        options.addCUDA();
+        return options;
+    }
+
+    private OrtSession.SessionOptions createCpuSessionOptions() throws Exception {
+        OrtSession.SessionOptions options = createBaseSessionOptions();
+        options.setIntraOpNumThreads(Math.max(1, Runtime.getRuntime().availableProcessors() / 2));
+        options.setInterOpNumThreads(1);
+        options.addCPU(true);
+        return options;
+    }
+
+    private OrtSession.SessionOptions createBaseSessionOptions() throws Exception {
+        OrtSession.SessionOptions options = new OrtSession.SessionOptions();
+        options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+        options.setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL);
+        return options;
+    }
+
+    private void warmupOnnxSession(OrtEnvironment env, OrtSession session) {
+        long[] shape = {1, 3, 640, 640};
+        float[] warmupInput = new float[3 * 640 * 640];
+        try (OnnxTensor inputTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(warmupInput), shape);
+             OrtSession.Result ignored = session.run(Collections.singletonMap(
+                     session.getInputNames().iterator().next(), inputTensor))) {
+            log.info("[ONNX模型预热完成]");
+        } catch (Exception e) {
+            log.warn("[ONNX模型预热失败，继续运行] {}", e.getMessage());
+        }
     }
 
     @Override
@@ -966,12 +1010,15 @@ public class TabAiHistoryServiceImpl extends ServiceImpl<TabAiHistoryMapper, Tab
                 case "11":
                 case "26":
                 {
+                    log.info("【进入V11-V26开始识别内容】{}",tabAiModelBund.getSpaceOne());
                     if(tabAiModelBund.getSpaceOne().equals("0")) { //当前为图片
+                        log.info("【进入V11-V26 图像识别】");
                         int a = this.saveIdentifyYolov(tabAiModelBund, path, aiModel.getSpareOne());
                         if (a == 0) {
                             return Result.OK("识别图片成功！");
                         }
                     }else{
+                        log.info("【进入V11-V26 视频识别】");
                         if(aiModel.getModelDifyType()!=null&&aiModel.getModelDifyType()==20){
                             this.saveIdentifyLocalVideoThreadOnnx(tabAiModelBund,path,userId);
                         }else{

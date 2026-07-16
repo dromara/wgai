@@ -77,6 +77,9 @@ public class ShiroConfig {
         }
         // 配置不会被拦截的链接 顺序判断
         filterChainDefinitionMap.put("/api/map/**", "anon"); //文件下发
+        filterChainDefinitionMap.put("/tab/tabAiHistory/**", "anon"); //获取模型文件
+        filterChainDefinitionMap.put("/tab/tabAiModel/**", "anon"); //获取模型文件
+        filterChainDefinitionMap.put("/tab/tabAiModelBund/**", "anon"); //获取模型文件
         filterChainDefinitionMap.put("/tab/tabAiModel/receiveModel", "anon"); //文件下发
         filterChainDefinitionMap.put("/video/tabAiSubscriptionNew/test", "anon"); //文件下发
         filterChainDefinitionMap.put("/sys/cas/client/validateLogin", "anon"); //cas验证登录

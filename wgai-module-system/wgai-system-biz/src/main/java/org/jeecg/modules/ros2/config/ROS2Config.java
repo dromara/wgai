@@ -17,7 +17,7 @@ public class ROS2Config {
     /**
      * rosbridge WebSocket 地址
      */
-    private String bridgeUrl = "ws://192.168.0.162:9090";
+    private String bridgeUrl = "ws://127.0.0.1:9090";
 
     /**
      * 是否自动连接

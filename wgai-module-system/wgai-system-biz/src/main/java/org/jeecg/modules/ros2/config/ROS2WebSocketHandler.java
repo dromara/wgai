@@ -55,6 +55,11 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
     private final Gson gson = new Gson();
     private final Consumer<WebSocketSession> onConnectCallback;
     private final Runnable onDisconnectCallback;
+    private final Consumer<JsonObject> onServiceResponseCallback;
+    /** 每次收到 /amcl_pose 时回调，用于更新 ROS2BridgeService 的位姿缓存 */
+    private final Consumer<JsonObject> onAmclPoseCallback;
+    /** supportsPartialMessages()=true,大消息会分片到达,拼到 isLast 再解析 */
+    private final StringBuilder partialBuf = new StringBuilder();
 
     // 点云下采样:最多推送给前端的点数
     private static final int MAX_POINTS_TO_PUSH = 3000;
@@ -87,18 +92,23 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
     // amcl_pose 只有位姿没有速度;速度从 /Odometry 或 /cmd_vel 缓存而来
     private volatile double cachedLinearVel  = 0.0;
     private volatile double cachedAngularVel = 0.0;
+    private volatile long lastSmoothedCmdVelMs = 0L;
 
     public ROS2WebSocketHandler(
             VelocityMonitorService velocityService,
             WebSocketPushService pushService,
             RobotHardwareService hardwareService,
             Consumer<WebSocketSession> onConnectCallback,
-            Runnable onDisconnectCallback) {
-        this.velocityService      = velocityService;
-        this.pushService          = pushService;
-        this.hardwareService      = hardwareService;
-        this.onConnectCallback    = onConnectCallback;
-        this.onDisconnectCallback = onDisconnectCallback;
+            Runnable onDisconnectCallback,
+            Consumer<JsonObject> onServiceResponseCallback,
+            Consumer<JsonObject> onAmclPoseCallback) {
+        this.velocityService           = velocityService;
+        this.pushService               = pushService;
+        this.hardwareService           = hardwareService;
+        this.onConnectCallback         = onConnectCallback;
+        this.onDisconnectCallback      = onDisconnectCallback;
+        this.onServiceResponseCallback = onServiceResponseCallback;
+        this.onAmclPoseCallback        = onAmclPoseCallback;
     }
 
     // ======================== 生命周期 ========================
@@ -113,7 +123,13 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) {
-        handleRosMessage(message.getPayload());
+        // supportsPartialMessages()=true,大消息(如 load_map 回传的整张地图)会分片到达,
+        // 必须拼接到 isLast 再解析;单 session 串行回调,StringBuilder 无需加锁。
+        partialBuf.append(message.getPayload());
+        if (!message.isLast()) return;
+        String full = partialBuf.toString();
+        partialBuf.setLength(0);
+        handleRosMessage(full);
     }
 
     @Override
@@ -132,6 +148,14 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
     private void handleRosMessage(String raw) {
         try {
             JsonObject json = gson.fromJson(raw, JsonObject.class);
+
+            // ★ service 调用响应:没有 topic/msg,必须在下面的判空 return 之前拦截,
+            //   否则会被当成无效消息直接丢弃,导致 ROS2BridgeService 那边永远等不到响应。
+            if (json.has("op") && "service_response".equals(json.get("op").getAsString())) {
+                if (onServiceResponseCallback != null) onServiceResponseCallback.accept(json);
+                return;
+            }
+
             if (!json.has("topic") || !json.has("msg")) return;
 
             String topic = json.get("topic").getAsString();
@@ -146,6 +170,7 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
                     break;
                 case "/amcl_pose":// 初始化位姿
                     handleAmclPose(msg);
+
                     break;
                 case "/plan": //规划路线
                     handleNavPlan(msg);
@@ -158,7 +183,7 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
                     break;
                 case "/cmd_vel": //速度命令
                 case "/cmd_vel_smoothed":
-                    handleCmdVel(msg);
+                    handleCmdVel(topic, msg);
                     break;
                 case "/map": //地图数据
                     handleMapUpdate(msg);
@@ -326,6 +351,11 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
             poseData.put("angularVel", cachedAngularVel);
 
             pushService.pushToAll("robot_pose", poseData);
+
+            // ★ 更新 ROS2BridgeService 位姿缓存，供 MapController 位姿自动保存使用
+            //   （替代原来每5s fork ros2 topic echo 的 shell 命令）
+            if (onAmclPoseCallback != null) onAmclPoseCallback.accept(msg);
+
             log.warn("AMCL位姿: x={}, y={}, θ={}°", posX, posY, (int) Math.toDegrees(theta));
 
         } catch (Exception e) {
@@ -449,7 +479,7 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
 
     // ======================== cmd_vel ========================
 
-    private void handleCmdVel(JsonObject msg) {
+    private void handleCmdVel(String topic, JsonObject msg) {
         try {
             JsonObject linear  = msg.getAsJsonObject("linear");
             JsonObject angular = msg.getAsJsonObject("angular");
@@ -467,7 +497,14 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
             pushService.pushToAll("cmd_vel_update", velData);
 
             velocityService.handleVelocityMessage(msg);
-            hardwareService.sendVelocity(linearX, angularZ);
+
+            long now = System.currentTimeMillis();
+            if ("/cmd_vel_smoothed".equals(topic)) {
+                lastSmoothedCmdVelMs = now;
+                hardwareService.sendVelocity(linearX, angularZ);
+            } else if (now - lastSmoothedCmdVelMs > 500) {
+                hardwareService.sendVelocity(linearX, angularZ);
+            }
 
         } catch (Exception e) {
             log.warn("处理 /cmd_vel 失败: {}", e.getMessage());

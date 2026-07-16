@@ -63,12 +63,43 @@ public class RobotHardwareService {
     @Value("${plc.slot:1}")
     private int plcSlot;
 
-    @Value("${plc.enabled:false}")
+    @Value("${plc.enabled:true}")
     private boolean plcEnabled;
+
+    /** 速度地址: 模拟器默认 VW500, 真实 PLC 可配置为 VD500 */
+    @Value("${plc.speed.address:500}")
+    private int speedAddress;
+
+    /** 转弯角度地址: 模拟器默认 VW550, 真实 PLC 可配置为 VD200 */
+    @Value("${plc.angle.address:550}")
+    private int angleAddress;
+
+    /** 数值写入宽度: WORD=16bit(VW), DWORD=32bit(VD) */
+    @Value("${plc.value.type:WORD}")
+    private String valueType;
+
+    /** 真实车要求按住 M3.3/M3.4 才允许 AGV 动作 */
+    @Value("${plc.hold.start.program:true}")
+    private boolean holdStartProgram;
+
+    @Value("${plc.hold.start.device:true}")
+    private boolean holdStartDevice;
+
+    /** 原地旋转使用 M3.5, 方向由角度正负决定 */
+    @Value("${plc.hold.rotate.bit:true}")
+    private boolean holdRotateBit;
 
     /** 看门狗超时(ms): 超过此时间无新指令则自动停车 */
     @Value("${plc.watchdog.ms:500}")
     private long watchdogMs;
+
+    /** PLC 控制日志输出间隔(ms), 避免 /cmd_vel 高频刷屏 */
+    @Value("${plc.control.log.interval.ms:500}")
+    private long controlLogIntervalMs;
+
+    /** PLC 急停通知 M 位脉冲保持时间 */
+    @Value("${plc.emergency.stop.pulse.ms:100}")
+    private long emergencyStopPulseMs;
 
     /** 最大线速度(m/s), 对应 3000 RPM */
     @Value("${plc.max.linear.vel:0.8}")
@@ -95,10 +126,15 @@ public class RobotHardwareService {
     private static final int M_STRAIGHT   = 0x14;  // M1.4 直行模式
     private static final int M_LATERAL    = 0x15;  // M1.5 平移模式
 
+    private static final int M_START_PROGRAM = 0x33;  // M3.3 AGV 小车启动程序
+    private static final int M_START_DEVICE  = 0x34;  // M3.4 AGV 小车启动设备
+    private static final int M_ROTATE        = 0x35;  // M3.5 AGV 小车旋转
+    private static final int M_EMERGENCY_STOP = 0x60; // M6.0 PLC 急停通知
+
     // ======================== V 区字地址 (VW = 2字节有符号整数) ========================
 
-    private static final int VW_SPEED = 500;   // VW500 速度 0~3000 RPM
-    private static final int VW_ANGLE = 550;   // VW550 转弯角度 °
+    private static final int DEFAULT_SPEED_ADDRESS = 500;   // simulator: VW500
+    private static final int DEFAULT_ANGLE_ADDRESS = 550;   // simulator: VW550
 
     // ======================== V 区状态反馈位地址 ========================
 
@@ -134,11 +170,15 @@ public class RobotHardwareService {
         final DriveMode mode;
         final int rpm;
         final int angleDeg;
+        final double linear;
+        final double angular;
 
-        PlcCommand(DriveMode mode, int rpm, int angleDeg) {
+        PlcCommand(DriveMode mode, int rpm, int angleDeg, double linear, double angular) {
             this.mode     = mode;
             this.rpm      = rpm;
             this.angleDeg = angleDeg;
+            this.linear   = linear;
+            this.angular  = angular;
         }
 
         @Override
@@ -164,6 +204,13 @@ public class RobotHardwareService {
         private boolean rightRunning;
         private boolean straightRunning;
         private boolean lateralRunning;
+        private String  valueType;
+        private int     speedAddress;
+        private int     angleAddress;
+        private boolean holdStartProgram;
+        private boolean holdStartDevice;
+        private boolean holdRotateBit;
+        private boolean emergencyStopActive;
     }
 
     // ======================== 运行状态 ========================
@@ -171,6 +218,7 @@ public class RobotHardwareService {
     private S7Connector s7Connector;
     private final AtomicBoolean connected    = new AtomicBoolean(false);
     private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
+    private final AtomicBoolean emergencyStopActive = new AtomicBoolean(false);
 
     /** 待下发指令缓冲 */
     private volatile double  pendingLinear  = 0;
@@ -182,6 +230,11 @@ public class RobotHardwareService {
     private volatile int       lastSentRpm   = 0;
     private volatile int       lastSentAngle = 0;
     private volatile DriveMode currentMode   = DriveMode.STOP;
+
+    private volatile DriveMode lastLoggedMode = null;
+    private volatile int lastLoggedTargetRpm = Integer.MIN_VALUE;
+    private volatile int lastLoggedTargetAngle = Integer.MIN_VALUE;
+    private volatile long lastControlLogMs = 0L;
 
     /** 障碍物距离监控 */
     private volatile double  minObstacleDistance = Double.MAX_VALUE;
@@ -200,8 +253,11 @@ public class RobotHardwareService {
         connectPlc();
         scheduler.scheduleAtFixedRate(this::sendTick,      100, 20, TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::statusReadTick,  1,  1, TimeUnit.SECONDS);
-        log.info("✅ AGV 底盘服务已启动 | host={} | debug={} | watchdog={}ms",
-                plcHost, !plcEnabled, watchdogMs);
+        log.info("AGV PLC bridge started | host={} | enabled={} | watchdog={}ms",
+                plcHost, plcEnabled, watchdogMs);
+        log.info("[PLC] valueType={} speedAddr={} angleAddr={} maxLinearVel={} angularScale={} startProgram={} startDevice={} rotateBit={}",
+                getValueType(), speedAddress, angleAddress, maxLinearVel, angularToDegreesScale,
+                holdStartProgram, holdStartDevice, holdRotateBit);
     }
 
     @PreDestroy
@@ -223,6 +279,12 @@ public class RobotHardwareService {
      */
     public void sendVelocity(double linear, double angular) {
         if (shuttingDown.get()) return;
+        if (emergencyStopActive.get()) {
+            hasPending.set(false);
+            pendingLinear = 0;
+            pendingAngular = 0;
+            return;
+        }
         pendingLinear  = linear;
         pendingAngular = angular;
         hasPending.set(true);
@@ -233,11 +295,28 @@ public class RobotHardwareService {
     public void emergencyStop() {
         log.warn("🛑 紧急停车触发!");
         try {
+            emergencyStopActive.set(true);
+            hasPending.set(false);
+            pendingLinear = 0;
+            pendingAngular = 0;
+            lastCmdTimeMs.set(0);
             forceStop();
+            pulseEmergencyStopBit();
+            logControlCommand(new PlcCommand(DriveMode.STOP, 0, 0, 0, 0), 0, 0);
         } catch (Exception e) {
             log.error("急停失败, 请立即手动断电! {}", e.getMessage());
         }
     }
+
+    /** 解除 Java 侧急停锁。注意: PLC 侧如有报警锁存, 仍需按现场复位流程处理。 */
+    public void clearEmergencyStopLock() {
+        emergencyStopActive.set(false);
+        lastCmdTimeMs.set(0);
+        hasPending.set(false);
+        log.warn("[PLC急停] Java 侧急停锁已解除, 可重新接收 cmd_vel");
+    }
+
+
 
     /**
      * 注入最新激光/点云最近障碍物距离(m)。
@@ -249,7 +328,8 @@ public class RobotHardwareService {
         if (obstacleStopDistance > 0 && minDistM < obstacleStopDistance) {
             if (!obstacleOverride) {
                 obstacleOverride = true;
-                log.warn("⚠ 障碍物 {:.2f}m < 阈值 {:.2f}m, 触发停车", minDistM, obstacleStopDistance);
+                log.warn("障碍物 {}m < 阈值 {}m, 触发停车",
+                        String.format("%.2f", minDistM), String.format("%.2f", obstacleStopDistance));
                 try { forceStop(); } catch (Exception ignored) {}
             }
         } else {
@@ -272,6 +352,13 @@ public class RobotHardwareService {
         st.setAngleDeg(lastSentAngle);
         st.setObstacleDistance(minObstacleDistance > 1e6 ? -1 : minObstacleDistance);
         st.setObstacleOverride(obstacleOverride);
+        st.setValueType(getValueType().name());
+        st.setSpeedAddress(speedAddressOrDefault());
+        st.setAngleAddress(angleAddressOrDefault());
+        st.setHoldStartProgram(holdStartProgram);
+        st.setHoldStartDevice(holdStartDevice);
+        st.setHoldRotateBit(holdRotateBit);
+        st.setEmergencyStopActive(emergencyStopActive.get());
 
         if (plcEnabled && connected.get()) {
             try {
@@ -294,33 +381,38 @@ public class RobotHardwareService {
     public int  getLastAngle()            { return lastSentAngle; }
     public double getMinObstacleDistance(){ return minObstacleDistance; }
     public boolean isObstacleOverride()   { return obstacleOverride; }
+    public boolean isEmergencyStopActive(){ return emergencyStopActive.get(); }
 
     // ======================== 周期发送 tick ========================
 
     private void sendTick() {
         try {
-            // ① 障碍物安全锁 — 已停车, 等障碍移开后 obstacleOverride 自动解除
+            if (emergencyStopActive.get()) {
+                hasPending.set(false);
+                return;
+            }
             if (obstacleOverride) return;
 
-            // ② 看门狗 — 超过 watchdogMs 无新指令则停车
             long last = lastCmdTimeMs.get();
-            if (last > 0 && System.currentTimeMillis() - last > watchdogMs) {
+            boolean stale = last > 0 && (System.currentTimeMillis() - last) > watchdogMs;
+
+            // 看门狗:只在“指令过期”时负责停车,不再顺手 return 把新指令也跳过
+            if (stale) {
                 if (currentMode != DriveMode.STOP) {
                     log.warn("⚠ 看门狗触发 ({}ms 无新指令), 停车", watchdogMs);
                     forceStop();
                 }
-                return;
+                return;   // 过期了本来也没有新鲜指令可发,return 合理
             }
 
+            // 未过期:有新指令就发
             if (!hasPending.get()) return;
             hasPending.set(false);
-
-            // ③ Twist → PLC 指令 → 执行
             PlcCommand cmd = twistToPlcCommand(pendingLinear, pendingAngular);
             executeCommand(cmd);
 
         } catch (Exception e) {
-            log.warn("sendTick 异常: {}", e.getMessage());
+            log.warn("sendTick 异常: {}", e.getMessage(), e);   // 带上堆栈
             tryReconnect();
         }
     }
@@ -344,7 +436,7 @@ public class RobotHardwareService {
 
         // 全停
         if (!moving && !turning) {
-            return new PlcCommand(DriveMode.STOP, 0, 0);
+            return new PlcCommand(DriveMode.STOP, 0, 0, linear, angular);
         }
 
         // RPM: 线速度 → 转速
@@ -353,13 +445,13 @@ public class RobotHardwareService {
                 : 150; // 原地旋转给最小驱动 RPM
         rpm = Math.max(0, Math.min(3000, rpm));
 
-        // 角度: 角速度 → 转向角 (原地旋转时用最大角度)
+        // 角度: angular.z > 0 左转, angular.z < 0 右转, 写入 PLC 时保留正负号。
         int angleDeg;
         if (!moving && turning) {
-            angleDeg = 45; // 原地转用最大角
+            angleDeg = angular > 0 ? 45 : -45;
         } else {
-            angleDeg = (int)(Math.abs(angular) * angularToDegreesScale);
-            angleDeg = Math.min(45, angleDeg);
+            angleDeg = (int)(angular * angularToDegreesScale);
+            angleDeg = Math.max(-45, Math.min(45, angleDeg));
         }
 
         // 模式决策
@@ -367,7 +459,7 @@ public class RobotHardwareService {
         boolean goBackward = linear  < -LIN_DEAD;
         boolean turnLeft   = angular >  ANG_DEAD;
         boolean turnRight  = angular < -ANG_DEAD;
-        boolean isStraight = angleDeg <= straightThresholdDeg;
+        boolean isStraight = Math.abs(angleDeg) <= straightThresholdDeg;
 
         DriveMode mode;
         if (!moving) {
@@ -382,7 +474,7 @@ public class RobotHardwareService {
             else                 mode = DriveMode.RIGHT_BACKWARD;
         }
 
-        return new PlcCommand(mode, rpm, angleDeg);
+        return new PlcCommand(mode, rpm, angleDeg, linear, angular);
     }
 
     // ======================== 执行指令 ========================
@@ -402,8 +494,8 @@ public class RobotHardwareService {
         if (cmd.mode != currentMode) {
             log.info("[PLC] 模式切换: {} → {}", currentMode, cmd.mode);
 
-            writeVWord(VW_SPEED, 0);
-            writeVWord(VW_ANGLE, 0);
+            writeVNumber(speedAddressOrDefault(), 0);
+            writeVNumber(angleAddressOrDefault(), 0);
             lastSentRpm   = 0;
             lastSentAngle = 0;
 
@@ -413,27 +505,131 @@ public class RobotHardwareService {
             applyModeBits(cmd.mode);
             currentMode = cmd.mode;
 
-            if (cmd.mode == DriveMode.STOP) return;
+            if (cmd.mode == DriveMode.STOP) {
+                logControlCommand(cmd, 0, 0);
+                return;
+            }
             Thread.sleep(30);
         }
 
-        if (currentMode == DriveMode.STOP) return;
+        if (currentMode == DriveMode.STOP) {
+            logControlCommand(cmd, 0, 0);
+            return;
+        }
 
         // ─── Ramp 平滑 ────────────────────────────────────────────
         int rampedRpm   = rampStep(lastSentRpm,   cmd.rpm,      RPM_RAMP);
         int rampedAngle = rampStep(lastSentAngle, cmd.angleDeg, ANGLE_RAMP);
 
-        writeVWord(VW_SPEED, rampedRpm);
-        writeVWord(VW_ANGLE, rampedAngle);
+        writeVNumber(speedAddressOrDefault(), rampedRpm);
+        writeVNumber(angleAddressOrDefault(), rampedAngle);
 
         lastSentRpm   = rampedRpm;
         lastSentAngle = rampedAngle;
 
         log.debug("[PLC] {} | rpm={} | angle={}°", currentMode, rampedRpm, rampedAngle);
+        logControlCommand(cmd, rampedRpm, rampedAngle);
+    }
+
+    private void logControlCommand(PlcCommand cmd, int actualRpm, int actualAngle) {
+        long now = System.currentTimeMillis();
+        boolean changed = cmd.mode != lastLoggedMode
+                || Math.abs(cmd.rpm - lastLoggedTargetRpm) >= 50
+                || Math.abs(cmd.angleDeg - lastLoggedTargetAngle) >= 2;
+        boolean intervalReached = now - lastControlLogMs >= Math.max(100, controlLogIntervalMs);
+        if (!changed && !intervalReached) return;
+
+        log.info("[PLC控制] 动作={} | ROS(linear.x={}, angular.z={}) | 目标RPM={} 实发RPM={} | 目标角度={}° 实发角度={}° | M点位={} | 写入={}{}速度, {}{}角度",
+                driveModeLabel(cmd.mode),
+                String.format("%.3f", cmd.linear),
+                String.format("%.3f", cmd.angular),
+                cmd.rpm,
+                actualRpm,
+                cmd.angleDeg,
+                actualAngle,
+                mBitsLabel(cmd.mode),
+                getValueType().addressPrefix(),
+                speedAddressOrDefault(),
+                getValueType().addressPrefix(),
+                angleAddressOrDefault());
+
+        lastLoggedMode = cmd.mode;
+        lastLoggedTargetRpm = cmd.rpm;
+        lastLoggedTargetAngle = cmd.angleDeg;
+        lastControlLogMs = now;
+    }
+
+    private String driveModeLabel(DriveMode mode) {
+        switch (mode) {
+            case STRAIGHT_FORWARD:  return "前进";
+            case STRAIGHT_BACKWARD: return "后退";
+            case LEFT_FORWARD:      return "前进左转";
+            case RIGHT_FORWARD:     return "前进右转";
+            case LEFT_BACKWARD:     return "后退左转";
+            case RIGHT_BACKWARD:    return "后退右转";
+            case ROTATE_LEFT:       return "原地左旋";
+            case ROTATE_RIGHT:      return "原地右旋";
+            case STOP:
+            default:                return "停止";
+        }
+    }
+
+    private String mBitsLabel(DriveMode mode) {
+        StringBuilder sb = new StringBuilder();
+        if (holdStartProgram && mode != DriveMode.STOP) appendBit(sb, "M3.3启动程序");
+        if (holdStartDevice && mode != DriveMode.STOP) appendBit(sb, "M3.4启动设备");
+
+        switch (mode) {
+            case STRAIGHT_FORWARD:
+                appendBit(sb, "M1.4直行");
+                appendBit(sb, "M1.0前进");
+                break;
+            case STRAIGHT_BACKWARD:
+                appendBit(sb, "M1.4直行");
+                appendBit(sb, "M1.1后退");
+                break;
+            case LEFT_FORWARD:
+                appendBit(sb, "M1.2左前转");
+                appendBit(sb, "M1.0前进");
+                break;
+            case RIGHT_FORWARD:
+                appendBit(sb, "M1.3右前转");
+                appendBit(sb, "M1.0前进");
+                break;
+            case LEFT_BACKWARD:
+                appendBit(sb, "M1.2左转");
+                appendBit(sb, "M1.1后退");
+                break;
+            case RIGHT_BACKWARD:
+                appendBit(sb, "M1.3右转");
+                appendBit(sb, "M1.1后退");
+                break;
+            case ROTATE_LEFT:
+            case ROTATE_RIGHT:
+                if (holdRotateBit) {
+                    appendBit(sb, "M3.5旋转");
+                } else {
+                    appendBit(sb, mode == DriveMode.ROTATE_LEFT ? "M1.2左转" : "M1.3右转");
+                }
+                break;
+            case STOP:
+            default:
+                appendBit(sb, "全部释放");
+                break;
+        }
+        return sb.toString();
+    }
+
+    private void appendBit(StringBuilder sb, String text) {
+        if (sb.length() > 0) sb.append("+");
+        sb.append(text);
     }
 
     /** 打开新模式的 M 位 */
     private void applyModeBits(DriveMode mode) throws Exception {
+        applyRunEnableBits(mode != DriveMode.STOP);
+        writeMBit(M_ROTATE, holdRotateBit && (mode == DriveMode.ROTATE_LEFT || mode == DriveMode.ROTATE_RIGHT));
+
         switch (mode) {
             case STRAIGHT_FORWARD:
                 writeMBit(M_STRAIGHT, true);
@@ -460,10 +656,10 @@ public class RobotHardwareService {
                 writeMBit(M_BACKWARD,   true);
                 break;
             case ROTATE_LEFT:
-                writeMBit(M_TURN_LEFT, true);
-                break;
             case ROTATE_RIGHT:
-                writeMBit(M_TURN_RIGHT, true);
+                if (!holdRotateBit) {
+                    writeMBit(mode == DriveMode.ROTATE_LEFT ? M_TURN_LEFT : M_TURN_RIGHT, true);
+                }
                 break;
             default:
                 break;
@@ -483,6 +679,8 @@ public class RobotHardwareService {
             byte[] buf = s7Connector.read(DaveArea.FLAGS, 0, 1, 1);
             buf[0] &= (byte) 0b11000000; // 清 bit0~bit5, 保留 bit6 bit7
             s7Connector.write(DaveArea.FLAGS, 0, 1, buf);
+            writeMBit(M_ROTATE, false);
+            applyRunEnableBits(false);
         }
         currentMode   = DriveMode.STOP;
         lastSentRpm   = 0;
@@ -491,9 +689,28 @@ public class RobotHardwareService {
 
     /** 强制停车: 速度清零 + 所有方向 M 位关闭 */
     private synchronized void forceStop() throws Exception {
-        writeVWord(VW_SPEED, 0);
-        writeVWord(VW_ANGLE, 0);
+        writeVNumber(speedAddressOrDefault(), 0);
+        writeVNumber(angleAddressOrDefault(), 0);
         clearAllDirectionBits();
+    }
+
+    private synchronized void pulseEmergencyStopBit() throws Exception {
+        log.warn("[PLC急停] 通知 PLC: M6.0=1 -> {}ms -> M6.0=0", emergencyStopPulseMs);
+        writeMBit(M_EMERGENCY_STOP, true);
+        try {
+            Thread.sleep(Math.max(20, emergencyStopPulseMs));
+        } finally {
+            writeMBit(M_EMERGENCY_STOP, false);
+        }
+    }
+
+    private void applyRunEnableBits(boolean running) throws Exception {
+        if (holdStartProgram) {
+            writeMBit(M_START_PROGRAM, running);
+        }
+        if (holdStartDevice) {
+            writeMBit(M_START_DEVICE, running);
+        }
     }
 
     private int rampStep(int current, int target, int maxStep) {
@@ -568,21 +785,30 @@ public class RobotHardwareService {
      * @param byteAddr VW 字节地址, 如 VW500 → 500
      * @param value    有符号整数 [-32768, 32767]
      */
-    private synchronized void writeVWord(int byteAddr, int value) throws Exception {
+    private synchronized void writeVNumber(int byteAddr, int value) throws Exception {
         if (!plcEnabled) {
-            log.trace("[PLC调试] VW{} = {}", byteAddr, value);
+            log.trace("[PLC调试] V{}{} = {}", getValueType().addressPrefix(), byteAddr, value);
             return;
         }
         if (!connected.get() || s7Connector == null) {
-            log.warn("[PLC] 未连接, 跳过 VW{} 写入", byteAddr);
+            log.warn("[PLC] 未连接, 跳过 V{}{} 写入", getValueType().addressPrefix(), byteAddr);
             return;
         }
-        if (value > Short.MAX_VALUE) value = Short.MAX_VALUE;
-        if (value < Short.MIN_VALUE) value = Short.MIN_VALUE;
 
-        byte[] buf = new byte[2];
-        buf[0] = (byte)((value >> 8) & 0xFF);  // 大端高字节
-        buf[1] = (byte)(value & 0xFF);
+        byte[] buf;
+        if (getValueType() == PlcValueType.DWORD) {
+            buf = new byte[4];
+            buf[0] = (byte)((value >> 24) & 0xFF);
+            buf[1] = (byte)((value >> 16) & 0xFF);
+            buf[2] = (byte)((value >> 8) & 0xFF);
+            buf[3] = (byte)(value & 0xFF);
+        } else {
+            if (value > Short.MAX_VALUE) value = Short.MAX_VALUE;
+            if (value < Short.MIN_VALUE) value = Short.MIN_VALUE;
+            buf = new byte[2];
+            buf[0] = (byte)((value >> 8) & 0xFF);
+            buf[1] = (byte)(value & 0xFF);
+        }
 
         // V 内存在 S7-200 Smart 中以 DB1 方式访问
         s7Connector.write(DaveArea.DB, 1, byteAddr, buf);
@@ -620,5 +846,34 @@ public class RobotHardwareService {
         int bitAddr  = address & 0x0F;
         byte[] buf = s7Connector.read(DaveArea.DB, 1, 1, byteAddr);
         return (buf[0] & (1 << bitAddr)) != 0;
+    }
+
+    private int speedAddressOrDefault() {
+        return speedAddress > 0 ? speedAddress : DEFAULT_SPEED_ADDRESS;
+    }
+
+    private int angleAddressOrDefault() {
+        return angleAddress > 0 ? angleAddress : DEFAULT_ANGLE_ADDRESS;
+    }
+
+    private PlcValueType getValueType() {
+        return "DWORD".equalsIgnoreCase(valueType) || "VD".equalsIgnoreCase(valueType)
+                ? PlcValueType.DWORD
+                : PlcValueType.WORD;
+    }
+
+    private enum PlcValueType {
+        WORD("W"),
+        DWORD("D");
+
+        private final String addressPrefix;
+
+        PlcValueType(String addressPrefix) {
+            this.addressPrefix = addressPrefix;
+        }
+
+        String addressPrefix() {
+            return addressPrefix;
+        }
     }
 }

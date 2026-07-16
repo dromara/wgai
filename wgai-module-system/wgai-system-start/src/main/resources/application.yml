@@ -4,12 +4,81 @@ spring:
   profiles:
     active: '@profile.name@'
 audio:
-    path: 'F:\JAVAAI\audio\sherpa-onnx-conformer-zh-stateless2-2023-05-23\'
-    dll: 'E:\JAVAHOME\JAVA_AI\sherpa-onnx-jni.dll;/home/audio/libsherpa-onnx-jni.so'
+  keyword-model:
+    encoder: 'F:\JAVAAI\audio\sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01\encoder-epoch-12-avg-2-chunk-16-left-64.onnx'
+    decoder: 'F:\JAVAAI\audio\sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01\decoder-epoch-12-avg-2-chunk-16-left-64.onnx'
+    joiner: 'F:\JAVAAI\audio\sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01\joiner-epoch-12-avg-2-chunk-16-left-64.onnx'
+    tokens: 'F:\JAVAAI\audio\sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01\tokens.txt'
+    keywords: 'F:\JAVAAI\audio\sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01\keywords.txt'
+  recognition-model:
+    encoder: 'F:\JAVAAI\audio\sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20\encoder-epoch-99-avg-1.int8.onnx'
+    decoder: 'F:\JAVAAI\audio\sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20\decoder-epoch-99-avg-1.onnx'
+    joiner: 'F:\JAVAAI\audio\sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20\joiner-epoch-99-avg-1.onnx'
+    tokens: 'F:\JAVAAI\audio\sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20\tokens.txt'
+    rule-fsts: 'F:\JAVAAI\audio\sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20\itn_zh_number.fst'
+  path: 'F:\JAVAAI\audio\sherpa-onnx-conformer-zh-stateless2-2023-05-23\'
+  dll: 'E:\JAVAHOME\JAVA_AI\sherpa-onnx-jni.dll;/home/audio/libsherpa-onnx-jni.so'
 opencv: 'D:\opencv\build\java\x64\opencv_java481.dll;F:\JAVAAI\opencv481\opencv\build\java\x64\opencv_java481.dll;D:\opencv\build\java\x64\opencv_java481.dll;/home/opencv481/opencv-4.8.1/build/lib/libopencv_java481.so'
 numThread: 1
 cameraNum: 16
   ##'D:\opencv\build\java\x64\opencv_java481.dll'F:\JAVAAI\opencv481\code_version_opencv\opencv-4.8.1\opencv-4.8.1\build\install\x64\vc16\bin\opencv_java481.dll;
 ##'/home/opencv481/opencv-4.8.1/build/lib/libopencv_java481.so'
   ## 'F:\JAVAAI\opencv481\opencv\build\java\x64\opencv_java481.dll'
+
+plc:
+  # 是否启用 PLC 真实连接；false 时只打印调试日志，不写入 PLC
+  enabled: true
+  # Smart200 PLC IP；本机 Python 模拟器测试时可改为 127.0.0.1
+  host: 192.168.0.242
+  # S7 TCP rack，Smart200/模拟器通常为 0
+  rack: 0
+  # S7 TCP slot，Smart200/模拟器通常为 1
+  slot: 1
+  # 看门狗超时；超过该时间未收到新的 /cmd_vel 指令，自动停车
+  watchdog:
+    ms: 500
+  # PLC 控制意图日志输出间隔；用于观察“前进/右转/旋转”等下发内容
+  control:
+    log:
+      interval:
+        ms: 500
+  # 急停通知 PLC 的 M6.0 脉冲保持时间；调用 emergency-stop 时执行 M6.0=1 再 M6.0=0
+  emergency:
+    stop:
+      pulse:
+        ms: 100
+  # V 区数值类型：WORD=16位 VW；DWORD=32位 VD。真实 PLC 使用 VD200/VD500 时填 DWORD
+  value:
+    type: DWORD
+  # 转弯角度写入地址；DWORD 模式下 address=200 表示 VD200
+  angle:
+    address: 200
+  # 目标速度写入地址；DWORD 模式下 address=500 表示 VD500，范围 0~3000 rpm
+  speed:
+    address: 500
+  # 线速度换算上限；0.8 m/s 对应 PLC 速度 3000 rpm
+  max:
+    linear:
+      vel: 0.8
+  # ROS angular.z 到 PLC 转弯角度的缩放系数；角度会限制在 -45~45 度
+  angular:
+    scale: 30.0
+  # 小于该角度时认为是直行，走 M1.4 直行模式
+  straight:
+    threshold:
+      deg: 5
+  # 障碍物停车阈值；0 表示关闭 Java 侧障碍物停车判断
+  obstacle:
+    stop:
+      distance: 0.35
+  # 运行保持位；真实车要求运行时按住 M3.3/M3.4，原地旋转时按住 M3.5
+  hold:
+    start:
+      # M3.3 AGV小车启动程序按钮
+      program: true
+      # M3.4 AGV小车启动设备按钮
+      device: true
+    rotate:
+      # M3.5 AGV小车旋转按钮；旋转方向由 VD200 角度正负决定
+      bit: true
 

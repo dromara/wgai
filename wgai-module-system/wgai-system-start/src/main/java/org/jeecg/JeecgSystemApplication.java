@@ -72,7 +72,7 @@ public class JeecgSystemApplication extends SpringBootServletInitializer {
                     // 启用OpenCV并行处理
                     org.opencv.core.Core.setUseOptimized(true);
 
-                    log.info(Core.getBuildInformation());
+                //    log.info(Core.getBuildInformation());
                     log.info("[opencv加载成功]:{}",opencvList[i]);
                     log.info("[OpenCV优化配置] 线程数: {}, 优化: enabled",numThread);
                     break;
@@ -82,19 +82,19 @@ public class JeecgSystemApplication extends SpringBootServletInitializer {
             }
         }
 
-        if(StringUtils.isNotEmpty(audiopath)){
-            String [] audiopathList=audiopath.split(";");
-            for (int i = 0; i <audiopathList.length ; i++) {
-                File opencv=new File(audiopathList[i]);
-                if(opencv.exists()){
-                    System.load(audiopathList[i]);
-                    log.info("[audio加载成功]:{}",audiopathList[i]);
-                    break;
-                }else{
-                    log.error("[audio文件不存在！请检查地址是否正确 或 是否编译audio]");
-                }
-            }
-        }
+//        if(StringUtils.isNotEmpty(audiopath)){
+//            String [] audiopathList=audiopath.split(";");
+//            for (int i = 0; i <audiopathList.length ; i++) {
+//                File opencv=new File(audiopathList[i]);
+//                if(opencv.exists()){
+//                    System.load(audiopathList[i]);
+//                    log.info("[audio加载成功]:{}",audiopathList[i]);
+//                    break;
+//                }else{
+//                    log.error("[audio文件不存在！请检查地址是否正确 或 是否编译audio]");
+//                }
+//            }
+//        }
 //        System.setProperty("onnxruntime.native." + System.getProperty("os.name"),
 //                "C:\\Users\\Administrator\\AppData\\Local\\Temp\\onnxruntime-java152680534200004934\\onnxruntime.dll");
         log.info("[ONNX支持的配置：]: " + OrtEnvironment.getAvailableProviders());

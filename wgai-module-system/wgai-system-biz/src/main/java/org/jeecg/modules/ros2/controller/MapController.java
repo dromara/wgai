@@ -9,6 +9,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.google.gson.JsonObject;
+import org.jeecg.modules.ros2.service.ROS2BridgeService;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
@@ -106,6 +109,14 @@ public class MapController {
 
     private final ExecutorService executor = Executors.newCachedThreadPool();
 
+    /** rosbridge 长连接（用于通过 WebSocket 调 /map_server/load_map，替代 ros2 CLI） */
+    @Autowired
+    private ROS2BridgeService ros2BridgeService;
+
+    /** 切图防重入：前端连点/重试时只放一个进去，杜绝请求堆积 */
+    private final java.util.concurrent.atomic.AtomicBoolean mapLoading =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
     // ===================== 启动初始化 =====================
 
     /**
@@ -141,20 +152,35 @@ public class MapController {
     @PostMapping("/load")
     @ApiOperation("切换到指定地图(通过 Nav2 service 热切换,无需重启)")
     public Result<Map<String, Object>> loadMap(@RequestBody Map<String, Object> params) {
+        long t0 = System.currentTimeMillis();
+        log.info("====== [load] 进入 loadMap, params={} ======", params);
+        if (!mapLoading.compareAndSet(false, true)) {
+            log.warn("[load] 已有地图切换在进行中，拒绝并发请求");
+            return Result.error("已有地图切换正在进行，请稍候再试");
+        }
         try {
             String mapName = (String) params.get("mapName");
             if (mapName == null || mapName.trim().isEmpty()) {
+                log.warn("[load] 地图名称为空,直接返回");
                 return Result.error("地图名称不能为空");
             }
             mapName = mapName.trim();
 
             String yamlPath = MAP_DIR + mapName + ".yaml";
+            log.info("[load] step0 校验文件: {}", yamlPath);
             if (!new File(yamlPath).exists()) {
+                log.warn("[load] 文件不存在: {}", yamlPath);
                 return Result.error("地图文件不存在: " + yamlPath);
             }
+            log.info("[load] step0 文件存在 ✓ (+{}ms)", System.currentTimeMillis() - t0);
 
             // 1. 检查 Nav2 是否可达(兼容 systemd 和直接 ros2 launch 两种启动方式)
-            if (!isNav2Active()) {
+            log.info("[load] step1 调用 isNav2Active() ...");
+            long ts = System.currentTimeMillis();
+            boolean nav2Active = isNav2Active();
+            log.info("[load] step1 isNav2Active()={} 耗时={}ms (总+{}ms)",
+                    nav2Active, System.currentTimeMillis() - ts, System.currentTimeMillis() - t0);
+            if (!nav2Active) {
                 return Result.error(
                         "Nav2 服务未运行。请确认已启动:\n"
                                 + "  方式 A: ros2 launch /home/ros/robot_full.launch.py\n"
@@ -163,32 +189,44 @@ public class MapController {
             }
 
             // 2. 读上次保存的位姿(用于 params 文件 & 提示)
+            log.info("[load] step2 读取历史位姿 ...");
             double[] saved = loadSavedPose(mapName);
             boolean hasSavedPose =
                     (saved[0] != 0.0 || saved[1] != 0.0 || saved[2] != 0.0);
+            log.info("[load] step2 完成 hasSavedPose={} (总+{}ms)",
+                    hasSavedPose, System.currentTimeMillis() - t0);
 
-            // 3. 关键:调 /map_server/load_map service 热切换(无需重启 Nav2)
-            String svcOut = callMapLoadService(yamlPath);
-            boolean ok = svcOut != null && (svcOut.contains("result=0")
-                    || svcOut.contains("result: 0"));
+            // 3. 关键:通过 rosbridge 长连接调 /map_server/load_map 热切换(无需重启 Nav2)
+            //    不再 spawn ros2 CLI 子进程,从根上消除孤儿进程 / SHM 残留 / 12s 超时卡死。
+            log.info("[load] step3 通过 rosbridge 调 /map_server/load_map ...");
+            ts = System.currentTimeMillis();
+            boolean ok = callMapLoadServiceViaBridge(yamlPath);
+            log.info("[load] step3 返回 ok={} 耗时={}ms (总+{}ms)",
+                    ok, System.currentTimeMillis() - ts, System.currentTimeMillis() - t0);
             if (!ok) {
-                log.error("地图切换失败,service 输出: {}", svcOut);
-                return Result.error("地图切换失败,Nav2 service 调用未成功:\n" + svcOut);
+                log.error("[load] step3 地图切换失败(rosbridge)");
+                return Result.error("地图切换失败:/map_server/load_map 调用未成功(rosbridge)");
             }
+            log.info("[load] step3 service 切换成功 ✓");
 
             // 4. ✅ 更新 last_used.yaml 软链接 → launch 脚本重启时自动恢复此图
+            log.info("[load] step4 更新 last_used 软链接 ...");
             updateLastUsedSymlink(mapName);
 
             // 5. 重新生成 params 文件(供下次启动 Nav2 时使用最新配置)
+            log.info("[load] step5 写 nav2_params ...");
             writeNav2Params(NAV2_PARAMS_PATH, saved[0], saved[1], saved[2], yamlPath);
 
             // 6. 启动位姿自动保存
+            log.info("[load] step6 启动位姿自动保存 ...");
             startPoseAutoSave(mapName);
 
             // 7. 异步触发健康检查(供前端轮询查询)
+            log.info("[load] step7 异步触发健康检查 ...");
             scheduleHealthCheck(mapName);
 
             loadedMapName = mapName;
+            log.info("[load] step8 组装响应并返回 (总+{}ms)", System.currentTimeMillis() - t0);
 
             // 8. 提示用户:如果机器人位置不准,需调用全局重定位
             Map<String, Object> res = new LinkedHashMap<>();
@@ -208,8 +246,10 @@ public class MapController {
             return Result.OK(res);
 
         } catch (Exception e) {
-            log.error("切换地图失败", e);
+            log.error("[load] 切换地图失败 (总+{}ms)", System.currentTimeMillis() - t0, e);
             return Result.error("切换失败: " + e.getMessage());
+        } finally {
+            mapLoading.set(false);
         }
     }
 
@@ -218,16 +258,44 @@ public class MapController {
      * 等价于命令: ros2 service call /map_server/load_map nav2_msgs/srv/LoadMap
      *           '{map_url: "/path/to/map.yaml"}'
      */
-    private String callMapLoadService(String yamlPath) {
-        try {
-            String cmd = "source " + ROS_BASH + " && source " + SETUP_BASH
-                    + " && ros2 service call /map_server/load_map"
-                    + " nav2_msgs/srv/LoadMap"
-                    + " '{map_url: \"" + yamlPath + "\"}'";
-            return runCommand(cmd, 15);
-        } catch (Exception e) {
-            log.error("调用 /map_server/load_map 失败", e);
-            return null;
+    /**
+     * 通过 rosbridge 调 /map_server/load_map 热切换地图。
+     * 等价于: ros2 service call /map_server/load_map nav2_msgs/srv/LoadMap '{map_url: "..."}'
+     * 但走的是已建立的 WebSocket 长连接,毫秒级返回,零子进程。
+     *
+     * LoadMap.Response.result 取值:
+     *   0=SUCCESS  1=MAP_DOES_NOT_EXIST  2=INVALID_MAP_DATA
+     *   3=INVALID_MAP_METADATA  255=UNDEFINED_FAILURE
+     */
+    private boolean callMapLoadServiceViaBridge(String yamlPath) {
+        if (!ros2BridgeService.isConnected()) {
+            log.error("[load] rosbridge 未连接,无法切图(请确认 ROS2BridgeService 已连上 9090)");
+            return false;
+        }
+        JsonObject args = new JsonObject();
+        args.addProperty("map_url", yamlPath);
+
+        // 8s 足够;正常 rosbridge 长连接毫秒级返回。注意 load_map 响应会带回整张地图,
+        // 已在 ROS2WebSocketHandler 里做了分片拼接,这里直接拿 values 即可。
+        JsonObject values = ros2BridgeService.callService(
+                "/map_server/load_map", "nav2_msgs/srv/LoadMap", args, 8000);
+        if (values == null) {
+            log.error("[load] load_map 超时/无响应");
+            return false;
+        }
+        int result = values.has("result") ? values.get("result").getAsInt() : -1;
+        log.info("[load] load_map result={} ({})", result, loadMapResultText(result));
+        return result == 0;   // RESULT_SUCCESS
+    }
+
+    private String loadMapResultText(int code) {
+        switch (code) {
+            case 0:   return "SUCCESS";
+            case 1:   return "MAP_DOES_NOT_EXIST";    // yaml/pgm 路径不对
+            case 2:   return "INVALID_MAP_DATA";      // pgm 损坏
+            case 3:   return "INVALID_MAP_METADATA";  // yaml 字段问题
+            case 255: return "UNDEFINED_FAILURE";
+            default:  return "UNKNOWN(" + code + ")";
         }
     }
 
@@ -291,7 +359,10 @@ public class MapController {
     /**
      * 检查 Nav2 是否在运行,兼容两种启动方式:
      *   方式 A: systemd 托管 → systemctl is-active robot-nav
-     *   方式 B: 直接 ros2 launch → 检查 /map_server/load_map service 是否注册到 ROS2 graph
+     *   方式 B: 直接 ros2 launch → rosbridge 已连接 且 近期收到过 /amcl_pose 数据
+     *
+     * 方式 B 原来用 ros2 service list shell 命令,source setup.bash 本身就要 3-5s,
+     * 经常把整个 4s 超时耗光导致误判。改为查 rosbridge 连接状态+AMCL心跳,毫秒级返回。
      */
     private boolean isNav2Active() {
         // 方式 A: systemd
@@ -302,24 +373,22 @@ public class MapController {
             if ("active".equals(state)) return true;
         } catch (Exception ignored) {}
 
-        // 方式 B: 检查 map_server 的 load_map service 是否可达
-        try {
-            String cmd = "source " + ROS_BASH + " && source " + SETUP_BASH
-                    + " && timeout 3 ros2 service list 2>&1 | grep -c '/map_server/load_map'";
-            String out = runCommand(cmd, 5).trim();
-            if (!out.isEmpty()) {
-                int n;
-                try {
-                    n = Integer.parseInt(out.replaceAll("\\D", ""));
-                } catch (NumberFormatException nfe) {
-                    n = 0;
-                }
-                return n > 0;
-            }
-        } catch (Exception ignored) {}
+        // 方式 B: rosbridge 已连接 且 AMCL 心跳正常(60s 内有 /amcl_pose 数据)
+        // 不再 fork ros2 CLI 子进程,毫秒级返回,彻底消除 source 超时问题。
+        if (ros2BridgeService.isConnected() && ros2BridgeService.isAmclAlive(60_000)) {
+            return true;
+        }
+
+        // 方式 B 降级: rosbridge 已连 但 AMCL 心跳超时(可能刚启动还没收到第一条 pose)
+        // 此时只要 rosbridge 连接正常就认为 Nav2 在跑(load_map 调用会进一步验证)
+        if (ros2BridgeService.isConnected()) {
+            log.info("[isNav2Active] rosbridge 已连接但 AMCL 心跳超时(可能刚启动),暂认为 Nav2 活跃");
+            return true;
+        }
 
         return false;
     }
+
 
     // ===================== Nav2 健康自检 =====================
 
@@ -452,7 +521,7 @@ public class MapController {
                     savePose(finalMapName, x, y, theta);
                 }
             } catch (Exception e) {
-                log.debug("[位姿自动保存] 跳过: {}", e.getMessage());
+                log.warn("[位姿自动保存] 跳过: {}", e.getMessage());
             }
         }, 5, 5, TimeUnit.SECONDS);
         log.info("✅ 位姿自动保存已启动 → {}{}{}", MAP_DIR, mapName, POSE_FILE_SUFFIX);
@@ -759,7 +828,7 @@ public class MapController {
     private boolean checkNodeExists(String nodeName, int timeoutSec) {
         try {
             String cmd = "source " + ROS_BASH + " && source " + SETUP_BASH
-                    + " && ros2 node list 2>&1";
+                    + " && timeout " + timeoutSec + " ros2 node list 2>&1";
             String output = runCommand(cmd, timeoutSec);
             return output.contains(nodeName);
         } catch (Exception e) {
@@ -781,19 +850,63 @@ public class MapController {
     }
 
     private String runCommand(String cmd, int timeoutSec) throws Exception {
-        ProcessBuilder pb = new ProcessBuilder("bash", "-c", cmd);
+        long t0 = System.currentTimeMillis();
+        // 日志里只打印命令尾部,避免 source 那串噪音刷屏
+        String shortCmd = cmd.length() > 120 ? "..." + cmd.substring(cmd.length() - 120) : cmd;
+        log.warn("[runCommand] 开始(超时{}s): {}", timeoutSec, shortCmd);
+        log.warn("[runCommand] 执行的内容：{}", cmd);
+        // 用 setsid 让 bash 自成新会话/进程组,这样命令里的 `timeout -s KILL N`
+        // 杀进程时能干净地带走 ros2/python 子孙,不会残留孤儿占着流。
+        ProcessBuilder pb = new ProcessBuilder("setsid", "bash", "-c", cmd);
         cleanCondaEnv(pb.environment());
         pb.environment().put("QT_QPA_PLATFORM", "offscreen");
         pb.redirectErrorStream(true);
         Process p = pb.start();
-        StringBuilder sb = new StringBuilder();
-        try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
-            String line;
-            while ((line = r.readLine()) != null) sb.append(line).append("\n");
+
+        // ★ 关键修复:在后台线程里读 stdout。
+        //   原来的写法是在主线程 while(readLine()) 里读流,readLine 会一直阻塞到
+        //   子进程退出为止;一旦 ros2 永不退出,后面的 waitFor(timeout) 根本执行不到,
+        //   所谓的超时完全失效。把读流丢到后台线程,主线程才能真正用 waitFor 控制超时。
+        final StringBuilder sb = new StringBuilder();
+        Thread reader = new Thread(() -> {
+            try (BufferedReader r = new BufferedReader(
+                    new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    synchronized (sb) { sb.append(line).append("\n"); }
+                }
+            } catch (IOException ignored) {
+                // 进程被强杀时流会抛异常,正常现象
+            }
+        }, "runCommand-reader");
+        reader.setDaemon(true);
+        reader.start();
+
+        boolean finished = p.waitFor(timeoutSec, TimeUnit.SECONDS);
+        if (!finished) {
+            // 超时:先 destroyForcibly,再兜底用 kill 把整个进程组干掉
+            //   (bash 的子孙进程 ros2/python 可能不随 bash 一起死,会变孤儿继续占着流)
+            log.warn("[runCommand] ★超时 {}s 未结束,强制终止! cmd尾={}", timeoutSec, shortCmd);
+            killProcessTree(p);
         }
-        p.waitFor(timeoutSec, TimeUnit.SECONDS);
+        // 给读线程一点时间把已有输出收完
+        reader.join(500);
+
+        String out;
+        synchronized (sb) { out = sb.toString(); }
+        log.warn("[runCommand] 结束 finished={} 耗时={}ms 输出{}字节",
+                finished, System.currentTimeMillis() - t0, out.length());
+        return out;
+    }
+
+    /**
+     * 强制终止子进程。JDK 1.8 没有 Process.pid(),无法按进程组 kill,
+     * 所以这里只杀 bash 本体;真正可能 hang 的 ros2/python 子孙,
+     * 由命令里包的 `timeout -s KILL N` + setsid 进程组负责清理。
+     * → 因此务必保证每条可能阻塞的命令都带了 `timeout`。
+     */
+    private void killProcessTree(Process p) {
         if (p.isAlive()) p.destroyForcibly();
-        return sb.toString();
     }
 
     /** 清理 conda 污染的环境变量 */

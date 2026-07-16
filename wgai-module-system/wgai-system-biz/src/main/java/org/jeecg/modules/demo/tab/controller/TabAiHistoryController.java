@@ -118,6 +118,11 @@ public class TabAiHistoryController extends JeecgController<TabAiHistory, ITabAi
 	 @PostMapping(value = "/addIdentify")
 	 public Result<String> addIdentify(@RequestBody TabAiModelBund tabAiModelBund) {
 		 LoginUser sysUser = (LoginUser) SecurityUtils.getSubject().getPrincipal();
+
+		 if(sysUser==null){
+			 sysUser=new LoginUser();
+			 sysUser.setId(tabAiModelBund.getSpaceFive());
+		 }
 		 return tabAiHistoryService.startAi(tabAiModelBund,uploadpath,sysUser.getId());
 	 }
 	 @AutoLog(value = "AI识别结果")
@@ -170,10 +175,14 @@ public class TabAiHistoryController extends JeecgController<TabAiHistory, ITabAi
 	 @PostMapping(value = "/addIdentifyClose")
 	 public Result<String> addIdentifyClose(@RequestBody TabAiModelBund tabAiModelBund) {
 		 LoginUser sysUser = (LoginUser) SecurityUtils.getSubject().getPrincipal();
+		 if(sysUser==null){
+			 sysUser=new LoginUser();
+			 sysUser.setId(tabAiModelBund.getSpaceFive());
+		 }
 		 tabAiHistoryService.closedentify(tabAiModelBund,sysUser);
 		 RedisCacheHolder.put(tabAiModelBund.getId()  + "videoRead",false);
 //e9ca23d68d884d4ebb19d07889727dae
-		 return Result.error("结束识别成功");
+		 return Result.OK("结束识别成功");
 	 }
 	/**
 	 *  编辑

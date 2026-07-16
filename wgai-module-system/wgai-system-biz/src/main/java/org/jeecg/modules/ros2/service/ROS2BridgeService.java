@@ -17,6 +17,12 @@ import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 import java.net.URI;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
 @Service
@@ -40,7 +46,17 @@ public class ROS2BridgeService {
     private WebSocketSession session;
     private final Gson gson = new Gson();
     private final AtomicInteger reconnectAttempts = new AtomicInteger(0);
+
+    /** 等待 service_response 的请求，按 rosbridge id 配对 */
+    private final Map<String, CompletableFuture<JsonObject>> pendingServiceCalls = new ConcurrentHashMap<>();
+    private final AtomicLong serviceCallSeq = new AtomicLong();
     private ROS2WebSocketHandler webSocketHandler;
+    // ===================== /amcl_pose 订阅缓存 =====================
+    /** 最新 AMCL 位姿: [x, y, theta]，null 表示尚未收到 */
+    private volatile double[] lastAmclPose = null;
+    /** 最新 AMCL 位姿收到的时间戳(毫秒) */
+    private volatile long lastAmclPoseMs = 0L;
+
     public void setWebSocketHandler(ROS2WebSocketHandler handler) {
         this.webSocketHandler = handler;
     }
@@ -60,6 +76,50 @@ public class ROS2BridgeService {
         }
     }
 
+    /**
+     * 返回最新 AMCL 位姿缓存 [x, y, theta]。
+     * 如果从未收到过数据，返回 null。
+     * MapController 的位姿自动保存定时任务直接调此方法，无需 fork 任何进程。
+     */
+    public double[] getLastAmclPose() {
+        return lastAmclPose;
+    }
+
+    /**
+     * 判断 AMCL 是否"活跃"：在 maxAgeMs 毫秒内收到过 /amcl_pose 消息。
+     * 用于 isNav2Active() 判断，替代 ros2 service list shell 命令。
+     *
+     * @param maxAgeMs 心跳有效期，建议 60000（60秒）
+     */
+    public boolean isAmclAlive(long maxAgeMs) {
+        return lastAmclPose != null
+                && (System.currentTimeMillis() - lastAmclPoseMs) < maxAgeMs;
+    }
+
+    /**
+     * 由 ROS2WebSocketHandler 在每次收到 /amcl_pose 消息时回调，更新本地缓存。
+     * msg 是 rosbridge publish 帧里的 "msg" 字段（geometry_msgs/PoseWithCovarianceStamped）。
+     */
+    public void updateAmclPose(JsonObject msg) {
+        try {
+            JsonObject pose        = msg.getAsJsonObject("pose").getAsJsonObject("pose");
+            JsonObject position    = pose.getAsJsonObject("position");
+            JsonObject orientation = pose.getAsJsonObject("orientation");
+
+            double x     = position.get("x").getAsDouble();
+            double y     = position.get("y").getAsDouble();
+            double qz    = orientation.get("z").getAsDouble();
+            double qw    = orientation.get("w").getAsDouble();
+            double theta = 2.0 * Math.atan2(qz, qw);
+
+            lastAmclPose   = new double[]{x, y, theta};
+            lastAmclPoseMs = System.currentTimeMillis();
+        } catch (Exception e) {
+            log.warn("[amcl_pose缓存] 解析失败: {}", e.getMessage());
+        }
+    }
+
+
     public void connect() {
         try {
             log.info("开始连接 ROS2 Bridge: {}", ros2Config.getBridgeUrl());
@@ -67,9 +127,11 @@ public class ROS2BridgeService {
             ROS2WebSocketHandler handler = new ROS2WebSocketHandler(
                     velocityService,
                     pushService,
-                    hardwareService,   // ← 新增，处理 /cmd_vel 时转发给底盘
+                    hardwareService,
                     this::onConnected,
-                    this::attemptReconnect
+                    this::attemptReconnect,
+                    this::onServiceResponse,
+                    this::updateAmclPose      // ← 新增：/amcl_pose 收到时更新本地缓存
             );
 
             URI uri = new URI(ros2Config.getBridgeUrl());
@@ -232,6 +294,66 @@ public class ROS2BridgeService {
         json.addProperty("type", type);
         json.add("msg", message);
         send(json.toString());
+    }
+
+    /**
+     * 通过 rosbridge 同步调用一个 ROS2 service。
+     * 复用现有长连接，不再 spawn ros2 CLI 子进程，杜绝孤儿进程与 SHM 残留。
+     *
+     * @return service_response 里的 values 对象；未连接/超时返回 null。
+     */
+    public JsonObject callService(String service, String type, JsonObject args, long timeoutMs) {
+        if (!isConnected()) {
+            log.warn("[callService] rosbridge 未连接，无法调用 {}", service);
+            return null;
+        }
+        String id = "svc_" + serviceCallSeq.incrementAndGet() + "_" + System.currentTimeMillis();
+        CompletableFuture<JsonObject> future = new CompletableFuture<>();
+        pendingServiceCalls.put(id, future);
+
+        JsonObject json = new JsonObject();
+        json.addProperty("op", "call_service");
+        json.addProperty("id", id);
+        json.addProperty("service", service);
+        if (type != null && !type.isEmpty()) json.addProperty("type", type);
+        if (args != null) json.add("args", args);
+
+        try {
+            send(json.toString());
+            log.info("[callService] -> {} id={} args={}", service, id, args);
+            JsonObject values = future.get(timeoutMs, TimeUnit.MILLISECONDS);
+            log.info("[callService] <- {} id={} ok", service, id);
+            return values;
+        } catch (TimeoutException te) {
+            log.error("[callService] ★超时 {}ms 未收到响应: {} id={}", timeoutMs, service, id);
+            return null;
+        } catch (Exception e) {
+            log.error("[callService] 调用异常 {} id={}: {}", service, id, e.getMessage());
+            return null;
+        } finally {
+            pendingServiceCalls.remove(id);   // 防止泄漏
+        }
+    }
+
+    /** 由 ROS2WebSocketHandler 在收到 op=="service_response" 时回调 */
+    public void onServiceResponse(JsonObject msg) {
+        try {
+            if (msg == null || !msg.has("id")) return;
+            String id = msg.get("id").getAsString();
+            CompletableFuture<JsonObject> future = pendingServiceCalls.get(id);
+            if (future == null) {                  // 多半是已超时被移除的迟到响应
+                log.warn("[callService] service_response 未匹配到 id={}", id);
+                return;
+            }
+            // rosbridge 层 result=true 才算调用成功；真正的 srv 字段在 values 里
+            boolean bridgeOk = !msg.has("result") || msg.get("result").getAsBoolean();
+            if (!bridgeOk) log.warn("[callService] rosbridge result=false id={} msg={}", id, msg);
+            JsonObject values = (msg.has("values") && msg.get("values").isJsonObject())
+                    ? msg.getAsJsonObject("values") : new JsonObject();
+            future.complete(values);
+        } catch (Exception e) {
+            log.error("[callService] 处理 service_response 失败: {}", e.getMessage());
+        }
     }
 
     private void attemptReconnect() {

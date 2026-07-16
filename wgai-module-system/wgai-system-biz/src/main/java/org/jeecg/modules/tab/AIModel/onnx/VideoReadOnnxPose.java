@@ -242,8 +242,11 @@ public class VideoReadOnnxPose implements Runnable {
     public void run() {
         FFmpegFrameGrabber grabber = null;
         int consecutiveNullFrames  = 0;
+        long streamOpenStartMs = System.currentTimeMillis();
+        boolean firstImageLogged = false;
         try {
             grabber = createOptimizedGrabber();
+            log.info("[视频流打开完成] 耗时={}ms, 地址={}", System.currentTimeMillis() - streamOpenStartMs, videoUrl);
             while (true) {
                 if (!isStreamActive()) { log.warn("[主动停止推送]{}", uuid); break; }
 
@@ -251,13 +254,24 @@ public class VideoReadOnnxPose implements Runnable {
                 if (frame == null) {
                     if (++consecutiveNullFrames > 10) {
                         log.info("[连续空帧过多，重启视频流]");
+                        streamOpenStartMs = System.currentTimeMillis();
                         grabber = restartGrabber(grabber);
+                        log.info("[视频流重连完成] 耗时={}ms, 地址={}", System.currentTimeMillis() - streamOpenStartMs, videoUrl);
+                        firstImageLogged = false;
                         consecutiveNullFrames = 0;
                     }
                     Thread.sleep(100);
                     continue;
                 }
                 consecutiveNullFrames = 0;
+                if (!firstImageLogged) {
+                    long firstFrameCostMs = System.currentTimeMillis() - streamOpenStartMs;
+                    log.info("[首帧图像已读取] 耗时={}ms, 流时间戳={}ms", firstFrameCostMs, grabber.getTimestamp() / 1000L);
+                    if (firstFrameCostMs > 3000) {
+                        log.warn("[首帧图像读取较慢] 耗时={}ms, 通常是在等待RTSP关键帧/IDR，请检查摄像头GOP/I帧间隔", firstFrameCostMs);
+                    }
+                    firstImageLogged = true;
+                }
 
                 long currentTime = System.currentTimeMillis();
                 if (currentTime - lastFrameTime < TARGET_FRAME_INTERVAL) {
@@ -871,10 +885,15 @@ public class VideoReadOnnxPose implements Runnable {
         grabber.setOption("rtsp_transport", "tcp");
         grabber.setOption("rtsp_flags",     "prefer_tcp");
         grabber.setOption("stimeout",       "3000000");
+        grabber.setOption("rw_timeout",     "3000000");
+        grabber.setOption("allowed_media_types", "video");
         grabber.setPixelFormat(avutil.AV_PIX_FMT_BGR24);
+        grabber.setOption("avioflags",      "direct");
         grabber.setOption("flags",          "low_delay");
-        grabber.setOption("max_delay",      "500000");
+        grabber.setOption("max_delay",      "0");
         grabber.setOption("buffer_size",    "512000");
+        grabber.setOption("reorder_queue_size", "0");
+        grabber.setOption("use_wallclock_as_timestamps", "1");
         grabber.setOption("fflags",         "nobuffer+flush_packets+discardcorrupt");
         grabber.setOption("flags2",         "fast");
         grabber.setOption("err_detect",     "compliant");

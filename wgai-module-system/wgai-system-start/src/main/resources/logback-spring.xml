@@ -19,8 +19,8 @@
 			<!--日志文件输出的文件名 -->
 			<FileNamePattern>${LOG_HOME}/jeecgboot-%d{yyyy-MM-dd}.%i.log</FileNamePattern>
 			<!--日志文件保留天数 -->
-			<MaxHistory>30</MaxHistory>
-			<maxFileSize>10MB</maxFileSize>
+			<MaxHistory>2</MaxHistory>
+			<maxFileSize>100MB</maxFileSize>
 		</rollingPolicy>
 		<encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
 			<!--格式化输出：%d表示日期，%thread表示线程名，%-5level：级别从左显示5个字符宽度%msg：日志消息，%n是换行符 -->
@@ -49,8 +49,8 @@
 			<!--日志文件输出的文件名 -->
 			<FileNamePattern>${LOG_HOME}/jeecgboot-%d{yyyy-MM-dd}.%i.html</FileNamePattern>
 			<!--日志文件保留天数 -->
-			<MaxHistory>30</MaxHistory>
-			<MaxFileSize>10MB</MaxFileSize>
+			<MaxHistory>2</MaxHistory>
+			<MaxFileSize>100MB</MaxFileSize>
 		</rollingPolicy>
 		<encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
 			<layout class="ch.qos.logback.classic.html.HTMLLayout">

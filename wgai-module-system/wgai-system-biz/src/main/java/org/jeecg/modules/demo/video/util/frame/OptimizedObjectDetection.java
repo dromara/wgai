@@ -52,40 +52,8 @@ public class OptimizedObjectDetection {
 
 
 
-    /**
-     * 关键优化5：模型预热 - 系统启动时预加载所有模型
-     */
-    @PostConstruct
-    public void warmupModels() {
-        log.info("开始预热所有DNN模型...");
-        // 这里需要您提供所有模型的路径信息
-        List<String> modelPaths = getModelPaths(); // 您需要实现这个方法
 
-        for (String modelPath : modelPaths) {
-            try {
-                org.opencv.dnn.Net net = org.opencv.dnn.Dnn.readNetFromDarknet(modelPath + ".cfg", modelPath + ".weights");
-                net.setPreferableBackend(org.opencv.dnn.Dnn.DNN_BACKEND_OPENCV);
-                net.setPreferableTarget(org.opencv.dnn.Dnn.DNN_TARGET_CPU);
 
-                String modelName = extractModelName(modelPath);
-                GLOBAL_NET_CACHE.put(modelName, net);
-                WARMED_MODELS.add(modelName);
-
-                // 预热推理 - 使用dummy输入
-                Mat dummyImage = new Mat(640, 640, org.opencv.core.CvType.CV_8UC3);
-                Mat blob = org.opencv.dnn.Dnn.blobFromImage(dummyImage, 1.0 / 255, new org.opencv.core.Size(640, 640), new org.opencv.core.Scalar(0), true, false);
-                net.setInput(blob);
-
-                List<Mat> warmupResults = new ArrayList<>();
-                net.forward(warmupResults, net.getUnconnectedOutLayersNames());
-
-                log.info("模型预热完成: {}", modelName);
-            } catch (Exception e) {
-                log.error("模型预热失败: {}", modelPath, e);
-            }
-        }
-        log.info("所有模型预热完成，共{}个模型", WARMED_MODELS.size());
-    }
 
     /**
      * 关键优化6：高性能检测方法

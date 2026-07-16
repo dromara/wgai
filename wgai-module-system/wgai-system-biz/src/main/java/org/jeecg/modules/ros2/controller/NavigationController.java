@@ -92,6 +92,12 @@ public class NavigationController {
             );
         }
 
+        log.info("[导航目标] 收到目标点: x={}, y={}, theta={}°",
+                goal.getX(), goal.getY(), Math.toDegrees(goal.getTheta()));
+        if (hardwareService.isEmergencyStopActive()) {
+            log.warn("[导航目标] 检测到 Java 侧急停锁, 设置新目标前自动解除, 恢复 cmd_vel -> PLC 转发");
+            hardwareService.clearEmergencyStopLock();
+        }
         navigationService.sendNavigationGoal(goal.getX(), goal.getY(), goal.getTheta());
         return Result.OK("导航目标已设置");
     }
@@ -347,6 +353,17 @@ public class NavigationController {
         hardwareService.emergencyStop();
         navigationService.cancelNavigation();  // 同步停 Nav2
         return Result.OK("🛑 紧急停车已执行");
+    }
+
+    /**
+     * 解除 Java 侧急停锁。
+     * 只恢复 cmd_vel 转发能力, 不替代 PLC/现场报警复位。
+     */
+    @PostMapping("/emergency-stop/clear")
+    @ApiOperation("解除 Java 侧急停锁")
+    public Result<Void> clearEmergencyStop() {
+        hardwareService.clearEmergencyStopLock();
+        return Result.OK("Java 侧急停锁已解除");
     }
 
 // ─── 新接口 2: PLC 实时状态查询 (前端每秒轮询) ───────────────────────────

@@ -144,7 +144,7 @@ public class TabAiModelBundController extends JeecgController<TabAiModelBund, IT
 			}
 		}
 		tabAiModelBundService.save(tabAiModelBund);
-		return Result.OK("添加成功！");
+		return Result.OK(tabAiModelBund.getId());
 	}
 	
 	/**

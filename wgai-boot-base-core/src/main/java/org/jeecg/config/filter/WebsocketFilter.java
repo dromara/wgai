@@ -49,6 +49,7 @@ public class WebsocketFilter implements Filter {
            //     HttpServletResponse response = (HttpServletResponse)servletResponse;
                 filterChain.doFilter(servletRequest, servletResponse);
             }
+            filterChain.doFilter(servletRequest, servletResponse);
         }else{
             log.debug("Websocket连接 Token安全校验，Path = {}，token:{}", request.getRequestURI(), token);
 
