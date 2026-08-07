@@ -42,7 +42,7 @@
 <table border="0" cellpadding="0" cellspacing="0" width="100%">
 <tr>
 <td width="50%">
-<a href=" " target="_blank" rel="sponsored noopener"><img src="https://www.oarsai.com/assets/ad-banner-tags.webp" srcset="https://www.oarsai.com/assets/ad-banner-tags.webp 1x, https://www.oarsai.com/assets/ad-banner-tags@2x.webp 2x" width="100%" height="100" alt="OARS — 低代码为基，AI 助力个性化扩展，定制为王" decoding="async" style="display:block;width:100%;height:100px;object-fit:cover;" /></a>
+<a href="https://www.oarsai.com?from=wgai" target="_blank" rel="sponsored noopener"><img src="https://www.oarsai.com/assets/ad-banner-tags.webp" srcset="https://www.oarsai.com/assets/ad-banner-tags.webp 1x, https://www.oarsai.com/assets/ad-banner-tags@2x.webp 2x" width="100%" height="100" alt="OARS — 低代码为基，AI 助力个性化扩展，定制为王" decoding="async" style="display:block;width:100%;height:100px;object-fit:cover;" /></a>
 </td>
 <td width="50%" align="center" style="background:#f8f8f8;height:100px;">
 📣 <strong>广告位招租 · 虚位以待</strong><br><small>欢迎 AI 生态 · 硬件厂商 · 算力服务商</small><br><code>1552138571@qq.com</code>
