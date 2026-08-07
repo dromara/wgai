@@ -30,14 +30,26 @@
 * **核心功能**：支持在线标注训练、边缘视频、语音分析盒/OCR/ChatGPT/数字人/AGV 全栈服务器支撑。
 
 
-### 📢  **测试地址**:[http://117.50.47.36](http://117.50.47.36)      账号: `wgai` / 密码: `wgai@2026`)
+### 🌐 测试地址
+
+**地址：** [http://117.50.47.36](http://117.50.47.36)
+**账号：** `wgai`  **密码：** `wgai@2026`
+
+---
 
 ## 📢 商务合作
-> **【广告位招租 · 虚位以待】**
-> 欢迎各类 AI 生态、硬件厂商、算力服务商联系合作。
-> 
-> **联系方式：** Email: 1552138571@qq.com
- ---
+
+<table border="0" cellpadding="0" cellspacing="0" width="100%">
+<tr>
+<td width="50%">
+<a href=" " target="_blank" rel="sponsored noopener"><img src="https://www.oarsai.com/assets/ad-banner-tags.webp" srcset="https://www.oarsai.com/assets/ad-banner-tags.webp 1x, https://www.oarsai.com/assets/ad-banner-tags@2x.webp 2x" width="100%" height="100" alt="OARS — 低代码为基，AI 助力个性化扩展，定制为王" decoding="async" style="display:block;width:100%;height:100px;object-fit:cover;" /></a>
+</td>
+<td width="50%" align="center" style="background:#f8f8f8;height:100px;">
+📣 <strong>广告位招租 · 虚位以待</strong><br><small>欢迎 AI 生态 · 硬件厂商 · 算力服务商</small><br><code>1552138571@qq.com</code>
+</td>
+</tr>
+</table>
+
 ## ❓常见景问题文档(持续更新ing...)
 ><a href="https://www.yuque.com/oxygen-bw8y8/eda0sn/xrii46vitqfz74h2?singleDoc#"> 《WGAI使用说明与常见问题（图解版本）》</a>
 ---
