@@ -18,6 +18,7 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Base64;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 /**
@@ -63,6 +64,10 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
 
     // 点云下采样:最多推送给前端的点数
     private static final int MAX_POINTS_TO_PUSH = 3000;
+
+    // 点云接收日志节流:每隔多久打印一次"收到点云"心跳日志,避免刷屏
+    private static final long POINT_CLOUD_LOG_INTERVAL_MS = 5000;
+    private final AtomicLong lastPointCloudLogMs = new AtomicLong(0);
 
     // ====================== 模式标志 ======================
 
@@ -257,6 +262,13 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
             cloudData.put("points",    points);
             cloudData.put("totalRaw",  totalPoints);
             cloudData.put("pushCount", points.size());
+
+            // 心跳日志:每隔 POINT_CLOUD_LOG_INTERVAL_MS 打一行,确认点云在正常传输,不刷屏
+            long now = System.currentTimeMillis();
+            long last = lastPointCloudLogMs.get();
+            if (now - last >= POINT_CLOUD_LOG_INTERVAL_MS && lastPointCloudLogMs.compareAndSet(last, now)) {
+                log.info("📡 点云正常接收: 原始{}点 → 推送{}点", totalPoints, points.size());
+            }
 
             pushService.pushToAll("cloud_update", cloudData);
 

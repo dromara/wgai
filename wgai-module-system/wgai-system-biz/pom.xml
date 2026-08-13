@@ -40,6 +40,13 @@
 			<artifactId>s7connector</artifactId>
 			<version>2.1</version>
 		</dependency>
+
+
+		<dependency>
+			<groupId>com.github.xingshuangs</groupId>
+			<artifactId>iot-communication</artifactId>
+			<version>1.5.0</version>
+		</dependency>
 		<!-- easyAi -->
 <!--		<dependency>-->
 <!--			<groupId>com.wlld</groupId>-->
@@ -92,11 +99,11 @@
 		</dependency>
 		<!-- cuda 12.x gpu cuda加速  50 系列-->
 
-		<dependency>
-			<groupId>com.microsoft.onnxruntime</groupId>
-			<artifactId>onnxruntime_gpu</artifactId>
-			<version>1.27.0</version>
-		</dependency>
+<!--		<dependency>-->
+<!--			<groupId>com.microsoft.onnxruntime</groupId>-->
+<!--			<artifactId>onnxruntime_gpu</artifactId>-->
+<!--			<version>1.27.0</version>-->
+<!--		</dependency>-->
 
 <!--		<dependency>-->
 <!--			<groupId>com.microsoft.onnxruntime</groupId>-->
@@ -110,11 +117,11 @@
 <!--		</dependency>-->
 
 		<!--当前1.17干掉-->
-<!--		<dependency>-->
-<!--			<groupId>com.microsoft.onnxruntime</groupId>-->
-<!--			<artifactId>onnxruntime</artifactId>-->
-<!--			<version>1.17.0</version>-->
-<!--		</dependency>-->
+		<dependency>
+			<groupId>com.microsoft.onnxruntime</groupId>
+			<artifactId>onnxruntime</artifactId>
+			<version>1.17.0</version>
+		</dependency>
 		<dependency>
 			<groupId>com.github.xingshuangs</groupId>
 			<artifactId>iot-communication</artifactId>

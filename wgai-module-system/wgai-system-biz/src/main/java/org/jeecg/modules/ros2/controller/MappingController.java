@@ -37,6 +37,14 @@ public class MappingController {
     // fast_lio 可执行文件名（pkill 用）
     private static final String FASTLIO_PROCESS_NAME = "fastlio_mapping";
 
+    // lidarType -> fast_lio config 文件名映射（对应 /home/lio_ws/src/FAST_LIO/config/ 下的文件）
+    // 建图场景用 dense_publish_en:true（要密集点云存图/展示），跟导航场景的 config 分开，
+    // 避免共用一份文件时改一边影响另一边
+    private static final Map<String, String> LIDAR_CONFIG_FILES = new HashMap<String, String>() {{
+        put("unitree_l1", "unitree_l1.yaml");
+        put("mid360",      "mid360_mapping.yaml");
+    }};
+
     private volatile Process fastlioProcess = null;
 
     private final ExecutorService executor = Executors.newCachedThreadPool();
@@ -67,12 +75,14 @@ public class MappingController {
         }
 
         if (body == null) body = new HashMap<>();
-        String configFile = body.getOrDefault("configFile", "unitree_l1.yaml");
+        // lidarType: unitree_l1 | mid360，前端传友好名字即可；也可直接传 configFile 覆盖(高级用法)
+        String lidarType = body.getOrDefault("lidarType", "unitree_l1");
+        String configFile = body.getOrDefault("configFile", LIDAR_CONFIG_FILES.getOrDefault(lidarType, "unitree_l1.yaml"));
 
         String cmd = "source " + SETUP_BASH
                 + " && ros2 launch fast_lio mapping.launch.py"
                 + " config_file:=" + configFile
-                + " launch_rviz:=false";
+                + " rviz:=false";
 
         try {
             ProcessBuilder pb = new ProcessBuilder("bash", "-c", cmd);
@@ -103,6 +113,7 @@ public class MappingController {
 
             Map<String, Object> res = new LinkedHashMap<>();
             res.put("pid",        pid > 0 ? pid : "N/A");
+            res.put("lidarType",  lidarType);
             res.put("configFile", configFile);
             res.put("pcdPath",    PCD_PATH);
             return Result.OK(res);
@@ -319,17 +330,18 @@ public class MappingController {
             log.info("转换: {} → {}.pgm/.yaml (res={}, z={}~{})",
                     PCD_PATH, outPath, resolution, zMin, zMax);
 
-            runConvert(pcdFile.getAbsolutePath(), outPath, resolution, zMin, zMax);
+            long totalPoints = runConvert(pcdFile.getAbsolutePath(), outPath, resolution, zMin, zMax);
 
             if (!new File(outPath + ".pgm").exists() || !new File(outPath + ".yaml").exists()) {
                 return Result.error("转换完成但文件未找到，请检查 Python 依赖：pip3 install Pillow numpy");
             }
 
             Map<String, Object> res = new LinkedHashMap<>();
-            res.put("filename", filename);
-            res.put("pgm",      outPath + ".pgm");
-            res.put("yaml",     outPath + ".yaml");
-            res.put("nav2Cmd",  "ros2 launch nav2_bringup navigation_launch.py map:=" + outPath + ".yaml");
+            res.put("filename",    filename);
+            res.put("pgm",         outPath + ".pgm");
+            res.put("yaml",        outPath + ".yaml");
+            res.put("totalPoints", totalPoints); // PCD 文件里的真实总点数(去重后的最终建图结果)
+            res.put("nav2Cmd",     "ros2 launch nav2_bringup navigation_launch.py map:=" + outPath + ".yaml");
             return Result.OK(res);
 
         } catch (Exception e) {
@@ -367,11 +379,15 @@ public class MappingController {
 
     // ==================== Python 转换工具 ====================
 
-    private void runConvert(String pcdPath, String outPath,
+    /**
+     * @return PCD 文件里的真实总点数(从 Python 脚本 "总点数: N" 那行日志里解析出来，解析失败返回 -1)
+     */
+    private long runConvert(String pcdPath, String outPath,
                             double res, double zMin, double zMax) throws Exception {
         String script = buildScript(pcdPath, outPath, res, zMin, zMax);
         File   tmp    = File.createTempFile("pcd2pgm_", ".py");
         Files.write(tmp.toPath(), script.getBytes("UTF-8"));
+        long totalPoints = -1;
         try {
             String cmd = "source " + SETUP_BASH + " && python3 " + tmp.getAbsolutePath();
             ProcessBuilder pb = new ProcessBuilder("bash", "-c", cmd);
@@ -379,13 +395,21 @@ public class MappingController {
             Process p = pb.start();
             try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
                 String line;
-                while ((line = r.readLine()) != null) log.info("[pcd2pgm] {}", line);
+                while ((line = r.readLine()) != null) {
+                    log.info("[pcd2pgm] {}", line);
+                    if (line.contains("总点数:")) {
+                        try {
+                            totalPoints = Long.parseLong(line.replaceAll("[^0-9]", ""));
+                        } catch (NumberFormatException ignored) {}
+                    }
+                }
             }
             if (!p.waitFor(120, TimeUnit.SECONDS)) { p.destroyForcibly(); throw new RuntimeException("转换超时(>120s)"); }
             if (p.exitValue() != 0) throw new RuntimeException("Python 脚本执行失败，请检查依赖: pip3 install Pillow numpy");
         } finally {
             tmp.delete();
         }
+        return totalPoints;
     }
 
     /**

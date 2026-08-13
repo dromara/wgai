@@ -188,7 +188,7 @@ public class ROS2BridgeService {
         // ================================================================
 
         // ① fast_lio 点云（建图实时显示）
-        subscribe("/cloud_registered", "sensor_msgs/PointCloud2", 1000);
+        subscribe("/cloud_registered", "sensor_msgs/PointCloud2", 200);
 
         // ② fast_lio 里程计（机器人实时位姿）
         subscribe("/Odometry", "nav_msgs/Odometry", 100);

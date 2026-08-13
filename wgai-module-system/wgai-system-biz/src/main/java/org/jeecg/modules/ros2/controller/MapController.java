@@ -79,6 +79,18 @@ public class MapController {
     /** nav2 params 文件路径(与 robot_full.launch.py 中的路径一致) */
     private static final String NAV2_PARAMS_PATH = "/home/ros/nav2_params_fastlio.yaml";
 
+    /**
+     * 自定义行为树目录 —— 车辆物理上无法原地旋转,behavior_server 不注册 spin。
+     * Nav2 官方默认 BT(navigate_to/through_poses_w_replanning_and_recovery.xml)的
+     * 恢复子树里硬编码了 <Spin/> 节点,bt_navigator 激活时会等 spin action server,
+     * 等不到就直接 "Failed to bring up all requested nodes"。
+     * 这里生成两份去掉 Spin 节点的官方默认树副本,通过 default_nav_to_pose_bt_xml /
+     * default_nav_through_poses_bt_xml 覆盖掉,其余逻辑(重规划、清代价地图、倒车、等待)不变。
+     */
+    private static final String BT_XML_DIR = "/home/ros/behavior_trees/";
+    private static final String BT_XML_NAV_TO_POSE = BT_XML_DIR + "navigate_to_pose_no_spin.xml";
+    private static final String BT_XML_NAV_THROUGH_POSES = BT_XML_DIR + "navigate_through_poses_no_spin.xml";
+
     /** 位姿持久化文件后缀(每张地图独立) */
     private static final String POSE_FILE_SUFFIX = "_last_pose.json";
 
@@ -94,10 +106,24 @@ public class MapController {
     /** 点云投影高度范围 */
     private static final double SCAN_MIN_H   = 0.1;
     private static final double SCAN_MAX_H   = 1.5;
-    /** 机器人半径 / 膨胀半径(米) */
-    private static final double ROBOT_RADIUS = 0.3;
-    private static final double SELF_FILTER_RADIUS = 0.40;   // ① 机身自过滤距离(m)
-    private static final double INFLATE            = 0.20;   // ③ 膨胀半径(m),原 INFLATE_R=0.3
+
+    /**
+     * 车体 footprint(扒粮机 AGV,长5.5m×宽2.1m,长宽比大,不能用圆形 robot_radius 近似)。
+     * 坐标以雷达安装点(= body 坐标系原点,fast_lio 惯例)为原点,x 轴指向前进方向(扒粮机构一端):
+     *   前端(扒粮机构): +1.0m   后端(履带底盘尾部): -4.5m   半宽: ±1.05m
+     * 车体自身点云(输送管/底盘)会落在这个多边形内,由 obstacle_layer 的
+     * footprint_clearing_enabled 自动清除为可通行区域,不再需要旧版 SELF_FILTER_RADIUS
+     * 那种"以雷达为圆心、不分方向"的全向 min-range 过滤(那是给宇树L1腿部360°自遮挡设计的,
+     * 对前后极不对称的这台车不适用)。
+     */
+    private static final String ROBOT_FOOTPRINT =
+            "[[1.0, -1.05], [1.0, 1.05], [-4.5, 1.05], [-4.5, -1.05]]";
+
+    /** 传感器近距离噪声过滤(m)。自身遮挡已交给 footprint 自动清除,这里只过滤贴着镜头的噪点 */
+    private static final double SENSOR_MIN_RANGE = 0.05;
+
+    /** 膨胀半径(m),footprint 之外再留的安全缓冲 */
+    private static final double INFLATE = 0.30;
 
     // ===================== 运行状态 =====================
 
@@ -540,26 +566,116 @@ public class MapController {
     /**
      * 生成 nav2_params_fastlio.yaml
      *
-     * Unitree L1 专项修复 (v2):
-     *   ① obstacle_min_range / raytrace_min_range = 0.40m
-     *      L1 机身宽约 0.35m,腿部扫描点距雷达中心 ≤ 0.4m。
-     *      不设此值时,腿的点云被 obstacle_layer 实时标为障碍,
-     *      导致机器人永远处于"四周被包围"状态,规划/恢复行为全部失败。
+     * 扒粮机 AGV 适配说明(舵轮转向,车长5.5m,不能原地旋转 —— 见 RobotHardwareService
+     * #twistToPlcCommand: 线速度接近0的纯旋转指令直行模式无法处理,直接停车):
+     *
+     *   ① footprint(非圆形): 用 {@link #ROBOT_FOOTPRINT} 精确描述车体轮廓,代替旧的
+     *      圆形 robot_radius。车体自身反射点自动落在 footprint 内,由
+     *      footprint_clearing_enabled 清除,不再需要按半径盲目过滤一整圈。
      *
      *   ② min_obstacle_height = 0.05m
      *      过滤地面近距离反射(脚垫/地面纹理),避免地面噪点进入代价地图。
      *
-     *   ③ inflation_radius: 0.20m(原 0.3)
-     *      降低膨胀半径,防止走廊/房间角落因膨胀叠加而完全封堵。
-     *      配合 ① 的 self-filter 后,0.2m 已足够保护机身。
+     *   ③ inflation_radius: 见 {@link #INFLATE}。footprint 已经精确表达车身,
+     *      这里只是额外安全缓冲,不需要像圆形近似那样靠减小它来防止走廊被堵死。
+     *
+     *   ④ use_rotate_to_heading: false,且 behavior_server 不注册 spin 恢复行为 ——
+     *      车辆物理上无法原地旋转,发送纯旋转指令只会让底盘直接停死。
+     *
+     *   ⑤ local_costmap 从 3m×3m 放大到能完整容纳 5.5m 车身的窗口,否则局部规划器
+     *      连自己的车头车尾都看不全。
      */
+    /**
+     * 生成两份去掉 Spin 节点的 Nav2 官方默认行为树(每次写 nav2 参数时都重写,幂等)。
+     * 内容即官方 navigate_to/through_poses_w_replanning_and_recovery.xml,
+     * 仅从 RecoveryActions 的 RoundRobin 里删掉 <Spin spin_dist="1.57"/> 一行。
+     */
+    private void ensureBtXmlFiles() throws IOException {
+        File dir = new File(BT_XML_DIR);
+        if (!dir.exists()) dir.mkdirs();
+
+        String navToPose = "<root main_tree_to_execute=\"MainTree\">\n"
+                + "  <BehaviorTree ID=\"MainTree\">\n"
+                + "    <RecoveryNode number_of_retries=\"6\" name=\"NavigateRecovery\">\n"
+                + "      <PipelineSequence name=\"NavigateWithReplanning\">\n"
+                + "        <RateController hz=\"1.0\">\n"
+                + "          <RecoveryNode number_of_retries=\"1\" name=\"ComputePathToPose\">\n"
+                + "            <ComputePathToPose goal=\"{goal}\" path=\"{path}\" planner_id=\"GridBased\"/>\n"
+                + "            <ReactiveFallback name=\"ComputePathToPoseRecoveryFallback\">\n"
+                + "              <GoalUpdated/>\n"
+                + "              <ClearEntireCostmap name=\"ClearGlobalCostmap-Context\" service_name=\"global_costmap/clear_entirely_global_costmap\"/>\n"
+                + "            </ReactiveFallback>\n"
+                + "          </RecoveryNode>\n"
+                + "        </RateController>\n"
+                + "        <RecoveryNode number_of_retries=\"1\" name=\"FollowPath\">\n"
+                + "          <FollowPath path=\"{path}\" controller_id=\"FollowPath\"/>\n"
+                + "          <ReactiveFallback name=\"FollowPathRecoveryFallback\">\n"
+                + "            <GoalUpdated/>\n"
+                + "            <ClearEntireCostmap name=\"ClearLocalCostmap-Context\" service_name=\"local_costmap/clear_entirely_local_costmap\"/>\n"
+                + "          </ReactiveFallback>\n"
+                + "        </RecoveryNode>\n"
+                + "      </PipelineSequence>\n"
+                + "      <ReactiveFallback name=\"RecoveryFallback\">\n"
+                + "        <GoalUpdated/>\n"
+                + "        <RoundRobin name=\"RecoveryActions\">\n"
+                + "          <Sequence name=\"ClearingActions\">\n"
+                + "            <ClearEntireCostmap name=\"ClearLocalCostmap-Subtree\" service_name=\"local_costmap/clear_entirely_local_costmap\"/>\n"
+                + "            <ClearEntireCostmap name=\"ClearGlobalCostmap-Subtree\" service_name=\"global_costmap/clear_entirely_global_costmap\"/>\n"
+                + "          </Sequence>\n"
+                + "          <Wait wait_duration=\"5\"/>\n"
+                + "          <BackUp backup_dist=\"0.30\" backup_speed=\"0.05\"/>\n"
+                + "        </RoundRobin>\n"
+                + "      </ReactiveFallback>\n"
+                + "    </RecoveryNode>\n"
+                + "  </BehaviorTree>\n"
+                + "</root>\n";
+
+        String navThroughPoses = "<root main_tree_to_execute=\"MainTree\">\n"
+                + "  <BehaviorTree ID=\"MainTree\">\n"
+                + "    <RecoveryNode number_of_retries=\"6\" name=\"NavigateRecovery\">\n"
+                + "      <PipelineSequence name=\"NavigateWithReplanning\">\n"
+                + "        <RateController hz=\"1.0\">\n"
+                + "          <RecoveryNode number_of_retries=\"1\" name=\"ComputePathThroughPoses\">\n"
+                + "            <ComputePathThroughPoses goals=\"{goals}\" path=\"{path}\" planner_id=\"GridBased\"/>\n"
+                + "            <ReactiveFallback name=\"ComputePathThroughPosesRecoveryFallback\">\n"
+                + "              <GoalUpdated/>\n"
+                + "              <ClearEntireCostmap name=\"ClearGlobalCostmap-Context\" service_name=\"global_costmap/clear_entirely_global_costmap\"/>\n"
+                + "            </ReactiveFallback>\n"
+                + "          </RecoveryNode>\n"
+                + "        </RateController>\n"
+                + "        <RecoveryNode number_of_retries=\"1\" name=\"FollowPath\">\n"
+                + "          <FollowPath path=\"{path}\" controller_id=\"FollowPath\"/>\n"
+                + "          <ReactiveFallback name=\"FollowPathRecoveryFallback\">\n"
+                + "            <GoalUpdated/>\n"
+                + "            <ClearEntireCostmap name=\"ClearLocalCostmap-Context\" service_name=\"local_costmap/clear_entirely_local_costmap\"/>\n"
+                + "          </ReactiveFallback>\n"
+                + "        </RecoveryNode>\n"
+                + "      </PipelineSequence>\n"
+                + "      <ReactiveFallback name=\"RecoveryFallback\">\n"
+                + "        <GoalUpdated/>\n"
+                + "        <RoundRobin name=\"RecoveryActions\">\n"
+                + "          <Sequence name=\"ClearingActions\">\n"
+                + "            <ClearEntireCostmap name=\"ClearLocalCostmap-Subtree\" service_name=\"local_costmap/clear_entirely_local_costmap\"/>\n"
+                + "            <ClearEntireCostmap name=\"ClearGlobalCostmap-Subtree\" service_name=\"global_costmap/clear_entirely_global_costmap\"/>\n"
+                + "          </Sequence>\n"
+                + "          <Wait wait_duration=\"5\"/>\n"
+                + "          <BackUp backup_dist=\"0.30\" backup_speed=\"0.05\"/>\n"
+                + "        </RoundRobin>\n"
+                + "      </ReactiveFallback>\n"
+                + "    </RecoveryNode>\n"
+                + "  </BehaviorTree>\n"
+                + "</root>\n";
+
+        Files.write(new File(BT_XML_NAV_TO_POSE).toPath(), navToPose.getBytes(StandardCharsets.UTF_8));
+        Files.write(new File(BT_XML_NAV_THROUGH_POSES).toPath(), navThroughPoses.getBytes(StandardCharsets.UTF_8));
+    }
+
     private void writeNav2Params(String filePath, double initX, double initY,
                                  double initTheta, String mapYamlPath) throws IOException {
 
-        // Unitree L1 专用参数
+        ensureBtXmlFiles();
 
-
-        String content = "# Nav2 参数 - 由 Java MapController 生成,适配 fast_lio + Unitree L1\n"
+        String content = "# Nav2 参数 - 由 Java MapController 生成,适配 fast_lio(雷达无关,支持 Unitree L1 / Livox Mid360 等)\n"
                 + "# 生成时间: " + new java.util.Date() + "\n"
                 + "# 注意:修改后需重启 Nav2 才生效(systemctl restart robot-nav 或 重启 launch)\n"
                 + "\n"
@@ -602,6 +718,10 @@ public class MapController {
                 + "    odom_topic: " + ODOM_TOPIC + "\n"
                 + "    bt_loop_duration: 10\n"
                 + "    default_server_timeout: 20\n"
+                // 车辆无法原地旋转,官方默认树里的 Spin 恢复节点会导致 bt_navigator
+                // 等不到 spin action server 而激活失败,这里换成去掉 Spin 的自定义树
+                + "    default_nav_to_pose_bt_xml: \"" + BT_XML_NAV_TO_POSE + "\"\n"
+                + "    default_nav_through_poses_bt_xml: \"" + BT_XML_NAV_THROUGH_POSES + "\"\n"
                 + "    navigators: ['navigate_to_pose', 'navigate_through_poses']\n"
                 + "    navigate_to_pose:\n"
                 + "      plugin: nav2_bt_navigator/NavigateToPoseNavigator\n"
@@ -631,18 +751,20 @@ public class MapController {
                 + "    FollowPath:\n"
                 + "      plugin: nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController\n"
                 + "      desired_linear_vel: 0.3\n"
-                + "      lookahead_dist: 0.6\n"
-                + "      min_lookahead_dist: 0.3\n"
-                + "      max_lookahead_dist: 0.9\n"
-                + "      rotate_to_heading_angular_vel: 1.8\n"
+                // 车长5.5m、舵轮最大打角45°，0.6/0.3/0.9m 的原前视距离对这台车曲率需求过大，
+                // 转向能力覆盖不了；以下为起始值，需现场实测调整
+                + "      lookahead_dist: 2.5\n"
+                + "      min_lookahead_dist: 1.5\n"
+                + "      max_lookahead_dist: 4.0\n"
                 + "      transform_tolerance: 0.1\n"
                 + "      use_velocity_scaled_lookahead_dist: false\n"
                 + "      use_regulated_linear_velocity_scaling: true\n"
                 + "      use_cost_regulated_linear_velocity_scaling: false\n"
-                + "      use_rotate_to_heading: true\n"
-                + "      allow_reversing: false\n"
-                + "      rotate_to_heading_min_angle: 0.785\n"
-                + "      max_angular_accel: 3.2\n"
+                // 车辆物理上无法原地旋转（见 RobotHardwareService#twistToPlcCommand），
+                // 关闭原地转向到目标朝向；同时允许倒车，弥补无法原地掉头的问题
+                + "      use_rotate_to_heading: false\n"
+                + "      allow_reversing: true\n"
+                + "      max_angular_accel: 1.0\n"     // 起始值，需现场实测调整
                 + "\n"
                 // ─────────────────────────────────────────────────────────────
                 // 局部代价地图
@@ -656,24 +778,24 @@ public class MapController {
                 + "      global_frame: " + ODOM_FRAME + "\n"
                 + "      robot_base_frame: " + BASE_FRAME + "\n"
                 + "      rolling_window: true\n"
-                + "      width: 3\n"
-                + "      height: 3\n"
+                + "      width: 16\n"
+                + "      height: 16\n"
                 + "      resolution: 0.05\n"
-                + "      robot_radius: " + ROBOT_RADIUS + "\n"
+                + "      footprint: \"" + ROBOT_FOOTPRINT + "\"\n"
                 + "      plugins: [obstacle_layer, inflation_layer]\n"
                 + "      obstacle_layer:\n"
                 + "        plugin: nav2_costmap_2d::ObstacleLayer\n"
                 + "        enabled: True\n"
+                + "        footprint_clearing_enabled: True\n"    // ① 车体自身反射点落在 footprint 内自动清除
                 + "        observation_sources: scan\n"
                 + "        scan:\n"
                 + "          topic: /scan\n"
                 + "          data_type: LaserScan\n"
                 + "          min_obstacle_height: 0.05\n"         // ② 过滤地面反射
                 + "          max_obstacle_height: 2.0\n"
-                // ① 核心修复：过滤宇树L1腿部点云（腿展开最宽约0.4m）
-                + "          obstacle_min_range: " + String.format("%.2f", SELF_FILTER_RADIUS) + "\n"
+                + "          obstacle_min_range: " + String.format("%.2f", SENSOR_MIN_RANGE) + "\n"
                 + "          obstacle_max_range: 5.5\n"
-                + "          raytrace_min_range: " + String.format("%.2f", SELF_FILTER_RADIUS) + "\n"
+                + "          raytrace_min_range: " + String.format("%.2f", SENSOR_MIN_RANGE) + "\n"
                 + "          raytrace_max_range: 8.0\n"
                 + "          clearing: True\n"
                 + "          marking: True\n"
@@ -694,7 +816,7 @@ public class MapController {
                 + "      publish_frequency: 1.0\n"
                 + "      global_frame: map\n"
                 + "      robot_base_frame: " + BASE_FRAME + "\n"
-                + "      robot_radius: " + ROBOT_RADIUS + "\n"
+                + "      footprint: \"" + ROBOT_FOOTPRINT + "\"\n"
                 + "      resolution: 0.05\n"
                 + "      track_unknown_space: true\n"
                 + "      plugins: [static_layer, obstacle_layer, inflation_layer]\n"
@@ -704,16 +826,16 @@ public class MapController {
                 + "      obstacle_layer:\n"
                 + "        plugin: nav2_costmap_2d::ObstacleLayer\n"
                 + "        enabled: True\n"
+                + "        footprint_clearing_enabled: True\n"    // ① 同局部代价地图
                 + "        observation_sources: scan\n"
                 + "        scan:\n"
                 + "          topic: /scan\n"
                 + "          data_type: LaserScan\n"
                 + "          min_obstacle_height: 0.05\n"         // ② 过滤地面反射
                 + "          max_obstacle_height: 2.0\n"
-                // ① 核心修复：同局部代价地图，全局也要过滤腿部
-                + "          obstacle_min_range: " + String.format("%.2f", SELF_FILTER_RADIUS) + "\n"
+                + "          obstacle_min_range: " + String.format("%.2f", SENSOR_MIN_RANGE) + "\n"
                 + "          obstacle_max_range: 5.5\n"
-                + "          raytrace_min_range: " + String.format("%.2f", SELF_FILTER_RADIUS) + "\n"
+                + "          raytrace_min_range: " + String.format("%.2f", SENSOR_MIN_RANGE) + "\n"
                 + "          raytrace_max_range: 8.0\n"
                 + "          clearing: True\n"
                 + "          marking: True\n"
@@ -744,9 +866,9 @@ public class MapController {
                 + "    costmap_topic: local_costmap/costmap_raw\n"
                 + "    footprint_topic: local_costmap/published_footprint\n"
                 + "    cycle_frequency: 10.0\n"
-                + "    behavior_plugins: [spin, backup, drive_on_heading, wait]\n"
-                + "    spin:\n"
-                + "      plugin: nav2_behaviors/Spin\n"
+                // 车辆无法原地旋转，不注册 spin 恢复行为（若 BT 配置里仍引用 Spin 节点，
+                // 需一并改成 backup/drive_on_heading，否则该恢复步骤会直接失败）
+                + "    behavior_plugins: [backup, drive_on_heading, wait]\n"
                 + "    backup:\n"
                 + "      plugin: nav2_behaviors/BackUp\n"
                 + "    drive_on_heading:\n"
@@ -757,9 +879,6 @@ public class MapController {
                 + "    robot_base_frame: " + BASE_FRAME + "\n"
                 + "    transform_tolerance: 0.5\n"
                 + "    simulate_ahead_time: 2.0\n"
-                + "    max_rotational_vel: 1.0\n"
-                + "    min_rotational_vel: 0.4\n"
-                + "    rotational_acc_lim: 3.2\n"
                 + "\n"
                 + "waypoint_follower:\n"
                 + "  ros__parameters:\n"
