@@ -9,7 +9,12 @@
 	<modelVersion>4.0.0</modelVersion>
 
 	<artifactId>wgai-system-biz</artifactId>
-
+	<repositories>
+		<repository>
+			<id>jitpack.io</id>
+			<url>https://jitpack.io</url>
+		</repository>
+	</repositories>
 	<dependencies>
 		<dependency>
 			<groupId>com.hikvision.ga</groupId>
@@ -60,11 +65,21 @@
 <!--			<version>0.0.2</version>-->
 <!--		</dependency>-->
 
-		<dependency>
-			<groupId>sherpa.onnx.java</groupId>
-			<artifactId>k2fsa</artifactId>
-			<version>1.12.10</version>
-		</dependency>
+		<!-- ⚠⚠ 不要升级到 1.13.x —— 会让 JVM 进程级崩溃，不是 Java 异常 ⚠⚠
+		     1.13.x 的 native 库要求 ONNX Runtime API 27（ORT 1.22+），
+		     而本项目 YOLO / OCR / 人脸识别用的是 com.microsoft.onnxruntime:1.17.0（API 17）。
+		     Windows 加载 DLL 按模块名去重：谁先 load 了 onnxruntime.dll 谁说了算，
+		     sherpa 自带的那份就被跳过。它向已加载的 1.17.0 要 API 27 会拿到 null，
+		     紧接着解引用 -> EXCEPTION_ACCESS_VIOLATION，整个 JVM 挂掉。
+		     报错特征：The requested API version [27] is not available, only [1, 17] supported
+
+		     真要升，必须连 ORT 一起升到 1.22+，涉及 22 个文件 231 处调用的回归，
+		     得当独立任务做。另外 1.13.x 只发布在 JitPack，Maven Central / aliyun 都没有。 -->
+<!--		<dependency>-->
+<!--			<groupId>sherpa.onnx.java</groupId>-->
+<!--			<artifactId>k2fsa</artifactId>-->
+<!--			<version>1.12.10</version>-->
+<!--		</dependency>-->
 
 
 <!--		<dependency>-->
@@ -74,12 +89,24 @@
 <!--		</dependency>-->
 
 
-
 		<dependency>
-			<groupId>sherpa.onnx.java</groupId>
-			<artifactId>k2fsa.native.linux</artifactId>
-			<version>1.12.10</version>
+			<groupId>com.github.k2-fsa.sherpa-onnx</groupId>
+			<artifactId>sherpa-onnx-jvm</artifactId>
+			<version>1.13.7</version>
 		</dependency>
+
+		<!-- 2. Platform native lib — pick ONE for your target platform -->
+		<dependency>
+			<groupId>com.github.k2-fsa.sherpa-onnx</groupId>
+			<artifactId>sherpa-onnx-native-lib-win-x64</artifactId>
+			<version>1.13.7</version>
+		</dependency>
+
+<!--		<dependency>-->
+<!--			<groupId>sherpa.onnx.java</groupId>-->
+<!--			<artifactId>k2fsa.native.linux</artifactId>-->
+<!--			<version>1.12.10</version>-->
+<!--		</dependency>-->
 		<!-- 企业微信/钉钉 api -->
 		<dependency>
 			<groupId>org.jeecgframework</groupId>
@@ -120,8 +147,9 @@
 		<dependency>
 			<groupId>com.microsoft.onnxruntime</groupId>
 			<artifactId>onnxruntime</artifactId>
-			<version>1.17.0</version>
+			<version>1.29.0</version>
 		</dependency>
+
 		<dependency>
 			<groupId>com.github.xingshuangs</groupId>
 			<artifactId>iot-communication</artifactId>
@@ -133,11 +161,11 @@
 			<version>1.5.10</version>
 		</dependency>
 
-		<dependency>
-			<groupId>net.ailemon.asrt</groupId>
-			<artifactId>sdk</artifactId>
-			<version>1.0-alpha1</version>
-		</dependency>
+<!--		<dependency>-->
+<!--			<groupId>net.ailemon.asrt</groupId>-->
+<!--			<artifactId>sdk</artifactId>-->
+<!--			<version>1.0-alpha1</version>-->
+<!--		</dependency>-->
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>

@@ -43,6 +43,12 @@ public class ROS2BridgeService {
     @Autowired
     private RobotHardwareService hardwareService; // 底盘硬件控制（手动遥控时直发）
 
+    @Autowired
+    private RotationSafetyService rotationSafetyService; // 原地旋转净空判定（点云在抽稀前喂给它）
+
+    @Autowired
+    private MappingGridService mappingGridService; // 建图占据栅格（同样吃抽稀前的全量点）
+
     private WebSocketSession session;
     private final Gson gson = new Gson();
     private final AtomicInteger reconnectAttempts = new AtomicInteger(0);
@@ -56,6 +62,9 @@ public class ROS2BridgeService {
     private volatile double[] lastAmclPose = null;
     /** 最新 AMCL 位姿收到的时间戳(毫秒) */
     private volatile long lastAmclPoseMs = 0L;
+    /** 最新 AMCL 位姿协方差: x方差(covariance[0]) / y方差(covariance[7]), 用于判断是否真正收敛 */
+    private volatile double lastAmclCovXX = Double.MAX_VALUE;
+    private volatile double lastAmclCovYY = Double.MAX_VALUE;
 
     public void setWebSocketHandler(ROS2WebSocketHandler handler) {
         this.webSocketHandler = handler;
@@ -97,12 +106,29 @@ public class ROS2BridgeService {
     }
 
     /**
+     * 判断 AMCL 是否已真正收敛(而不是只看是否过了固定等待时间)。
+     * PoseWithCovarianceStamped.pose.covariance 是 6x6 行优先展开的 36 元素数组,
+     * covariance[0]=x方差, covariance[7]=y方差(行1列1, index=row*6+col=1*6+1=7)。
+     *
+     * @param threshold 方差阈值(单位 m²), 越小要求越严格; 现场建议 0.05
+     */
+    public boolean isAmclConverged(double threshold) {
+        return lastAmclPose != null
+                && lastAmclCovXX < threshold
+                && lastAmclCovYY < threshold;
+    }
+
+    public double getLastAmclCovXX() { return lastAmclCovXX; }
+    public double getLastAmclCovYY() { return lastAmclCovYY; }
+
+    /**
      * 由 ROS2WebSocketHandler 在每次收到 /amcl_pose 消息时回调，更新本地缓存。
      * msg 是 rosbridge publish 帧里的 "msg" 字段（geometry_msgs/PoseWithCovarianceStamped）。
      */
     public void updateAmclPose(JsonObject msg) {
         try {
-            JsonObject pose        = msg.getAsJsonObject("pose").getAsJsonObject("pose");
+            JsonObject poseWithCov = msg.getAsJsonObject("pose");
+            JsonObject pose        = poseWithCov.getAsJsonObject("pose");
             JsonObject position    = pose.getAsJsonObject("position");
             JsonObject orientation = pose.getAsJsonObject("orientation");
 
@@ -114,6 +140,14 @@ public class ROS2BridgeService {
 
             lastAmclPose   = new double[]{x, y, theta};
             lastAmclPoseMs = System.currentTimeMillis();
+
+            if (poseWithCov.has("covariance")) {
+                com.google.gson.JsonArray cov = poseWithCov.getAsJsonArray("covariance");
+                if (cov.size() >= 8) {
+                    lastAmclCovXX = cov.get(0).getAsDouble();
+                    lastAmclCovYY = cov.get(7).getAsDouble();
+                }
+            }
         } catch (Exception e) {
             log.warn("[amcl_pose缓存] 解析失败: {}", e.getMessage());
         }
@@ -128,6 +162,8 @@ public class ROS2BridgeService {
                     velocityService,
                     pushService,
                     hardwareService,
+                    rotationSafetyService,
+                    mappingGridService,
                     this::onConnected,
                     this::attemptReconnect,
                     this::onServiceResponse,
@@ -271,6 +307,34 @@ public class ROS2BridgeService {
         subscribe("/navigate_to_pose/_action/status",
                 "action_msgs/GoalStatusArray", 500);
         log.info("✅ Nav2 topic 已重新订阅");
+    }
+
+    /**
+     * 重新订阅 fast_lio 相关 topic（/cloud_registered、/Odometry）
+     * 原理同 resubscribeNav2Topics：rosbridge 的订阅会绑死在当时的 publisher 上，
+     * fast_lio 进程重启（stop 再 start）后是全新的 publisher，旧订阅收不到新数据，
+     * 表现为"停止建图再开始建图后前端收不到点云，只有重启 Java 才恢复"。
+     * MappingController 每次成功(重新)启动 fast_lio 后都要调用一次。
+     */
+    public void resubscribeFastLioTopics() {
+        if (!isConnected()) {
+            log.warn("rosbridge 未连接,无法重新订阅");
+            return;
+        }
+        log.info("🔄 重新订阅 fast_lio 相关 topic(确保绑到新启动的 publisher)...");
+
+        for (String topic : new String[]{"/cloud_registered", "/Odometry"}) {
+            JsonObject json = new JsonObject();
+            json.addProperty("op", "unsubscribe");
+            json.addProperty("topic", topic);
+            send(json.toString());
+        }
+
+        try { Thread.sleep(50); } catch (InterruptedException ignored) {}
+
+        subscribe("/cloud_registered", "sensor_msgs/PointCloud2", 200);
+        subscribe("/Odometry", "nav_msgs/Odometry", 100);
+        log.info("✅ fast_lio topic 已重新订阅");
     }
     /**
      * 预先声明话题类型

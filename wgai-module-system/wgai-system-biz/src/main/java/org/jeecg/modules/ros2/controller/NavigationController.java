@@ -53,6 +53,9 @@ public class NavigationController {
      */
     private static final long MIN_CONVERGENCE_MS = 15_000L;
 
+    /** AMCL 位姿协方差(x/y方差, m²)收敛阈值; 低于此值才认为真正收敛, 不是只看等待时间 */
+    private static final double CONVERGENCE_COV_THRESHOLD = 0.05;
+
     /** 最近一次触发全局重定位的时间戳,0 表示未触发过 */
     private final AtomicLong lastGlobalLocalizationTime = new AtomicLong(0);
 
@@ -64,6 +67,9 @@ public class NavigationController {
 
     @Autowired
     private WebSocketPushService pushService;  // 注入 WebSocket 推送服务
+
+    @Autowired
+    private org.jeecg.modules.ros2.service.RotationSafetyService rotationSafetyService;
 
     // ===================== 发送导航目标 =====================
 
@@ -81,10 +87,14 @@ public class NavigationController {
     @PostMapping("/goal")
     @ApiOperation("设置导航目标")
     public Result<Void> setGoal(@Validated @RequestBody NavigationGoalDTO goal) {
-        // ⭐ Bug 2 fix: 全局重定位收敛保护
-        long elapsed = System.currentTimeMillis() - lastGlobalLocalizationTime.get();
-        if (lastGlobalLocalizationTime.get() > 0 && elapsed < MIN_CONVERGENCE_MS) {
+        // ⭐ Bug 2 fix: 全局重定位收敛保护(仅时间窗口, 不卡协方差 —— 协方差是否收敛只作为
+        // /localization-ready 的提示信息, 不在这里硬拦截, 避免协方差因传感器噪声/未收敛
+        // 长期高于阈值时把所有导航目标永久堵死)
+        long last = lastGlobalLocalizationTime.get();
+        long elapsed = System.currentTimeMillis() - last;
+        if (last > 0 && elapsed < MIN_CONVERGENCE_MS) {
             long remaining = (MIN_CONVERGENCE_MS - elapsed) / 1000;
+            log.warn("[导航目标] 全局重定位收敛保护期内, 拒绝目标点, 剩余{}s", remaining);
             return Result.error(
                     "全局重定位刚触发,AMCL 正在收敛(TF 不稳定)。" +
                             "请先遥控机器人慢速旋转,等待约 " + remaining + " 秒后再发导航目标。" +
@@ -293,13 +303,27 @@ public class NavigationController {
     // ===================== 收敛状态查询(前端轮询用) =====================
 
     /**
-     * 查询 AMCL 是否已度过收敛等待期(供前端轮询)。
+     * 判断是否真正可以发送导航目标: 已过最短等待时间窗口 且 AMCL 协方差已收敛。
+     * 两者都满足才算 ready, 单纯等够时间但协方差还很高(机器人没动/没转)不算。
+     */
+    private boolean isConverged() {
+        long last = lastGlobalLocalizationTime.get();
+        if (last == 0) return true; // 从未触发过全局重定位/初始位姿, 不受此保护约束
+        long elapsed = System.currentTimeMillis() - last;
+        boolean timeOk = elapsed >= MIN_CONVERGENCE_MS;
+        boolean covOk  = bridgeService.isAmclConverged(CONVERGENCE_COV_THRESHOLD);
+        return timeOk && covOk;
+    }
+
+    /**
+     * 查询 AMCL 是否已真正收敛(供前端轮询)。
      *
      * 用法: 前端在全局重定位后每秒轮询此接口,
      * 当 ready=true 时再显示"发送导航目标"按钮。
      *
-     * 注意: ready=true 仅表示已过等待时间窗口,不代表 AMCL 100% 收敛。
-     * 如需更精确判断,前端应同时订阅 /amcl_pose 并检查协方差(covariance[0] < 0.05)。
+     * ready 需同时满足: ① 已过最短等待时间窗口(TF/costmap 稳定) ② AMCL 位姿协方差
+     * (covariance[0]/[7], 即x/y方差) 低于阈值(现场值 0.05m²), 不再只看计时器。
+     * 协方差需要机器人在等待期间实际移动/旋转才会下降, 静止不动不会收敛。
      */
     @GetMapping("/localization-ready")
     @ApiOperation("查询 AMCL 收敛等待是否完成")
@@ -307,17 +331,45 @@ public class NavigationController {
         long now     = System.currentTimeMillis();
         long last    = lastGlobalLocalizationTime.get();
         long elapsed = now - last;
-        boolean ready = (last == 0) || (elapsed >= MIN_CONVERGENCE_MS);
+        boolean ready = isConverged();
 
         Map<String, Object> result = new java.util.LinkedHashMap<>();
         result.put("ready",       ready);
         result.put("elapsed",     elapsed);
         result.put("waitMs",      MIN_CONVERGENCE_MS);
-        result.put("remainingMs", ready ? 0 : MIN_CONVERGENCE_MS - elapsed);
+        result.put("remainingMs", ready ? 0 : Math.max(0, MIN_CONVERGENCE_MS - elapsed));
+        result.put("covXX",       bridgeService.getLastAmclCovXX());
+        result.put("covYY",       bridgeService.getLastAmclCovYY());
+        result.put("covThreshold", CONVERGENCE_COV_THRESHOLD);
         result.put("message",     ready
                 ? "可以发送导航目标"
-                : "AMCL 收敛等待中,剩余约 " + (MIN_CONVERGENCE_MS - elapsed) / 1000 + " 秒");
+                : "AMCL 收敛等待中(需遥控机器人慢速移动/旋转帮助收敛), covXX=" + bridgeService.getLastAmclCovXX()
+                        + " covYY=" + bridgeService.getLastAmclCovYY());
         return Result.OK(result);
+    }
+
+    // ===================== 原地旋转安全判定 =====================
+
+    /**
+     * 查询当前是否满足原地旋转条件(扫转圆内无障碍物)。
+     *
+     * 扒粮机 5.5m×2.1m,原地转一圈扫出来的是一个圆,这个圆比车身本身大得多
+     * (旋转中心在底盘中心时半径约 2.94m,即需要近 6m 直径的净空)。转之前必须确认这个圆是空的。
+     *
+     * 判定基于 /cloud_registered 全量点云(抽稀前)按 1° 分扇区累积的滚动窗口,
+     * 详见 RotationSafetyService。
+     *
+     * ⚠ 本接口只做判定,不下发任何旋转指令。
+     * ⚠ 覆盖率不足时一律返回 canRotate=false —— 扇区没有数据是"不知道",不是"安全"。
+     */
+    @GetMapping("/rotate-check")
+    @ApiOperation("查询当前是否满足原地旋转条件")
+    public Result<Map<String, Object>> rotateCheck() {
+        Map<String, Object> r = rotationSafetyService.check();
+        log.info("[旋转判定] canRotate={}, 最近障碍物={}m, 需要≥{}m, 覆盖率={}",
+                r.get("canRotate"), r.get("minClearanceM"),
+                r.get("requiredRadiusM"), r.get("coverage"));
+        return Result.OK(r);
     }
 
     // ===================== 手动模式切换 =====================

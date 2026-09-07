@@ -80,4 +80,18 @@ public class TabSzrPython implements Serializable {
 	@Excel(name = "脚本顺序", width = 15)
     @ApiModelProperty(value = "脚本顺序")
     private java.lang.Integer pysort;
+	/**
+	 * 音频文件是否需要上传。
+	 *
+	 * <p>1 = 上传：Java 把 wav 以 multipart 推给驱动服务的 /speak_upload。
+	 * 适用于 Java 和 Python 不在同一台机器（跨机、容器、不同挂载）。
+	 *
+	 * <p>0 = 不上传：只把文件绝对路径传给 /speak，由驱动服务自己去读。
+	 * <b>前提是两边在同一台服务器（或共享同一个挂载点），否则驱动服务找不到文件。</b>
+	 * 省掉一次文件传输，长音频更快。
+	 */
+	@Excel(name = "是否上传音频", width = 15, dicCode = "yn")
+	@Dict(dicCode = "yn")
+    @ApiModelProperty(value = "音频是否上传：1=上传文件 0=同机直接给路径")
+    private java.lang.Integer needUpload;
 }

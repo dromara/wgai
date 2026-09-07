@@ -9,11 +9,6 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.k2fsa.sherpa.onnx.*;
 import lombok.extern.slf4j.Slf4j;
-import net.ailemon.asrt.sdk.BaseSpeechRecognizer;
-import net.ailemon.asrt.sdk.Sdk;
-import net.ailemon.asrt.sdk.common.Common;
-import net.ailemon.asrt.sdk.models.AsrtApiResponse;
-import net.ailemon.asrt.sdk.models.Wave;
 import org.apache.commons.lang3.StringUtils;
 import org.bytedeco.ffmpeg.global.avcodec;
 import org.bytedeco.javacv.*;
@@ -37,6 +32,7 @@ import org.jeecg.modules.demo.tab.util.FfmpegPcmLoader;
 import org.jeecg.modules.demo.video.entity.TabAiSubscriptionNew;
 import org.jeecg.modules.demo.video.entity.TabVideoUtil;
 import org.jeecg.modules.demo.video.service.impl.TabVideoUtilServiceImpl;
+import org.jeecg.modules.demo.video.util.ocr.PaddleOCRCompleteV3;
 import org.jeecg.modules.demo.video.util.RedisCacheHolder;
 import org.jeecg.modules.message.websocket.WebSocket;
 import org.jeecg.modules.monitor.service.RedisService;
@@ -51,8 +47,11 @@ import org.jeecg.modules.tab.AIModel.push.AiImgResult;
 import org.jeecg.modules.tab.AIModel.push.ReadVideoImg;
 import org.jeecg.modules.tab.entity.TabAiModel;
 import org.jeecg.modules.tab.mapper.TabAiModelMapper;
+import org.opencv.core.CvType;
 import org.opencv.core.Mat;
+import org.opencv.core.Size;
 import org.opencv.imgcodecs.Imgcodecs;
+import org.opencv.imgproc.Imgproc;
 import org.opencv.videoio.VideoWriter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -68,6 +67,7 @@ import java.nio.FloatBuffer;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -946,6 +946,160 @@ public class TabAiHistoryServiceImpl extends ServiceImpl<TabAiHistoryMapper, Tab
         }
     }
 
+    /**
+     * ONNX 表情识别（FER+）。
+     *
+     * 模型表字段约定：ai_weights 为 emotion-ferplus-8.onnx，相对路径以 upload.path 为准。
+     * FER+ 的输入是单张 64x64 灰度人脸图片；上传整图时请尽量保证图片为单人正脸。
+     */
+    private int saveOnnxExpression(TabAiModelBund tabAiModelBund, String uploadPath) {
+        long startTime = System.currentTimeMillis();
+        TabAiModel tabAiModel = modelMapper.selectById(tabAiModelBund.getModelName());
+        try {
+            String resultText = recognizeExpression(
+                    resolveLocalPath(uploadPath, tabAiModel.getAiWeights()),
+                    resolveLocalPath(uploadPath, tabAiModelBund.getSaveUrl()),
+                    tabAiModel.getModelJmType() != null && tabAiModel.getModelJmType() == 1);
+            saveTextHistory(tabAiModelBund, tabAiModel, resultText, startTime);
+            return 0;
+        } catch (Exception ex) {
+            log.error("ONNX表情识别失败，modelId={}，image={}",
+                    tabAiModelBund.getModelName(), tabAiModelBund.getSaveUrl(), ex);
+            return 1;
+        }
+    }
+
+    /**
+     * Paddle OCR 文字识别。
+     *
+     * 模型表字段约定：ai_weights=检测模型，ai_name_name=识别模型，ai_config=字符字典。
+     */
+    private int saveOnnxOcr(TabAiModelBund tabAiModelBund, String uploadPath) {
+        long startTime = System.currentTimeMillis();
+        TabAiModel tabAiModel = modelMapper.selectById(tabAiModelBund.getModelName());
+        PaddleOCRCompleteV3 ocr = null;
+        try {
+            String detModelPath = resolveLocalPath(uploadPath, tabAiModel.getAiWeights());
+            String recModelPath = resolveLocalPath(uploadPath, tabAiModel.getAiNameName());
+            String dictPath = resolveLocalPath(uploadPath, tabAiModel.getAiConfig());
+            String imagePath = resolveLocalPath(uploadPath, tabAiModelBund.getSaveUrl());
+            log.info("进入 ONNX OCR识别，modelId={}，检测模型={}，识别模型={}，字典={}，图片={}",
+                    tabAiModel.getId(), detModelPath, recModelPath, dictPath, imagePath);
+            ocr = new PaddleOCRCompleteV3(
+                    detModelPath, recModelPath, dictPath);
+            List<PaddleOCRCompleteV3.OCRResult> ocrResults = ocr.recognize(imagePath, "ch");
+
+            List<String> textParts = new ArrayList<>();
+            for (PaddleOCRCompleteV3.OCRResult ocrResult : ocrResults) {
+                if (StringUtils.isNotBlank(ocrResult.text)) {
+                    textParts.add(ocrResult.text.trim());
+                }
+            }
+            String resultText = textParts.isEmpty() ? "未识别出文字" : StringUtils.join(textParts, "\n");
+            saveTextHistory(tabAiModelBund, tabAiModel, resultText, startTime);
+            log.info("ONNX OCR识别完成，modelId={}，文本块数={}，耗时={}ms，识别结果={}",
+                    tabAiModel.getId(), textParts.size(), System.currentTimeMillis() - startTime, resultText);
+            return 0;
+        } catch (Exception ex) {
+            log.error("ONNX OCR识别失败，modelId={}，图片={}，耗时={}ms",
+                    tabAiModelBund.getModelName(), tabAiModelBund.getSaveUrl(), System.currentTimeMillis() - startTime, ex);
+            return 1;
+        } finally {
+            if (ocr != null) {
+                ocr.close();
+            }
+        }
+    }
+
+    private String recognizeExpression(String modelPath, String imagePath, boolean useGpu) throws Exception {
+        final String[] labels = {"平静", "高兴", "惊讶", "伤心", "生气", "厌恶", "恐惧", "轻蔑"};
+        Mat image = Imgcodecs.imread(imagePath);
+        if (image.empty()) {
+            image.release();
+            throw new IllegalArgumentException("无法读取图片：" + imagePath);
+        }
+
+        Mat gray = new Mat();
+        Mat resized = new Mat();
+        try {
+            Imgproc.cvtColor(image, gray, Imgproc.COLOR_BGR2GRAY);
+            Imgproc.resize(gray, resized, new Size(64, 64));
+            resized.convertTo(resized, CvType.CV_32F);
+            float[] inputData = new float[64 * 64];
+            resized.get(0, 0, inputData);
+
+            OrtEnvironment env = OrtEnvironment.getEnvironment();
+            OrtSession.SessionOptions options = useGpu ? createCudaSessionOptions() : createCpuSessionOptions();
+            try (OrtSession session = env.createSession(modelPath, options);
+                 OnnxTensor input = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputData), new long[]{1, 1, 64, 64});
+                 OrtSession.Result output = session.run(Collections.singletonMap(
+                         session.getInputNames().iterator().next(), input))) {
+                float[] scores = getExpressionScores(output.get(0).getValue());
+                if (scores.length != labels.length) {
+                    throw new IllegalStateException("FER+模型输出类别数应为8，实际为" + scores.length);
+                }
+                int index = 0;
+                for (int i = 1; i < scores.length; i++) {
+                    if (scores[i] > scores[index]) {
+                        index = i;
+                    }
+                }
+                return String.format("当前表情：%s（置信度：%.2f%%）", labels[index], softmaxProbability(scores, index) * 100);
+            }
+        } finally {
+            image.release();
+            gray.release();
+            resized.release();
+        }
+    }
+
+    private float[] getExpressionScores(Object value) {
+        if (value instanceof float[][]) {
+            return ((float[][]) value)[0];
+        }
+        if (value instanceof float[]) {
+            return (float[]) value;
+        }
+        throw new IllegalStateException("不支持的FER+输出类型：" + value.getClass().getName());
+    }
+
+    private double softmaxProbability(float[] scores, int targetIndex) {
+        float max = scores[0];
+        for (float score : scores) {
+            max = Math.max(max, score);
+        }
+        double sum = 0D;
+        for (float score : scores) {
+            sum += Math.exp(score - max);
+        }
+        return Math.exp(scores[targetIndex] - max) / sum;
+    }
+
+    private String resolveLocalPath(String uploadPath, String storedPath) {
+        if (StringUtils.isBlank(storedPath)) {
+            throw new IllegalArgumentException("模型或图片路径不能为空");
+        }
+        File file = new File(storedPath);
+        String resolvedPath = file.isAbsolute() ? file.getPath() : new File(uploadPath, storedPath).getPath();
+        if (!new File(resolvedPath).isFile()) {
+            throw new IllegalArgumentException("文件不存在或不是普通文件：" + resolvedPath);
+        }
+        return resolvedPath;
+    }
+
+    private void saveTextHistory(TabAiModelBund tabAiModelBund, TabAiModel tabAiModel,
+                                 String resultText, long startTime) {
+        TabAiHistory tabAiHistory = new TabAiHistory();
+        tabAiHistory.setBundName(tabAiModel.getAiName());
+        tabAiHistory.setModelName(tabAiModel.getAiName());
+        tabAiHistory.setModelId(tabAiModelBund.getModelName());
+        tabAiHistory.setSendUrl(tabAiModelBund.getSaveUrl());
+        tabAiHistory.setSendTime((System.currentTimeMillis() - startTime) + "");
+        tabAiHistory.setSendMsg(resultText);
+        tabAiHistory.setRemake("");
+        tabAiHistoryMapper.insert(tabAiHistory);
+    }
+
     @Override
     public Result<String>  startAi(TabAiModelBund tabAiModelBund, String path, String userId) {
 
@@ -1086,11 +1240,19 @@ public class TabAiHistoryServiceImpl extends ServiceImpl<TabAiHistoryMapper, Tab
                     break;
                 }
                 case "20":{
-                    log.info("【ONNX】{}",tabAiModelBund.getSpaceTwo());
-
-
-
-                    break;
+                    log.info("【ONNX】识别内容={}", aiModel.getModelDify());
+                    if (aiModel.getModelDify() == null) {
+                        return Result.error("ONNX模型未配置识别内容(modelDify)");
+                    }
+                    if (aiModel.getModelDify() == 40) {
+                        return this.saveOnnxExpression(tabAiModelBund, path) == 0
+                                ? Result.OK("表情识别成功！") : Result.error("表情识别失败");
+                    }
+                    if (aiModel.getModelDify() == 10) {
+                        return this.saveOnnxOcr(tabAiModelBund, path) == 0
+                                ? Result.OK("OCR识别成功！") : Result.error("OCR识别失败");
+                    }
+                    return Result.error("暂不支持的ONNX识别内容(modelDify)：" + aiModel.getModelDify());
                 }
             }
 

@@ -4,10 +4,13 @@ import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import lombok.extern.slf4j.Slf4j;
 import lombok.var;
+import org.jeecg.modules.ros2.service.MappingGridService;
 import org.jeecg.modules.ros2.service.RobotHardwareService;
+import org.jeecg.modules.ros2.service.RotationSafetyService;
 import org.jeecg.modules.ros2.service.VelocityMonitorService;
 import org.jeecg.modules.ros2.service.WebSocketPushService;
 import org.springframework.web.socket.CloseStatus;
@@ -53,6 +56,10 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
     private final VelocityMonitorService velocityService;
     private final WebSocketPushService   pushService;
     private final RobotHardwareService   hardwareService;
+    /** 原地旋转安全判定:每帧点云在抽稀前先喂给它做净空累积 */
+    private final RotationSafetyService  rotationSafetyService;
+    /** 建图占据栅格:同样吃抽稀前的全量点,让保存地图不必再杀 fast_lio 取 PCD */
+    private final MappingGridService     mappingGridService;
     private final Gson gson = new Gson();
     private final Consumer<WebSocketSession> onConnectCallback;
     private final Runnable onDisconnectCallback;
@@ -98,11 +105,33 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
     private volatile double cachedLinearVel  = 0.0;
     private volatile double cachedAngularVel = 0.0;
     private volatile long lastSmoothedCmdVelMs = 0L;
+    /** 最后一次收到**任何** /cmd_vel 的时刻。导航失败时用它区分"Nav2 没输出速度"和"底盘没执行" */
+    private volatile long lastAnyCmdVelMs = 0L;
+
+    // ====================== 导航状态去重 ======================
+
+    /** 上一次已推送过的 (目标 uuid, status)，避免终态被反复重播时前端每 500ms 弹一次提示 */
+    private String lastNavGoalUuid = "";
+    private int lastNavStatus = -1;
+
+    // ====================== 里程计位姿缓存 ======================
+
+    /**
+     * 最近一次 /Odometry 的位姿(camera_init 系)。
+     * /cloud_registered 的点也在 camera_init 系,旋转安全判定要靠这个位姿把点反变换回车体系,
+     * 所以必须在 navMode 提前 return 之前就缓存下来(导航模式恰恰是最需要旋转判定的时候)。
+     */
+    private volatile double cachedOdomX     = 0.0;
+    private volatile double cachedOdomY     = 0.0;
+    private volatile double cachedOdomTheta = 0.0;
+    private volatile boolean hasOdomPose    = false;
 
     public ROS2WebSocketHandler(
             VelocityMonitorService velocityService,
             WebSocketPushService pushService,
             RobotHardwareService hardwareService,
+            RotationSafetyService rotationSafetyService,
+            MappingGridService mappingGridService,
             Consumer<WebSocketSession> onConnectCallback,
             Runnable onDisconnectCallback,
             Consumer<JsonObject> onServiceResponseCallback,
@@ -110,6 +139,8 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
         this.velocityService           = velocityService;
         this.pushService               = pushService;
         this.hardwareService           = hardwareService;
+        this.rotationSafetyService     = rotationSafetyService;
+        this.mappingGridService        = mappingGridService;
         this.onConnectCallback         = onConnectCallback;
         this.onDisconnectCallback      = onDisconnectCallback;
         this.onServiceResponseCallback = onServiceResponseCallback;
@@ -233,6 +264,37 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
                 }
             }
 
+            // ★ 原地旋转安全判定:必须用**全量**点(在下面按 step 抽稀之前)。
+            //   抽稀是为了前端渲染,一根立柱/一个人完全可能整个落在采样间隔里被漏掉,
+            //   拿抽稀后的点做安全判定等于漏检。
+            if (rotationSafetyService != null && hasOdomPose) {
+                rotationSafetyService.updateFromCloud(
+                        rawData, pointStep, totalPoints,
+                        xOffset, yOffset, zOffset,
+                        cachedOdomX, cachedOdomY, cachedOdomTheta);
+            }
+
+            // ★ 建图栅格累积:同样要用全量点。开关在 service 自己身上(由 /start、/cancel 控制),
+            //   这里无条件喂,它内部判 enabled。
+            //   ⚠ 别改成判 navMode:那是本类的实例字段,而 ROS2BridgeService.connect() 每次重连
+            //     都 new 一个新 handler,navMode 被重置回 true,累积就静默停了。
+            if (mappingGridService != null) {
+                mappingGridService.updateFromCloud(
+                        rawData, pointStep, totalPoints, xOffset, yOffset, zOffset);
+            }
+
+            // 推给前端的高度范围必须和栅格累积范围**完全一致**,否则前端就有盲区。
+            //
+            // ⚠ 这里曾写死 -1f ~ 10f,而栅格收的是 mapping.grid.z-min/z-max(默认 -5 ~ 10),
+            //   于是 z ∈ [-5, -1) 的点前端一个都看不到、却全都进了栅格。
+            //   camera_init 的 z 原点是雷达开机位置(离地约 1m),**地面正好在 z ≈ -1.0**,
+            //   地面不平/车身俯仰/下坡时地面点就落到 -1 以下 → 前端丢掉、栅格照收 →
+            //   保存时不开高度过滤(-99~99)就全画进 pgm。现象正是
+            //   "预览干净、存出来地上莫名多一簇密集点"(近场地面回波最密,呈放射状一小片)。
+            //   这类不对称过滤是最难查的:两边看的是同一帧,却只有一边显示。
+            float pushZMin = mappingGridService != null ? (float) mappingGridService.getAcceptZMin() : -5f;
+            float pushZMax = mappingGridService != null ? (float) mappingGridService.getAcceptZMax() : 10f;
+
             JSONArray points = new JSONArray();
             for (int i = 0; i < totalPoints; i += step) {
                 int base = i * pointStep;
@@ -242,9 +304,10 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
                 float y = readFloat(rawData, base + yOffset);
                 float z = readFloat(rawData, base + zOffset);
 
-                if (Float.isNaN(x) || Float.isNaN(y) || Float.isInfinite(x) || Float.isInfinite(y))
+                if (Float.isNaN(x) || Float.isNaN(y) || Float.isInfinite(x) || Float.isInfinite(y)
+                        || Float.isNaN(z) || Float.isInfinite(z))
                     continue;
-                if (z < -0.5f || z > 2.0f) continue;
+                if (z < pushZMin || z > pushZMax) continue;
 
                 JSONObject pt = new JSONObject();
                 pt.put("x", Math.round(x * 1000.0) / 1000.0);
@@ -267,7 +330,14 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
             long now = System.currentTimeMillis();
             long last = lastPointCloudLogMs.get();
             if (now - last >= POINT_CLOUD_LOG_INTERVAL_MS && lastPointCloudLogMs.compareAndSet(last, now)) {
-                log.info("📡 点云正常接收: 原始{}点 → 推送{}点", totalPoints, points.size());
+                // 带上栅格状态:光看"点云正常接收"会误以为建图数据也在攒,
+                // 实际累积开关没开时一个格都不会进,保存时才发现是空图
+                log.info("📡 点云正常接收: 原始{}点 → 推送{}点 | 建图栅格: {}",
+                        totalPoints, points.size(),
+                        mappingGridService == null ? "未接入"
+                                : (mappingGridService.isEnabled()
+                                        ? "累积中 " + mappingGridService.cellCount() + " 格"
+                                        : "未开始(点「开始建图」)"));
             }
 
             pushService.pushToAll("cloud_update", cloudData);
@@ -303,6 +373,12 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
             double posX = position.get("x").getAsDouble();
             double posY = position.get("y").getAsDouble();
             double theta = quaternionToYaw(orientation);
+
+            // 0) 始终缓存位姿(旋转安全判定要用,必须在下面 navMode return 之前)
+            cachedOdomX     = posX;
+            cachedOdomY     = posY;
+            cachedOdomTheta = theta;
+            hasOdomPose     = true;
 
             // 1) 始终缓存速度
             double linearVel  = 0;
@@ -450,8 +526,31 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
             JsonArray statusList = msg.getAsJsonArray("status_list");
             if (statusList == null || statusList.size() == 0) return;
 
-            JsonObject latestGoal = statusList.get(statusList.size() - 1).getAsJsonObject();
+            // ⚠ status_list 里同时存着"当前目标"和"已结束的历史目标"——rclcpp_action 在
+            //   result_timeout 内不会丢弃 goal handle，而遍历顺序来自 unordered_map，
+            //   最新的目标**不保证**在数组末尾。
+            //   原来直接取 size()-1，会把上一个目标遗留的 status=4 当成本次导航的结果推给前端
+            //   → 表现为"刚点新目标就弹 🎉导航完成"、"点了没反应"，且完全随机复现。
+            //   正确做法：按 goal_info.stamp 取时间戳最大的那条。
+            JsonObject latestGoal = null;
+            long latestStamp = Long.MIN_VALUE;
+            for (int i = 0; i < statusList.size(); i++) {
+                JsonObject item = statusList.get(i).getAsJsonObject();
+                long stampNs = extractGoalStampNs(item);
+                if (stampNs >= latestStamp) {
+                    latestStamp = stampNs;
+                    latestGoal = item;
+                }
+            }
+            if (latestGoal == null) return;
+
             int status = latestGoal.get("status").getAsInt();
+            String uuid = extractGoalUuid(latestGoal);
+
+            // 终态(4/5/6)会被持续重播，同一目标的同一状态只推一次
+            if (status == lastNavStatus && uuid.equals(lastNavGoalUuid)) return;
+            lastNavStatus = status;
+            lastNavGoalUuid = uuid;
 
             String statusText;
             boolean navigating;
@@ -481,12 +580,54 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
                 cachedLinearVel  = 0.0;
                 cachedAngularVel = 0.0;
             } else if (failed) {
-                log.warn("❌ 导航失败! 状态: {}", statusText);
+                // 光一句"导航失败"没法往下查。最有区分度的一条信息是:这次导航期间到底有没有
+                // 收到过 /cmd_vel —— 一次都没有 = Nav2 的 controller 根本没跑起来(定位/TF 的问题),
+                // 而不是底盘或 PLC 的问题,不用去查 plc.enabled、点位表那一摊。
+                long sinceCmd = lastAnyCmdVelMs == 0 ? -1 : System.currentTimeMillis() - lastAnyCmdVelMs;
+                if (sinceCmd < 0) {
+                    log.warn("❌ 导航失败! 状态: {} | 本次全程未收到任何 /cmd_vel —— "
+                            + "Nav2 的 controller 一次都没输出速度，问题在定位/TF(map→camera_init)，"
+                            + "不在底盘。建图中导航必然如此: 此时 AMCL 没在跑，没人发布 map→camera_init", statusText);
+                } else {
+                    log.warn("❌ 导航失败! 状态: {} | 最后一次 /cmd_vel 在 {}ms 前(linear={}, angular={})",
+                            statusText, sinceCmd,
+                            String.format("%.3f", cachedLinearVel), String.format("%.3f", cachedAngularVel));
+                }
             }
 
         } catch (Exception e) {
             log.warn("处理导航状态失败: {}", e.getMessage());
         }
+    }
+
+    /** 取 action_msgs/GoalStatus 的 goal_info.stamp，转成纳秒；取不到返回 0 */
+    private static long extractGoalStampNs(JsonObject statusItem) {
+        JsonObject info = statusItem.getAsJsonObject("goal_info");
+        if (info == null) return 0L;
+        JsonObject stamp = info.getAsJsonObject("stamp");
+        if (stamp == null) return 0L;
+        return stamp.get("sec").getAsLong() * 1_000_000_000L + stamp.get("nanosec").getAsLong();
+    }
+
+    /**
+     * 取目标 UUID 的字符串形式。
+     * rosbridge 对 uint8[16] 可能编码成 base64 字符串，也可能是数字数组，两种都要认。
+     */
+    private static String extractGoalUuid(JsonObject statusItem) {
+        JsonObject info = statusItem.getAsJsonObject("goal_info");
+        if (info == null) return "";
+        JsonObject goalId = info.getAsJsonObject("goal_id");
+        if (goalId == null || !goalId.has("uuid")) return "";
+        JsonElement uuid = goalId.get("uuid");
+        if (uuid.isJsonArray()) {
+            JsonArray arr = uuid.getAsJsonArray();
+            StringBuilder sb = new StringBuilder(32);
+            for (int i = 0; i < arr.size(); i++) {
+                sb.append(String.format("%02x", arr.get(i).getAsInt() & 0xFF));
+            }
+            return sb.toString();
+        }
+        return uuid.getAsString();
     }
 
     // ======================== cmd_vel ========================
@@ -511,11 +652,12 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
             velocityService.handleVelocityMessage(msg);
 
             long now = System.currentTimeMillis();
+            lastAnyCmdVelMs = now;
             if ("/cmd_vel_smoothed".equals(topic)) {
                 lastSmoothedCmdVelMs = now;
-                hardwareService.sendVelocity(linearX, angularZ);
+                hardwareService.sendVelocity(linearX, angularZ, true);
             } else if (now - lastSmoothedCmdVelMs > 500) {
-                hardwareService.sendVelocity(linearX, angularZ);
+                hardwareService.sendVelocity(linearX, angularZ, true);
             }
 
         } catch (Exception e) {

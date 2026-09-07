@@ -110,14 +110,19 @@ public class MapController {
     /**
      * 车体 footprint(扒粮机 AGV,长5.5m×宽2.1m,长宽比大,不能用圆形 robot_radius 近似)。
      * 坐标以雷达安装点(= body 坐标系原点,fast_lio 惯例)为原点,x 轴指向前进方向(扒粮机构一端):
-     *   前端(扒粮机构): +1.0m   后端(履带底盘尾部): -4.5m   半宽: ±1.05m
+     *   前端(扒粮机构): +0.5m   后端(履带底盘尾部): -5.0m
+     * 横向雷达**不在车身中线上**(现场实测): 距左侧边缘 +1.2m,距右侧边缘 -0.9m。
+     * 因此这是一个前后、左右都不对称的矩形,四个方向的数值都不能互相推导。
+     * 该数值必须与机器人端 livox_self_filter.py 的过滤箱体保持一致,否则
+     * "SLAM 输入过滤掉的车体范围"和"costmap 认为的车体范围"对不上。
+     *
      * 车体自身点云(输送管/底盘)会落在这个多边形内,由 obstacle_layer 的
      * footprint_clearing_enabled 自动清除为可通行区域,不再需要旧版 SELF_FILTER_RADIUS
      * 那种"以雷达为圆心、不分方向"的全向 min-range 过滤(那是给宇树L1腿部360°自遮挡设计的,
      * 对前后极不对称的这台车不适用)。
      */
     private static final String ROBOT_FOOTPRINT =
-            "[[1.0, -1.05], [1.0, 1.05], [-4.5, 1.05], [-4.5, -1.05]]";
+            "[[0.5, -0.9], [0.5, 1.2], [-5.0, 1.2], [-5.0, -0.9]]";
 
     /** 传感器近距离噪声过滤(m)。自身遮挡已交给 footprint 自动清除,这里只过滤贴着镜头的噪点 */
     private static final double SENSOR_MIN_RANGE = 0.05;
@@ -301,10 +306,10 @@ public class MapController {
         JsonObject args = new JsonObject();
         args.addProperty("map_url", yamlPath);
 
-        // 8s 足够;正常 rosbridge 长连接毫秒级返回。注意 load_map 响应会带回整张地图,
-        // 已在 ROS2WebSocketHandler 里做了分片拼接,这里直接拿 values 即可。
+        // 15s: load_map 响应会带回整张地图(已在 ROS2WebSocketHandler 里做了分片拼接),
+        // 实测链路延迟较高时 8s 不够用, 15s 留足余量。
         JsonObject values = ros2BridgeService.callService(
-                "/map_server/load_map", "nav2_msgs/srv/LoadMap", args, 8000);
+                "/map_server/load_map", "nav2_msgs/srv/LoadMap", args, 15000);
         if (values == null) {
             log.error("[load] load_map 超时/无响应");
             return false;
@@ -332,7 +337,8 @@ public class MapController {
      * 用相对路径建链接,这样整个 maps 目录搬到别处也不会失效。
      * 部分文件系统(如某些 NTFS/FAT)不支持软链接,会回退到文件拷贝模式。
      */
-    private void updateLastUsedSymlink(String mapName) {
+    /** public：MappingController 保存完新地图后也要更新它，好让重启的 robot_full 直接加载新图 */
+    public void updateLastUsedSymlink(String mapName) {
         Path lastUsed = Paths.get(MAP_DIR, LAST_USED_LINK);
         Path target   = Paths.get(mapName + ".yaml");      // 相对路径
 
@@ -534,17 +540,16 @@ public class MapController {
         }
         poseAutoSaveScheduler = Executors.newSingleThreadScheduledExecutor();
         final String finalMapName = mapName;
+        // ⚠ 这里绝对不能 fork `ros2 topic echo /amcl_pose`：
+        //   每 5s 起一个 bash + source 两个 setup.bash + 拉起一个完整的 rclpy 节点做 DDS 发现，
+        //   光发现阶段就常常超过 timeout，实测每次固定 4.5s 超时、输出 0 字节 —— 一次都没存成过，
+        //   却持续占着 CPU 和 DDS 发现流量，反过来加剧点云/TF 的延迟尖峰。
+        //   /amcl_pose 已经由 rosbridge 常态订阅并缓存在 ROS2BridgeService，直接读即可。
         poseAutoSaveScheduler.scheduleAtFixedRate(() -> {
             try {
-                String cmd = "source " + ROS_BASH + " && source " + SETUP_BASH
-                        + " && timeout 3 ros2 topic echo /amcl_pose"
-                        + " --field pose.pose --once 2>&1";
-                String out = runCommand(cmd, 4);
-                if (out.contains("position")) {
-                    double x     = parseRosField(out, "x");
-                    double y     = parseRosField(out, "y");
-                    double theta = parseYawFromQuaternion(out);
-                    savePose(finalMapName, x, y, theta);
+                double[] p = ros2BridgeService.getLastAmclPose();
+                if (p != null) {
+                    savePose(finalMapName, p[0], p[1], p[2]);
                 }
             } catch (Exception e) {
                 log.warn("[位姿自动保存] 跳过: {}", e.getMessage());
@@ -695,11 +700,27 @@ public class MapController {
                 + "    laser_max_range: 30.0\n"
                 + "    laser_min_range: -1.0\n"
                 + "    resample_interval: 3\n"
-                + "    max_beams: 360\n"
+                // ⚠ 不要往上调。likelihood_field 的计算量正比于 max_beams × 粒子数,
+                //   曾配 360 → 360×2000 = 72 万次查表/帧,AMCL 跟不上 10Hz 的 /scan,
+                //   它的 scan 消息过滤器队列(深度 10)一路攒满,实测处理的是 1.5 秒前的那帧。
+                //   后果不是"定位慢一点"这么简单,见下面 transform_tolerance 的注释。
+                //   60 是 nav2 默认值,对 360 线扫描已经足够。
+                + "    max_beams: 60\n"
                 + "    max_particles: 2000\n"
                 + "    min_particles: 500\n"
                 + "    robot_model_type: nav2_amcl::DifferentialMotionModel\n"
-                + "    transform_tolerance: 1.0\n"
+                // AMCL 发的 map→camera_init TF,时间戳 = 它处理的那帧 scan 的时间戳 + 本值。
+                // 值太小 → TF 早于当前时刻过期 → controller_server 查 map→camera_init 报
+                //   [tf_help] Transform data too old when converting from map to camera_init
+                // ⚠ 而 nav2 的 ControllerServer::isGoalReached() **不检查这次转换的返回值**:
+                //     transformPose(tf, "camera_init", end_pose_, transformed_end_pose, tol);
+                //     return goal_checker_->isGoalReached(pose, transformed_end_pose.pose, vel);
+                //   转换失败时 transformed_end_pose 保持默认的 (0,0,0),而 camera_init 原点
+                //   就是 fast_lio 启动时车所在位置 —— 车还没走远就落在 xy_goal_tolerance(0.25m)
+                //   以内 → 直接判定"Reached the goal!"。
+                //   2026-08 现场就是这样:路径正常算出、车动了 1.3s、TF 一超时立刻报导航完成。
+                // 所以这个值必须覆盖住 AMCL 的实际处理滞后,2.0 是留了余量的兜底。
+                + "    transform_tolerance: 2.0\n"
                 + "    update_min_a: 0.2\n"
                 + "    update_min_d: 0.25\n"
                 + "    tf_broadcast: true\n"
@@ -756,7 +777,9 @@ public class MapController {
                 + "      lookahead_dist: 2.5\n"
                 + "      min_lookahead_dist: 1.5\n"
                 + "      max_lookahead_dist: 4.0\n"
-                + "      transform_tolerance: 0.1\n"
+                // tf_help(map→camera_init 桥接节点)实测延迟可达0.6s+,
+                // 0.1s 过紧会导致 controller_server 拿姿态失败/误判"到达目标"; 放宽到 0.5s
+                + "      transform_tolerance: 0.5\n"
                 + "      use_velocity_scaled_lookahead_dist: false\n"
                 + "      use_regulated_linear_velocity_scaling: true\n"
                 + "      use_cost_regulated_linear_velocity_scaling: false\n"
@@ -777,6 +800,7 @@ public class MapController {
                 + "      publish_frequency: 2.0\n"
                 + "      global_frame: " + ODOM_FRAME + "\n"
                 + "      robot_base_frame: " + BASE_FRAME + "\n"
+                + "      transform_tolerance: 0.5\n"
                 + "      rolling_window: true\n"
                 + "      width: 16\n"
                 + "      height: 16\n"
@@ -797,6 +821,13 @@ public class MapController {
                 + "          obstacle_max_range: 5.5\n"
                 + "          raytrace_min_range: " + String.format("%.2f", SENSOR_MIN_RANGE) + "\n"
                 + "          raytrace_max_range: 8.0\n"
+                // ④ inf_is_valid 必须开。pc2scan 配的是 use_inf:True,没打到东西的角度输出 inf;
+                //    而 nav2 默认 inf_is_valid:False 会把 inf 射线整条丢弃,不参与清障。
+                //    mid360 是非重复扫描,单帧点本就散,再被 self_filter 丢掉近三成、
+                //    被 min_height 0.1~max_height 1.5 卡掉大部分,720 个 bin 里绝大多数是 inf
+                //    → 人走过时恰好被点中标成障碍,人走了以后那个角度几乎永远是 inf,清不掉,
+                //    表现就是"人经过后障碍残留很久"。开了之后 inf 按 raytrace_max_range 清障。
+                + "          inf_is_valid: True\n"
                 + "          clearing: True\n"
                 + "          marking: True\n"
                 + "      inflation_layer:\n"
@@ -816,6 +847,7 @@ public class MapController {
                 + "      publish_frequency: 1.0\n"
                 + "      global_frame: map\n"
                 + "      robot_base_frame: " + BASE_FRAME + "\n"
+                + "      transform_tolerance: 0.5\n"
                 + "      footprint: \"" + ROBOT_FOOTPRINT + "\"\n"
                 + "      resolution: 0.05\n"
                 + "      track_unknown_space: true\n"
@@ -837,6 +869,13 @@ public class MapController {
                 + "          obstacle_max_range: 5.5\n"
                 + "          raytrace_min_range: " + String.format("%.2f", SENSOR_MIN_RANGE) + "\n"
                 + "          raytrace_max_range: 8.0\n"
+                // ④ inf_is_valid 必须开。pc2scan 配的是 use_inf:True,没打到东西的角度输出 inf;
+                //    而 nav2 默认 inf_is_valid:False 会把 inf 射线整条丢弃,不参与清障。
+                //    mid360 是非重复扫描,单帧点本就散,再被 self_filter 丢掉近三成、
+                //    被 min_height 0.1~max_height 1.5 卡掉大部分,720 个 bin 里绝大多数是 inf
+                //    → 人走过时恰好被点中标成障碍,人走了以后那个角度几乎永远是 inf,清不掉,
+                //    表现就是"人经过后障碍残留很久"。开了之后 inf 按 raytrace_max_range 清障。
+                + "          inf_is_valid: True\n"
                 + "          clearing: True\n"
                 + "          marking: True\n"
                 + "      inflation_layer:\n"
@@ -1072,27 +1111,6 @@ public class MapController {
         Matcher m = Pattern.compile("\"" + key + "\"\\s*:\\s*([\\-0-9.eE]+)").matcher(json);
         if (m.find()) return Double.parseDouble(m.group(1));
         throw new IllegalArgumentException("JSON key not found: " + key);
-    }
-
-    private double parseRosField(String out, String key) {
-        Matcher m = Pattern.compile("(?m)^\\s*" + key + ":\\s*([\\-0-9.eE]+)").matcher(out);
-        double val = 0;
-        while (m.find()) val = Double.parseDouble(m.group(1));
-        return val;
-    }
-
-    private double parseYawFromQuaternion(String out) {
-        try {
-            Matcher m = Pattern.compile(
-                    "orientation[\\s\\S]*?z:\\s*([\\-0-9.eE]+)[\\s\\S]*?w:\\s*([\\-0-9.eE]+)"
-            ).matcher(out);
-            if (m.find()) {
-                double qz = Double.parseDouble(m.group(1));
-                double qw = Double.parseDouble(m.group(2));
-                return 2.0 * Math.atan2(qz, qw);
-            }
-        } catch (Exception ignored) {}
-        return 0.0;
     }
 
     // ===================== 地图列表 =====================

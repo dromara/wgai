@@ -1,6 +1,7 @@
 package org.jeecg.modules.demo.video.util.ocr;
 
 import ai.onnxruntime.*;
+import lombok.extern.slf4j.Slf4j;
 import org.opencv.core.*;
 import org.opencv.imgcodecs.Imgcodecs;
 import org.opencv.imgproc.Imgproc;
@@ -14,6 +15,7 @@ import java.util.*;
  * PaddleOCR完整实现 - 支持中文、英文、越南语
  * 包含完整的DBNet后处理和CTC解码
  */
+@Slf4j
 public class PaddleOCRCompleteV3 {
 
     private OrtEnvironment env;
@@ -34,26 +36,37 @@ public class PaddleOCRCompleteV3 {
     private static final String DICT_CH = "F:\\JAVAAI\\OCR\\Paddle\\ppocr_keys_v1.txt";
     private static final String DICT_LATIN = "F:\\JAVAAI\\OCR\\Paddle\\latin_dict.txt";
 
-    static {
-        System.load("F:\\JAVAAI\\opencv481\\opencv\\build\\java\\x64\\opencv_java481.dll");
-    }
+
 
     public PaddleOCRCompleteV3() throws OrtException {
+        this(DET_MODEL, REC_MODEL_CH, REC_MODEL_LATIN, DICT_CH, DICT_LATIN);
+    }
+
+    /**
+     * 使用业务表中配置的 PaddleOCR 模型。传入中文识别模型及其字典即可。
+     */
+    public PaddleOCRCompleteV3(String detModelPath, String recModelChPath, String dictChPath) throws OrtException {
+        this(detModelPath, recModelChPath, null, dictChPath, null);
+    }
+
+    private PaddleOCRCompleteV3(String detModelPath, String recModelChPath, String recModelViPath,
+                                String dictChPath, String dictViPath) throws OrtException {
         env = OrtEnvironment.getEnvironment();
 
         // 加载模型
         OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
-        detSession = env.createSession(DET_MODEL, opts);
-        recSessionCh = env.createSession(REC_MODEL_CH, opts);
-        recSessionVi = env.createSession(REC_MODEL_LATIN, opts);
+        detSession = env.createSession(detModelPath, opts);
+        recSessionCh = env.createSession(recModelChPath, opts);
+        if (recModelViPath != null) {
+            recSessionVi = env.createSession(recModelViPath, opts);
+        }
 
         // 加载字符集
-        charsCh = loadCharacterDict(DICT_CH);
-        charsVi = loadCharacterDict(DICT_LATIN);
+        charsCh = loadCharacterDict(dictChPath);
+        charsVi = dictViPath == null ? charsCh : loadCharacterDict(dictViPath);
 
-        System.out.println("✅ 模型加载成功");
-        System.out.println("   中文字符集: " + charsCh.size() + " 个字符");
-        System.out.println("   拉丁字符集: " + charsVi.size() + " 个字符");
+        log.info("PaddleOCR模型加载成功，检测模型={}，中文识别模型={}，中文字符集={}个",
+                detModelPath, recModelChPath, charsCh.size());
     }
 
     /**
@@ -80,13 +93,13 @@ public class PaddleOCRCompleteV3 {
                     }
                 }
                 reader.close();
-                System.out.println("✅ 加载字符集: " + dictPath);
+                log.info("PaddleOCR字符集加载成功：{}，共{}个字符", dictPath, characters.size() - 1);
             } else {
-                System.out.println("⚠️  字符集文件不存在: " + dictPath + "，使用默认字符集");
+                log.warn("PaddleOCR字符集文件不存在：{}，使用默认字符集", dictPath);
                 characters.addAll(getDefaultCharacters());
             }
         } catch (Exception e) {
-            System.out.println("⚠️  加载字符集失败，使用默认字符集");
+            log.warn("PaddleOCR字符集加载失败，使用默认字符集：{}", dictPath, e);
             characters.addAll(getDefaultCharacters());
         }
 
@@ -120,20 +133,21 @@ public class PaddleOCRCompleteV3 {
     /**
      * 完整OCR识别
      */
-    public List<OCRResult> recognize(String imagePath, String lang) {
+    public List<OCRResult> recognize(String imagePath, String lang) throws Exception {
         List<OCRResult> results = new ArrayList<>();
-
+        Mat img = null;
         try {
-            Mat img = Imgcodecs.imread(imagePath);
+            log.info("PaddleOCR开始识别，图片={}，语言={}", imagePath, lang);
+            img = Imgcodecs.imread(imagePath);
             if (img.empty()) {
                 throw new RuntimeException("无法读取图片: " + imagePath);
             }
 
-            System.out.println("\n原始图片尺寸: " + img.width() + "x" + img.height());
+            log.info("PaddleOCR图片尺寸={}x{}", img.width(), img.height());
 
             // 1. 文本检测
             List<TextBox> boxes = detectText(img);
-            System.out.println("检测到 " + boxes.size() + " 个文本区域");
+            log.info("PaddleOCR检测到{}个文本区域", boxes.size());
 
             // 2. 文本识别
             for (int i = 0; i < boxes.size(); i++) {
@@ -141,30 +155,31 @@ public class PaddleOCRCompleteV3 {
 
                 // 裁剪文本区域
                 Mat cropped = cropTextRegion(img, box.points);
-                if (cropped.empty() || cropped.width() <=3 || cropped.height() <= 3) {
-                    continue;
+                try {
+                    if (cropped.empty() || cropped.width() <= 3 || cropped.height() <= 3) {
+                        continue;
+                    }
+
+                    log.info("PaddleOCR文本块{}，检测框={}，裁剪尺寸={}x{}",
+                            i + 1, formatBox(box.points), cropped.width(), cropped.height());
+                    String text = recognizeText(cropped, lang);
+                    OCRResult result = new OCRResult();
+                    result.text = text;
+                    result.box = box.points;
+                    result.score = box.score;
+                    results.add(result);
+                    log.info("PaddleOCR文本块{}，检测置信度={}，识别文本={}",
+                            i + 1, String.format("%.2f%%", box.score * 100), text);
+                } finally {
+                    cropped.release();
                 }
-                System.out.println("🟡 输入图片尺寸: " + img.width() + "x" + img.height());
-
-                // 识别文本
-                String text = recognizeText(cropped, lang);
-
-                OCRResult result = new OCRResult();
-                result.text = text;
-                result.box = box.points;
-                result.score = box.score;
-
-                results.add(result);
-
-                System.out.println((i + 1) + ". " + text + " (置信度: " +
-                        String.format("%.2f%%", box.score * 100) + ")");
             }
-
-        } catch (Exception e) {
-            e.printStackTrace();
+            return results;
+        } finally {
+            if (img != null) {
+                img.release();
+            }
         }
-
-        return results;
     }
 
     /**
@@ -173,57 +188,49 @@ public class PaddleOCRCompleteV3 {
     private List<TextBox> detectText(Mat img) throws OrtException {
         // 预处理
         Mat resized = preprocessDetection(img);
-        float[] inputData = matToFloatArray(resized);
-
-        // 推理
-        long[] shape = {1, 3, resized.height(), resized.width()};
-        OnnxTensor tensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputData), shape);
-
-        Map<String, OnnxTensor> inputs = Collections.singletonMap("x", tensor);
-        OrtSession.Result result = detSession.run(inputs);
-
-        // 后处理
-        List<TextBox> boxes = postprocessDetection(result, img.size(), resized.size());
-
-        tensor.close();
-        result.close();
-
-        return boxes;
+        try {
+            float[] inputData = matToFloatArray(resized);
+            long[] shape = {1, 3, resized.height(), resized.width()};
+            try (OnnxTensor tensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputData), shape);
+                 OrtSession.Result result = detSession.run(Collections.singletonMap(
+                         detSession.getInputNames().iterator().next(), tensor))) {
+                return postprocessDetection(result, img.size(), resized.size());
+            }
+        } finally {
+            resized.release();
+        }
     }
 
     /**
      * 文本识别
      */
     private String recognizeText(Mat img, String lang) throws OrtException {
-        OrtSession session = lang.equals("vi") ? recSessionVi : recSessionCh;
-        List<String> characters = lang.equals("vi") ? charsVi : charsCh;
+        boolean useVietnameseModel = lang.equals("vi") && recSessionVi != null;
+        OrtSession session = useVietnameseModel ? recSessionVi : recSessionCh;
+        List<String> characters = useVietnameseModel ? charsVi : charsCh;
 
         // 预处理
-        Mat resized = preprocessRecognition(img);
-        if (resized.width() <= 1 || resized.height() <= 1) {
-            System.out.println("⚠️ 无效输入图像，跳过识别");
-            return "";
+        long[] modelInputShape = getModelInputShape(session);
+        int targetHeight = getPositiveDimension(modelInputShape, 2, 48);
+        int fixedWidth = getPositiveDimension(modelInputShape, 3, -1);
+        Mat resized = preprocessRecognition(img, targetHeight, fixedWidth);
+        try {
+            if (resized.width() <= 1 || resized.height() <= 1) {
+                log.warn("PaddleOCR无效文本区域，跳过识别");
+                return "";
+            }
+            float[] inputData = matToFloatArray(resized);
+            long[] shape = {1, 3, targetHeight, resized.width()};
+            log.info("PaddleOCR识别模型输入声明={}，实际输入={}",
+                    Arrays.toString(modelInputShape), Arrays.toString(shape));
+            try (OnnxTensor tensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputData), shape);
+                 OrtSession.Result result = session.run(Collections.singletonMap(
+                         session.getInputNames().iterator().next(), tensor))) {
+                return ctcDecode(result, characters);
+            }
+        } finally {
+            resized.release();
         }
-        float[] inputData = matToFloatArray(resized);
-
-        // 推理
-        long[] shape = {1, 3, 48, resized.width()};
-        if (shape[3] <= 1) {
-            System.out.println("⚠️ 非法Tensor shape: " + Arrays.toString(shape));
-            return "";
-        }
-        OnnxTensor tensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputData), shape);
-
-        Map<String, OnnxTensor> inputs = Collections.singletonMap("x", tensor);
-        OrtSession.Result result = session.run(inputs);
-
-        // CTC解码
-        String text = ctcDecode(result, characters);
-
-        tensor.close();
-        result.close();
-
-        return text;
     }
 
     /**
@@ -242,11 +249,10 @@ public class PaddleOCRCompleteV3 {
         if (newHeight < 32) newHeight = 32;
 
         Imgproc.resize(img, processed, new Size(newWidth, newHeight));
-        Imgproc.cvtColor(processed, processed, Imgproc.COLOR_BGR2RGB);
         processed.convertTo(processed, CvType.CV_32F, 1.0 / 255.0);
-
-        Core.subtract(processed, new Scalar(0.5, 0.5, 0.5), processed);
-        Core.divide(processed, new Scalar(0.5, 0.5, 0.5), processed);
+        // 与 PaddleOCR DB 检测模型的 NormalizeImage 保持一致。
+        Core.subtract(processed, new Scalar(0.485, 0.456, 0.406), processed);
+        Core.divide(processed, new Scalar(0.229, 0.224, 0.225), processed);
 
         return processed;
     }
@@ -254,27 +260,47 @@ public class PaddleOCRCompleteV3 {
     /**
      * 识别预处理
      */
-    // --- 修正版 ---
-    private Mat preprocessRecognition(Mat img) {
-        System.out.println("⏩ preprocessRecognition input: " + img.width() + "x" + img.height());
+    private Mat preprocessRecognition(Mat img, int targetHeight, int fixedWidth) {
         Mat processed = new Mat();
 
-        int targetHeight = 48;
-        int targetWidth = (int) Math.round(img.width() * (targetHeight / (double) img.height()));
-
-        if (targetWidth > 320) targetWidth = 320;
-        if (targetWidth < 16) targetWidth = 16; // 最小宽度16，保证卷积不出错
-
-        System.out.println("➡️ resize to: " + targetWidth + "x" + targetHeight);
+        int targetWidth = (int) Math.ceil(img.width() * (targetHeight / (double) img.height()));
+        // PaddleOCR 中文 CTC 识别的标准推理输入为 [1, 3, H, 320]。
+        // 即使 ONNX 的宽度是动态维度，也按官方逻辑补零到320，避免不同宽度影响结果。
+        int maxWidth = fixedWidth > 0 ? fixedWidth : 320;
+        if (targetWidth > maxWidth) targetWidth = maxWidth;
+        if (targetWidth < 16) targetWidth = 16;
 
         Imgproc.resize(img, processed, new Size(targetWidth, targetHeight));
-        Imgproc.cvtColor(processed, processed, Imgproc.COLOR_BGR2RGB);
         processed.convertTo(processed, CvType.CV_32F, 1.0 / 255.0);
 
         Core.subtract(processed, new Scalar(0.5, 0.5, 0.5), processed);
         Core.divide(processed, new Scalar(0.5, 0.5, 0.5), processed);
 
+        if (targetWidth < maxWidth) {
+            Mat padded = new Mat(targetHeight, maxWidth, CvType.CV_32FC3, new Scalar(0.0, 0.0, 0.0));
+            Mat targetArea = padded.submat(0, targetHeight, 0, targetWidth);
+            try {
+                processed.copyTo(targetArea);
+            } finally {
+                targetArea.release();
+                processed.release();
+            }
+            return padded;
+        }
         return processed;
+    }
+
+    private long[] getModelInputShape(OrtSession session) throws OrtException {
+        NodeInfo inputInfo = session.getInputInfo().values().iterator().next();
+        if (!(inputInfo.getInfo() instanceof TensorInfo)) {
+            throw new IllegalStateException("PaddleOCR识别模型输入不是Tensor：" + inputInfo.getInfo());
+        }
+        return ((TensorInfo) inputInfo.getInfo()).getShape();
+    }
+
+    private int getPositiveDimension(long[] shape, int index, int defaultValue) {
+        return shape.length > index && shape[index] > 0 && shape[index] <= Integer.MAX_VALUE
+                ? (int) shape[index] : defaultValue;
     }
 
 
@@ -368,7 +394,8 @@ public class PaddleOCRCompleteV3 {
             hierarchy.release();
 
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("PaddleOCR检测输出解析失败", e);
+            throw new IllegalStateException("PaddleOCR检测输出解析失败", e);
         }
 
         return textBoxes;
@@ -402,6 +429,18 @@ public class PaddleOCRCompleteV3 {
 
             int timeSteps = output[0].length;
             int numClasses = output[0][0].length;
+            // PaddleOCR 中文模型常用 CTCLabelDecode(use_space_char=true)：
+            // blank + ppocr_keys_v1.txt + 空格，共 6625 类。
+            if (numClasses == characters.size() + 1) {
+                characters.add(" ");
+                log.info("PaddleOCR识别模型比字符字典多1个类别，已自动补充空格标签；当前字符字典数={}",
+                        characters.size());
+            }
+            if (numClasses != characters.size()) {
+                throw new IllegalStateException("PaddleOCR识别模型类别数(" + numClasses
+                        + ")与字符字典数(" + characters.size() + ")不一致；"
+                        + "请确认 ai_name_name 的识别ONNX 与 ai_config 的字典来自同一套PaddleOCR模型");
+            }
 
             // 找到每个时间步的最大概率索引
             List<Integer> indices = new ArrayList<>();
@@ -434,8 +473,8 @@ public class PaddleOCRCompleteV3 {
             return text.toString();
 
         } catch (Exception e) {
-            e.printStackTrace();
-            return "";
+            log.error("PaddleOCR CTC文本解码失败", e);
+            throw new IllegalStateException("PaddleOCR CTC文本解码失败", e);
         }
     }
 
@@ -444,9 +483,8 @@ public class PaddleOCRCompleteV3 {
      */
     private Mat cropTextRegion(Mat img, float[][] box) {
         try {
-            // 计算边界框
             float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE;
-            float maxX = Float.MIN_VALUE, maxY = Float.MIN_VALUE;
+            float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
 
             for (float[] point : box) {
                 minX = Math.min(minX, point[0]);
@@ -455,10 +493,19 @@ public class PaddleOCRCompleteV3 {
                 maxY = Math.max(maxY, point[1]);
             }
 
-            int x = (int) Math.max(0, minX);
-            int y = (int) Math.max(0, minY);
-            int width = (int) Math.min(img.width() - x, maxX - minX);
-            int height = (int) Math.min(img.height() - y, maxY - minY);
+            // DB 检测框通常只覆盖笔画的内核区域。直接按框裁剪会截断上下笔画，
+            // 例如 UI 截图中的白字会被裁成一条窄带，导致识别结果严重偏差。
+            float boxWidth = maxX - minX;
+            float boxHeight = maxY - minY;
+            int paddingX = Math.max(2, (int) Math.ceil(boxWidth * 0.10D));
+            int paddingY = Math.max(2, (int) Math.ceil(boxHeight * 1.30D));
+
+            int x = Math.max(0, (int) Math.floor(minX - paddingX));
+            int y = Math.max(0, (int) Math.floor(minY - paddingY));
+            int right = Math.min(img.width(), (int) Math.ceil(maxX + paddingX));
+            int bottom = Math.min(img.height(), (int) Math.ceil(maxY + paddingY));
+            int width = right - x;
+            int height = bottom - y;
 
             if (width <= 0 || height <= 0) {
                 return new Mat();
@@ -468,16 +515,34 @@ public class PaddleOCRCompleteV3 {
             return new Mat(img, roi);
 
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("PaddleOCR文本区域裁剪失败，检测框={}", formatBox(box), e);
             return new Mat();
         }
     }
 
-    public void close() throws OrtException {
-        if (detSession != null) detSession.close();
-        if (recSessionCh != null) recSessionCh.close();
-        if (recSessionVi != null) recSessionVi.close();
-        if (env != null) env.close();
+    private String formatBox(float[][] box) {
+        StringBuilder text = new StringBuilder("[");
+        for (int i = 0; i < box.length; i++) {
+            if (i > 0) {
+                text.append(", ");
+            }
+            text.append(String.format("(%.1f,%.1f)", box[i][0], box[i][1]));
+        }
+        return text.append(']').toString();
+    }
+
+    /**
+     * 释放每次识别创建的 ONNX Session，避免接口多次调用后堆外内存持续增长。
+     * OrtEnvironment 是全局共享对象，不能在此关闭。
+     */
+    public void close() {
+        try {
+            if (detSession != null) detSession.close();
+            if (recSessionCh != null) recSessionCh.close();
+            if (recSessionVi != null) recSessionVi.close();
+        } catch (OrtException e) {
+            throw new IllegalStateException("关闭PaddleOCR模型失败", e);
+        }
     }
 
     /**

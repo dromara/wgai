@@ -97,7 +97,7 @@ public class audioTypeAll {
 
         OfflineTts tts = new OfflineTts(config);
         float speed = 1.0f;
-        GeneratedAudio audio = tts.generate(text, sid, speed);
+        GeneratedAudio audio = generateCompat(tts, config, text, sid, speed);
 
         int sampleRate = audio.getSampleRate();
         float[] samples = audio.getSamples();
@@ -168,7 +168,7 @@ public class audioTypeAll {
        // int sid = 4;
         float speed = 1.0f;
         long start = System.currentTimeMillis();
-        GeneratedAudio audio = tts.generate(text, sid, speed);
+        GeneratedAudio audio = generateCompat(tts, config, text, sid, speed);
         long stop = System.currentTimeMillis();
 
         float timeElapsedSeconds = (stop - start) / 1000.0f;
@@ -239,7 +239,7 @@ public class audioTypeAll {
         int sid = 100;
         float speed = 1.0f;
         long start = System.currentTimeMillis();
-        GeneratedAudio audio = tts.generate(text, sid, speed);
+        GeneratedAudio audio = generateCompat(tts, config, text, sid, speed);
         long stop = System.currentTimeMillis();
 
         float timeElapsedSeconds = (stop - start) / 1000.0f;
@@ -374,4 +374,18 @@ public class audioTypeAll {
 //    public static void main(String[] args) {
 //        textToTtsDict("",null);
 //    }
+
+    /**
+     * TTS 生成的统一入口。
+     *
+     * <p>1.12.10 用三参重载即可；silenceScale / maxNumSentences / lengthScale
+     * 走 {@link OfflineTtsConfig} 的默认值（0.2f / 1 / 1.0f），
+     * 和 1.13.x 官方示例显式设的值一致。
+     *
+     * <p>保留这个方法是为了让三个调用点共用一处，将来真升级时只改这里。
+     */
+    private static GeneratedAudio generateCompat(OfflineTts tts, OfflineTtsConfig config,
+                                                 String text, int sid, float speed) {
+        return tts.generate(text, sid, speed);
+    }
 }

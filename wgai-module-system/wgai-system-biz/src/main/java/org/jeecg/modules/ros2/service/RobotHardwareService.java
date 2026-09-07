@@ -4,6 +4,7 @@ import com.github.xingshuangs.iot.protocol.s7.enums.EPlcType;
 import com.github.xingshuangs.iot.protocol.s7.service.S7PLC;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -31,8 +32,8 @@ import java.util.concurrent.atomic.AtomicLong;
  *            直行模式最大 ±45°,平移模式最大 ±12°
  *    V1001.3 系统启动(急停复位)  脉冲: 置1置0
  *    V1001.4 系统停止(急停)      脉冲: 置1置0
- *    V1001.5 前进控制
- *    V1001.6 后退控制
+ *    V1001.5 前进控制   (旋转模式下语义变为: 左向旋转)
+ *    V1001.6 后退控制   (旋转模式下语义变为: 右向旋转)
  *
  *  ◆ 反馈点位(读):
  *    VW1204  当前速度         VW1206  电机转速        VW1208  转弯角度反馈(×10)
@@ -48,8 +49,17 @@ import java.util.concurrent.atomic.AtomicLong;
  * ─── 自动导航控制策略(现场工程师确认) ─────────────────────────────────────
  *   自动驾驶(Nav2 /cmd_vel)只用直行模式(VW1002=0):正常前进/后退 + 转弯角度打舵,
  *   左转给负角度、右转给正角度即可覆盖所有转弯需求。
- *   旋转模式(固定原地转 360°)和平移模式(轮子转90°变横移)不用于自动控制,
+ *   旋转模式(VW1002=1)和平移模式(轮子转90°变横移)目前不用于自动控制,
  *   仅保留点位定义供以后手动/特殊场景使用。
+ *
+ *   ⚠ 旋转模式的实际行为(现场工程师确认, 修正此前"固定原地转360°"的错误描述):
+ *   写 VW1002=1 进入原地旋转后, V1001.5=左向旋转、V1001.6=右向旋转(不再是前进/后退),
+ *   VW1004 仍是速度; 方向位置1启动、置0停止 —— 是**持续旋转、随时可停**,
+ *   不是只能转整圈, 因此旋转角度完全可控, 后续接 Nav2 的 Spin 行为或"转到指定角度"都可行。
+ *
+ *   ⚠ 原地旋转前必须先做净空判定: 车体 5.5m×2.1m, 原地转一圈扫出的是一个圆,
+ *   半径 = 旋转中心到车体最远角点的距离(底盘中心为旋转中心时约 2.94m, 即需要近 6m 直径净空),
+ *   远大于车身本身。判定逻辑见 RotationSafetyService, 查询接口 GET /api/navigation/rotate-check。
  *
  *   ⚠ 机械结构说明(现场工程师确认): VW1006 写入的是整车转弯角度(左轮角度),
  *   精度0.1°(如写350即35.0°),负数=左转弯、正数=右转弯; 右轮角度由 PLC/驱动器根据
@@ -119,9 +129,14 @@ public class RobotHardwareService {
     @Value("${plc.angular.scale:30.0}")
     private double angularToDegreesScale;
 
+    /** 自动导航(Nav2 /cmd_vel)限速上限(VW1004, r/min), 只限制 autoNav 来源的指令,
+     *  手动遥控不受影响; Nav2 请求更低速度(减速/避障)时仍可以更慢, 只是不会超过此值 */
+    @Value("${plc.auto-nav.max-rpm:100}")
+    private int autoNavMaxRpm;
+
     // ======================== 控制点位地址(写) ========================
 
-    /** VW1002 模式设置(WORD): 0=直行  1=原地旋转(固定360°)  2=平移(轮子转90°横移); 自动导航固定写 0 */
+    /** VW1002 模式设置(WORD): 0=直行  1=原地旋转(持续转,方向位置0即停)  2=平移(轮子转90°横移); 自动导航固定写 0 */
     private static final String ADDR_MODE     = "V1002";
     /** VW1004 速度设置(WORD): 0~3000 r/min, "车速设置"而非电机转速, 不乘减速比 */
     private static final String ADDR_SPEED    = "V1004";
@@ -292,6 +307,7 @@ public class RobotHardwareService {
     /** 待下发指令缓冲 */
     private volatile double  pendingLinear  = 0;
     private volatile double  pendingAngular = 0;
+    private volatile boolean pendingAutoNav = false;
     private final AtomicBoolean hasPending  = new AtomicBoolean(false);
     private final AtomicLong lastCmdTimeMs  = new AtomicLong(0);
 
@@ -299,6 +315,13 @@ public class RobotHardwareService {
     private volatile int       lastSentRpm         = 0;
     private volatile int       lastSentAngleTenths = 0;
     private volatile DriveMode currentMode         = DriveMode.STOP;
+
+    /**
+     * 控制记录推送。没接 PLC 时前端「控制历史」是唯一能看到"到底会怎么控制"的地方，
+     * 所以和日志同一处、同一份数据推出去，两边永远对得上。
+     */
+    @Autowired
+    private WebSocketPushService pushService;
 
     private volatile DriveMode lastLoggedMode = null;
     private volatile int lastLoggedTargetRpm = Integer.MIN_VALUE;
@@ -349,6 +372,16 @@ public class RobotHardwareService {
      * @param angular 角速度 rad/s (正=左转, 负=右转, 遵循 ROS 约定)
      */
     public void sendVelocity(double linear, double angular) {
+        sendVelocity(linear, angular, false);
+    }
+
+    /**
+     * @param linear  线速度 m/s  (正=前进, 负=后退)
+     * @param angular 角速度 rad/s (正=左转, 负=右转, 遵循 ROS 约定)
+     * @param autoNav 是否来自 Nav2 自动导航(/cmd_vel); true 时 rpm 会被限制在 autoNavMaxRpm 以内,
+     *                手动遥控(D-PAD)传 false, 不受此限速影响
+     */
+    public void sendVelocity(double linear, double angular, boolean autoNav) {
         if (shuttingDown.get()) return;
         if (emergencyStopActive.get() || plcFaultActive.get()) {
             hasPending.set(false);
@@ -358,6 +391,7 @@ public class RobotHardwareService {
         }
         pendingLinear  = linear;
         pendingAngular = angular;
+        pendingAutoNav = autoNav;
         hasPending.set(true);
         lastCmdTimeMs.set(System.currentTimeMillis());
     }
@@ -452,7 +486,7 @@ public class RobotHardwareService {
 
             if (!hasPending.get()) return;
             hasPending.set(false);
-            PlcCommand cmd = twistToPlcCommand(pendingLinear, pendingAngular);
+            PlcCommand cmd = twistToPlcCommand(pendingLinear, pendingAngular, pendingAutoNav);
             executeCommand(cmd);
 
         } catch (Exception e) {
@@ -470,8 +504,11 @@ public class RobotHardwareService {
      *   angle = -angular × angularScale (ROS 左转为正, PLC 右转为正, 取反)
      *
      * linear 近 0 (纯旋转指令) 时直行模式无法处理, 直接停车。
+     *
+     * autoNav=true(来自 Nav2 /cmd_vel) 时, rpm 会被限制在 autoNavMaxRpm 以内(限速上限,
+     * 不是固定值), Nav2 请求更低速度(接近目标点减速/避障)时仍然可以更慢; 手动遥控不受影响。
      */
-    private PlcCommand twistToPlcCommand(double linear, double angular) {
+    private PlcCommand twistToPlcCommand(double linear, double angular, boolean autoNav) {
         final double LIN_DEAD = 0.01;   // 线速度死区 m/s
 
         boolean moving = Math.abs(linear) > LIN_DEAD;
@@ -483,6 +520,7 @@ public class RobotHardwareService {
 
         double rpm = Math.abs(linear) * 60.0 / circumference;
         rpm = Math.max(0, Math.min(3000, rpm));
+        if (autoNav) rpm = Math.min(rpm, autoNavMaxRpm);
 
         double angleDeg = -angular * angularToDegreesScale;
         angleDeg = Math.max(-STRAIGHT_MAX_ANGLE_DEG, Math.min(STRAIGHT_MAX_ANGLE_DEG, angleDeg));
@@ -568,18 +606,81 @@ public class RobotHardwareService {
         boolean intervalReached = now - lastControlLogMs >= Math.max(100, controlLogIntervalMs);
         if (!changed && !intervalReached) return;
 
-        log.info("[PLC控制] 动作={} | ROS(linear.x={}, angular.z={}) | 目标rpm={} 实发rpm={} | 目标角度={}° 实发角度={}°",
+        // ⚠ 这行**不能**当成"指令真的出了 Java 进程"的证据：plc.enabled=false 时
+        //   writeInt16/writeBit 早就 return 了，一个字节都没写 PLC，这行照打。
+        //   所以把 enabled/connected 的实际状态直接写进日志，别再让人对着"实发rpm=12"
+        //   一路去查 Nav2/TF/点云（2026-08 为此绕了好几天）。
+        String wire = !plcEnabled ? "未写PLC(plc.enabled=false，仅演算)"
+                : (connected.get() ? "已写PLC" : "未写PLC(PLC未连接)");
+
+        log.info("[PLC控制] 动作={} | ROS(linear.x={}, angular.z={}) | 目标rpm={} 实发rpm={} | 目标角度={}° 实发角度={}° | {}",
                 driveModeLabel(cmd.mode),
                 String.format("%.3f", cmd.linear),
                 String.format("%.3f", cmd.angular),
                 cmd.rpm, actualRpm,
                 String.format("%.1f", cmd.angleDeg),
-                String.format("%.1f", actualAngleTenths / 10.0));
+                String.format("%.1f", actualAngleTenths / 10.0),
+                wire);
+
+        // 寄存器级明细：没接 PLC 时这是唯一能看到"到底会怎么控制"的地方。
+        // 直接按点位表把地址、值、含义都写全，免得还要翻文件头的注释对照。
+        boolean fwd = cmd.mode == DriveMode.STRAIGHT_FORWARD;
+        boolean bwd = cmd.mode == DriveMode.STRAIGHT_BACKWARD;
+        log.info("[PLC控制·寄存器] {}(模式)=0 直行 | {}(速度)={} r/min | {}(角度×10)={} → {}° {} | {}(前进)={} | {}(后退)={}",
+                ADDR_MODE,
+                ADDR_SPEED, actualRpm,
+                ADDR_ANGLE, actualAngleTenths,
+                String.format("%.1f", actualAngleTenths / 10.0),
+                actualAngleTenths == 0 ? "" : (actualAngleTenths < 0 ? "(左)" : "(右)"),
+                ADDR_FORWARD, fwd,
+                ADDR_BACKWARD, bwd);
+
+        pushControlRecord(cmd, actualRpm, actualAngleTenths, fwd, bwd, wire);
 
         lastLoggedMode = cmd.mode;
         lastLoggedTargetRpm = cmd.rpm;
         lastLoggedTargetAngleTenths = (int) Math.round(cmd.angleDeg * 10);
         lastControlLogMs = now;
+    }
+
+    /** 把刚打进日志的那条控制指令原样推给前端「控制历史」，节流沿用 logControlCommand 的判定 */
+    private void pushControlRecord(PlcCommand cmd, int actualRpm, int actualAngleTenths,
+                                   boolean fwd, boolean bwd, String wire) {
+        if (pushService == null) return;
+        try {
+            java.util.Map<String, Object> d = new java.util.HashMap<>();
+            d.put("mode",        cmd.mode.name());
+            d.put("modeLabel",   driveModeLabel(cmd.mode));
+            d.put("linear",      cmd.linear);
+            d.put("angular",     cmd.angular);
+            d.put("targetRpm",   cmd.rpm);
+            d.put("rpm",         actualRpm);
+            d.put("targetAngle", cmd.angleDeg);
+            d.put("angleDeg",    actualAngleTenths / 10.0);
+            d.put("wire",        wire);
+            d.put("plcEnabled",  plcEnabled);
+            d.put("connected",   connected.get());
+            // 寄存器明细：前端直接展示地址+值，和 [PLC控制·寄存器] 日志一一对应
+            d.put("regs", java.util.Arrays.asList(
+                    reg(ADDR_MODE,     "模式", "0 (直行)"),
+                    reg(ADDR_SPEED,    "速度", actualRpm + " r/min"),
+                    reg(ADDR_ANGLE,    "角度", actualAngleTenths + " (=" + String.format("%.1f", actualAngleTenths / 10.0) + "°"
+                            + (actualAngleTenths == 0 ? "" : actualAngleTenths < 0 ? " 左" : " 右") + ")"),
+                    reg(ADDR_FORWARD,  "前进", String.valueOf(fwd)),
+                    reg(ADDR_BACKWARD, "后退", String.valueOf(bwd))
+            ));
+            pushService.pushToAll("plc_control", d);
+        } catch (Exception e) {
+            log.debug("推送 PLC 控制记录失败", e);
+        }
+    }
+
+    private java.util.Map<String, Object> reg(String addr, String name, String value) {
+        java.util.Map<String, Object> m = new java.util.HashMap<>(4);
+        m.put("addr", addr);
+        m.put("name", name);
+        m.put("value", value);
+        return m;
     }
 
     private String driveModeLabel(DriveMode mode) {
