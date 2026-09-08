@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <b>官方网站: <a href="http://117.50.47.36">http://117.50.47.36</a></b>
+  <b>官方网站: <a href="http://117.50.47.36/official">http://117.50.47.36/official</a></b>
 </p>
 
 <p align="center">
