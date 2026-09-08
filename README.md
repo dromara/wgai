@@ -68,8 +68,8 @@
 | 🚀 **地图扫描** <img src="https://img.shields.io/badge/NEW-v5.3-red">        | [点击查看](https://www.bilibili.com/video/BV1syGW6CEY1)  |
 | 🚀 **路径规划 + 自动避障** <img src="https://img.shields.io/badge/NEW-v5.3-red"> | [点击查看](https://www.bilibili.com/video/BV1xyGW6CEMD)  |
 | 🚀 **人员目标跟踪** <img src="https://img.shields.io/badge/NEW-v5.3-red">      | [点击查看](https://www.bilibili.com/video/BV11yGW6CEKj)  |
-| 🚀 **数字人切句版**                                                        | [点击下载查看](https://www.bilibili.com/video/BV1u1bg6WEv6 |
-| 🚀 **数字人不切句版**                                                       | [点击下载查看](https://www.bilibili.com/video/BV1u1bg6WExR |
+| 🚀 **数字人切句版**                                                        | [点击查看](https://www.bilibili.com/video/BV1u1bg6WEv6)  |
+| 🚀 **数字人不切句版**                                                       | [点击查看](https://www.bilibili.com/video/BV1u1bg6WExR)  |
 
 ---
 
