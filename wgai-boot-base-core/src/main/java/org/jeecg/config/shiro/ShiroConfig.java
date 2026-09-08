@@ -106,6 +106,7 @@ public class ShiroConfig {
         filterChainDefinitionMap.put("/sys/getLoginQrcode/**", "anon"); //登录二维码
         filterChainDefinitionMap.put("/sys/getQrcodeToken/**", "anon"); //监听扫码
         filterChainDefinitionMap.put("/sys/checkAuth", "anon"); //授权接口排除
+        filterChainDefinitionMap.put("/szr/speak/**", "anon"); //授权接口排除
 
         filterChainDefinitionMap.put("/tab/testAI/**", "anon"); //测试接口
         filterChainDefinitionMap.put("/video/tabAiWarning/addPush", "anon"); //测试接口
@@ -157,6 +158,7 @@ public class ShiroConfig {
         filterChainDefinitionMap.put("/websocket/**", "anon");//系统通知和公告
         filterChainDefinitionMap.put("/WebSocketAudio/**", "anon");//语音socket
         filterChainDefinitionMap.put("/newsWebsocket/**", "anon");//CMS模块
+        filterChainDefinitionMap.put("/WebSocketSzr/**", "anon");//CMS模块
         filterChainDefinitionMap.put("/vxeSocket/**", "anon");//JVxeTable无痕刷新示例
 
         filterChainDefinitionMap.put("/sys/getToken", "anon");//系统通知和公告
