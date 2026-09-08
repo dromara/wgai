@@ -135,10 +135,16 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
     @Autowired RedisTemplate redisTemplate;
     @Value("${jeecg.path.upload}") private String upLoadPath;
     @Value("${cameraNum}") private Integer cameraNum;
+    /** 默认不在应用启动时加载全部订阅模型，避免抢占 GPU / 拉长启动时间。 */
+    @Value("${ai.subscription.model-preload.enabled:false}") private boolean modelPreloadEnabled;
 
     @PostConstruct
     public void init() {
-        startModelPreloadAsync();
+        if (modelPreloadEnabled) {
+            startModelPreloadAsync();
+        } else {
+            log.info("[订阅模型启动预热] 已通过 ai.subscription.model-preload.enabled=false 关闭");
+        }
 
         log.info("[视频流服务V2.1] 64路视频专用优化版");
         log.info("[线程池配置] 核心:64 | 最大:128 | 队列:64");

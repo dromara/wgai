@@ -378,14 +378,58 @@ public class audioTypeAll {
     /**
      * TTS 生成的统一入口。
      *
-     * <p>1.12.10 用三参重载即可；silenceScale / maxNumSentences / lengthScale
-     * 走 {@link OfflineTtsConfig} 的默认值（0.2f / 1 / 1.0f），
-     * 和 1.13.x 官方示例显式设的值一致。
+     * <p>⚠ {@code silenceScale} 必须从 {@link OfflineTtsConfig} 显式复制进
+     * {@link GenerationConfig} —— 两者默认值不是一回事，漏了这行句间停顿会变，
+     * 听感就是"节奏/语速不对"。官方示例也是这么写的。
      *
-     * <p>保留这个方法是为了让三个调用点共用一处，将来真升级时只改这里。
+     * <p>三个调用点共用这一处，将来 API 再变只改这里。
      */
     private static GeneratedAudio generateCompat(OfflineTts tts, OfflineTtsConfig config,
                                                  String text, int sid, float speed) {
-        return tts.generate(text, sid, speed);
+        // ⚠ 纯标点 / 空白文本会让 lexicon 产出零个音素，空张量喂进 Conv 层后
+        //   onnxruntime 在 C++ 层抛异常，直接崩掉整个 JVM（catch 不住）。
+        //   报错特征：Invalid input shape: {0}
+        if (!hasSpeakableContent(text)) {
+            throw new IllegalArgumentException("文本无可发音内容，拒绝合成（继续会崩 JVM）: " + text);
+        }
+
+        // sid 越界时 sherpa 只在 native 层打一行警告然后自己钳到 0，Java 侧看不见，
+        // 表现就是"配了 sid 却没换音色"却查不出原因。这里显式纠正。
+        int speakers = tts.getNumSpeakers();
+        int useSid = sid;
+        if (speakers > 0 && (sid < 0 || sid >= speakers)) {
+            log.warn("[TTS] sid={} 超出范围（该模型只有 {} 个说话人，合法 0~{}），已按 0 处理",
+                    sid, speakers, speakers - 1);
+            useSid = 0;
+        }
+
+        GenerationConfig genConfig = new GenerationConfig();
+        genConfig.setSid(useSid);
+        genConfig.setSpeed(speed);
+        genConfig.setSilenceScale(config.getSilenceScale());
+        GeneratedAudio audio = tts.generateWithConfigAndCallback(
+                text, genConfig, (float[] samples) -> 1);
+
+        if (audio.getSamples().length == 0) {
+            log.warn("[TTS] ❌ 合成结果为空！lexicon/tokens 很可能与模型不配套。文本={}", text);
+        } else {
+            log.info("[TTS] 合成完成 sid={} 速度={} 静音={} 采样率={} 说话人={} 时长={}s",
+                    useSid, speed, config.getSilenceScale(), audio.getSampleRate(), speakers,
+                    String.format("%.2f", audio.getSamples().length / (double) audio.getSampleRate()));
+        }
+        return audio;
+    }
+
+    /** 有没有真正能发音的内容（中日韩文字 / 字母 / 数字）。 */
+    private static boolean hasSpeakableContent(String text) {
+        if (text == null) {
+            return false;
+        }
+        for (int i = 0; i < text.length(); i++) {
+            if (Character.isLetterOrDigit(text.charAt(i))) {
+                return true;
+            }
+        }
+        return false;
     }
 }

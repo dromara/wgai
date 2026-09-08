@@ -65,16 +65,23 @@
 <!--			<version>0.0.2</version>-->
 <!--		</dependency>-->
 
-		<!-- ⚠⚠ 不要升级到 1.13.x —— 会让 JVM 进程级崩溃，不是 Java 异常 ⚠⚠
-		     1.13.x 的 native 库要求 ONNX Runtime API 27（ORT 1.22+），
-		     而本项目 YOLO / OCR / 人脸识别用的是 com.microsoft.onnxruntime:1.17.0（API 17）。
-		     Windows 加载 DLL 按模块名去重：谁先 load 了 onnxruntime.dll 谁说了算，
-		     sherpa 自带的那份就被跳过。它向已加载的 1.17.0 要 API 27 会拿到 null，
-		     紧接着解引用 -> EXCEPTION_ACCESS_VIOLATION，整个 JVM 挂掉。
+		<!-- ⚠⚠ sherpa-onnx 和 onnxruntime 两个版本必须配套升降，不能只动一个 ⚠⚠
+
+		     进程里只能有一份 onnxruntime.dll —— Windows 加载器按模块名去重，
+		     谁先 load 谁说了算，后来者自带的那份直接被跳过（改文件名也没用，
+		     sherpa-onnx-jni.dll 的导入表里写死了 "onnxruntime.dll" 这个名字）。
+		     所以 sherpa 和下面 YOLO/OCR/人脸用的 ORT 共用同一份，版本必须能同时满足两边。
+
+		     ORT 的 C API 向后兼容：新版支持所有旧 API 版本，所以只要 ORT 够新就行。
+		       sherpa 1.13.7  需要 API 27  -> ORT >= 1.22
+		       sherpa 1.12.10 需要 API 17  -> ORT >= 1.17
+
+		     曾经踩过：sherpa 升到 1.13.7 但 ORT 还是 1.17.0，
+		     sherpa 向它要 API 27 拿到 null 后直接解引用 ->
+		     EXCEPTION_ACCESS_VIOLATION，整个 JVM 挂掉（不是 Java 异常，catch 不住）。
 		     报错特征：The requested API version [27] is not available, only [1, 17] supported
 
-		     真要升，必须连 ORT 一起升到 1.22+，涉及 22 个文件 231 处调用的回归，
-		     得当独立任务做。另外 1.13.x 只发布在 JitPack，Maven Central / aliyun 都没有。 -->
+		     另注：1.13.x 只发布在 JitPack（见上面 repositories），Maven Central / aliyun 没有。 -->
 <!--		<dependency>-->
 <!--			<groupId>sherpa.onnx.java</groupId>-->
 <!--			<artifactId>k2fsa</artifactId>-->
@@ -101,6 +108,12 @@
 			<artifactId>sherpa-onnx-native-lib-win-x64</artifactId>
 			<version>1.13.7</version>
 		</dependency>
+
+<!--		<dependency>-->
+<!--			<groupId>com.github.k2-fsa.sherpa-onnx</groupId>-->
+<!--			<artifactId>sherpa-onnx-native-lib-linux-x64</artifactId>-->
+<!--			<version>1.13.7</version>-->
+<!--		</dependency>-->
 
 <!--		<dependency>-->
 <!--			<groupId>sherpa.onnx.java</groupId>-->

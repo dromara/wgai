@@ -96,8 +96,16 @@ public class RobotHardwareService {
     @Value("${plc.slot:1}")
     private int plcSlot;
 
-    @Value("${plc.enabled:true}")
+    /** 默认不连接真实 PLC，必须在 YAML 中显式设为 true 才会启用。 */
+    @Value("${plc.enabled:false}")
     private boolean plcEnabled;
+
+    /**
+     * PLC 桥接启动预热开关。false 时不启动 PLC 定时任务，也不会创建 PLC 连接；
+     * 需要 PLC 功能时，此项和 plc.enabled 都必须为 true。
+     */
+    @Value("${plc.bridge.enabled:false}")
+    private boolean plcBridgeEnabled;
 
     /** 看门狗超时(ms): 超过此时间无新指令则自动停车 */
     @Value("${plc.watchdog.ms:500}")
@@ -345,10 +353,18 @@ public class RobotHardwareService {
 
     @PostConstruct
     public void init() {
-        connectPlc();
+        if (!plcBridgeEnabled) {
+            log.info("[PLC] 桥接启动预热已关闭 (plc.bridge.enabled=false)，跳过 PLC 定时任务和连接初始化");
+            return;
+        }
+        if (plcEnabled) {
+            connectPlc();
+        } else {
+            log.info("[PLC] 启动连接已关闭 (plc.enabled=false)，跳过 PLC 加载和网络连接");
+        }
         scheduler.scheduleAtFixedRate(this::sendTick,      100, 20, TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::statusReadTick,  1,  1, TimeUnit.SECONDS);
-        log.info("AGV PLC bridge started | host={}:{} | enabled={} | watchdog={}ms",
+        log.info("AGV PLC bridge started | host={}:{} | plc.enabled={} | watchdog={}ms",
                 plcHost, plcPort, plcEnabled, watchdogMs);
         log.info("[PLC] 轮径={}m 减速比={} 编码器分辨率={} 角度缩放={}",
                 wheelDiameterM, gearRatio, encoderCountsPerRev, angularToDegreesScale);

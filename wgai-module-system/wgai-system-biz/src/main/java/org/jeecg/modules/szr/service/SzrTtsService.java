@@ -82,19 +82,33 @@ public class SzrTtsService {
             }
         }
 
-        // 1.12.10 没有 GenerationConfig，用三参重载。
-        // 这个版本里 silenceScale / maxNumSentences / lengthScale 由 OfflineTtsConfig
-        // 的默认值决定（0.2f / 1 / 1.0f），和 1.13.x 官方示例显式设的值一致，
-        // 所以行为上没有差别。升级到 1.13.x 会让 JVM 崩溃，原因见 pom.xml 注释。
+        // sid 越界时 sherpa 只在 native 层打一行警告然后自己钳到 0，
+        // Java 侧完全看不见。这里显式校验，免得"配了 sid 却没换音色"查不出原因。
+        int speakers = handle.tts.getNumSpeakers();
+        int useSid = sid;
+        if (speakers > 0 && (sid < 0 || sid >= speakers)) {
+            log.warn("[SzrTts] sid={} 超出范围（该模型只有 {} 个说话人，合法 0~{}），已按 0 处理",
+                    sid, speakers, speakers - 1);
+            useSid = 0;
+        }
+
+        // silenceScale 必须从 OfflineTtsConfig 显式复制进 GenerationConfig ——
+        // 两者默认值不是一回事，漏了这行句间停顿会变，听感就是"节奏不对"。
+        GenerationConfig genConfig = new GenerationConfig();
+        genConfig.setSid(useSid);
+        genConfig.setSpeed(speed);
+        genConfig.setSilenceScale(handle.config.getSilenceScale());
+
         long t0 = System.currentTimeMillis();
-        GeneratedAudio audio = handle.tts.generate(text, sid, speed);
+        GeneratedAudio audio = handle.tts.generateWithConfigAndCallback(
+                text, genConfig, (float[] samples) -> 1);
         double duration = audio.getSamples().length / (double) audio.getSampleRate();
 
         // 出了 0 长度音频说明 lexicon 一个词都没查到 —— 多半是 lexicon/tokens
         // 和模型不配套（上传时传错文件很常见）。这里必须喊出来，
         // 否则后面只会表现为"数字人不出声"，很难往这上面想。
         if (audio.getSamples().length == 0) {
-            log.error("[SzrTts] ❌ 合成结果为空！lexicon/tokens 很可能与模型不配套。"
+            log.warn("[SzrTts] ❌ 合成结果为空！lexicon/tokens 很可能与模型不配套。"
                     + " model={} lexicon={} tokens={} 文本={}",
                     cfg.getAudioModel(), cfg.getAudioLexicon(), cfg.getAudioToken(), text);
             return 0d;
@@ -107,7 +121,7 @@ public class SzrTtsService {
         audio.save(outFile.getAbsolutePath());
 
         log.info("[SzrTts] 合成完成 sid={} 速度={} 静音={} 采样率={} 时长={}s 耗时={}ms 文本={}",
-                sid, speed, handle.config.getSilenceScale(), audio.getSampleRate(),
+                useSid, speed, handle.config.getSilenceScale(), audio.getSampleRate(),
                 String.format("%.2f", duration), System.currentTimeMillis() - t0, text);
         // 注意：不要 release()，实例是共享的
         return duration;
@@ -206,8 +220,8 @@ public class SzrTtsService {
                     .build();
             OfflineTts instance = new OfflineTts(ttsConfig);
 
-            log.info("[SzrTts] 模型已加载并常驻: {} [{}] 采样率={} 静音={} ({}ms) —— 后续请求不再重复加载",
-                    key, how.toString().trim(), instance.getSampleRate(),
+            log.info("[SzrTts] 模型已加载并常驻: {} [{}] 采样率={} 说话人={} 静音={} ({}ms) —— 后续请求不再重复加载",
+                    key, how.toString().trim(), instance.getSampleRate(), instance.getNumSpeakers(),
                     ttsConfig.getSilenceScale(), System.currentTimeMillis() - t0);
             return new Handle(instance, ttsConfig);
         });

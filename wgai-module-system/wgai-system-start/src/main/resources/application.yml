@@ -21,18 +21,36 @@ audio:
 opencv: 'D:\opencv\build\java\x64\opencv_java481.dll;F:\JAVAAI\opencv481\opencv\build\java\x64\opencv_java481.dll;D:\opencv\build\java\x64\opencv_java481.dll;/home/opencv481/opencv-4.8.1/build/lib/libopencv_java481.so'
 numThread: 1
 cameraNum: 16
+
+# 订阅模型启动预热：false 时不在应用启动阶段加载模型，避免抢占 GPU 并拖慢启动。
+ai:
+  subscription:
+    model-preload:
+      enabled: false
   ##'D:\opencv\build\java\x64\opencv_java481.dll'F:\JAVAAI\opencv481\code_version_opencv\opencv-4.8.1\opencv-4.8.1\build\install\x64\vc16\bin\opencv_java481.dll;
 ##'/home/opencv481/opencv-4.8.1/build/lib/libopencv_java481.so'
   ## 'F:\JAVAAI\opencv481\opencv\build\java\x64\opencv_java481.dll'
 
 plc:
-  # 是否启用 PLC 真实连接；false 时只打印调试日志，不写入 PLC
-  enabled: true
-  # Smart200 PLC IP；本机 Python 模拟器测试时可改为 127.0.0.1
+  # 是否启用 PLC 真实连接。
+  # ⚠ false = 纯调试模式：writeInt16/writeBit 直接 return，一个字节都不往 PLC 写，车绝不会动。
+  #   但 [PLC控制] 动作=前进 ... 实发rpm=12 这行日志**照打不误**(logControlCommand 无条件输出)，
+  #   看着像下发成功了，极具迷惑性。2026-08 曾因此把"车不动"一路误查到 Nav2/TF/点云链路。
+  #   启动日志里认这两行才作数：
+  #     [PLC] 调试模式 (plc.enabled=false), 不实际连接      ← 出现就是没连
+  #     AGV PLC bridge started | ... | enabled=true         ← 这样才是真连
+  enabled: false
+  # PLC 桥接预热：false 时 RobotHardwareService 不启动定时任务、不加载 PLC 连接。
+  # 需要真实 PLC 时，bridge.enabled 和 enabled 必须同时设为 true。
+  bridge:
+    enabled: false
+  # Smart200 PLC IP
   host: 192.168.0.242
-  # S7 TCP rack，Smart200/模拟器通常为 0
+  # S7 TCP 端口，Smart200 默认 102
+  port: 102
+  # S7 TCP rack，Smart200通常为 0
   rack: 0
-  # S7 TCP slot，Smart200/模拟器通常为 1
+  # S7 TCP slot，Smart200通常为 1
   slot: 1
   # 看门狗超时；超过该时间未收到新的 /cmd_vel 指令，自动停车
   watchdog:
@@ -42,43 +60,103 @@ plc:
     log:
       interval:
         ms: 500
-  # 急停通知 PLC 的 M6.0 脉冲保持时间；调用 emergency-stop 时执行 M6.0=1 再 M6.0=0
-  emergency:
-    stop:
-      pulse:
-        ms: 100
-  # V 区数值类型：WORD=16位 VW；DWORD=32位 VD。真实 PLC 使用 VD200/VD500 时填 DWORD
-  value:
-    type: DWORD
-  # 转弯角度写入地址；DWORD 模式下 address=200 表示 VD200
-  angle:
-    address: 200
-  # 目标速度写入地址；DWORD 模式下 address=500 表示 VD500，范围 0~3000 rpm
-  speed:
-    address: 500
-  # 线速度换算上限；0.8 m/s 对应 PLC 速度 3000 rpm
-  max:
-    linear:
-      vel: 0.8
-  # ROS angular.z 到 PLC 转弯角度的缩放系数；角度会限制在 -45~45 度
-  angular:
-    scale: 30.0
-  # 小于该角度时认为是直行，走 M1.4 直行模式
-  straight:
-    threshold:
-      deg: 5
   # 障碍物停车阈值；0 表示关闭 Java 侧障碍物停车判断
   obstacle:
     stop:
       distance: 0.35
-  # 运行保持位；真实车要求运行时按住 M3.3/M3.4，原地旋转时按住 M3.5
-  hold:
-    start:
-      # M3.3 AGV小车启动程序按钮
-      program: true
-      # M3.4 AGV小车启动设备按钮
-      device: true
-    rotate:
-      # M3.5 AGV小车旋转按钮；旋转方向由 VD200 角度正负决定
-      bit: true
+  # 轮径(米)，现场确认 0.452m
+  wheel:
+    diameter-m: 0.452
+    # 轮速比(减速比)：VD1212 里程计换算专用(电机转45圈,轮子实际转1圈，需要除)；VW1004 车速设置不乘此系数
+    gear-ratio: 45
+  # VD1212 编码器脉冲分辨率(每转脉冲数)，用于位置反馈换算成米；现场未确认前仅供参考
+  encoder:
+    counts-per-rev: 10000
+  # ROS angular.z 到 PLC 转弯角度(VW1006)的缩放系数；角度会限制在 -45~45 度
+  angular:
+    scale: 30.0
+  # 自动导航(Nav2 /cmd_vel)限速上限，VW1004 r/min；只限制自动导航来源的指令，手动遥控不受影响
+  # Nav2 请求更低速度(接近目标点减速/避障)时仍然可以更慢，只是不会超过此值
+  auto-nav:
+    max-rpm: 100
 
+  # ── 原地旋转(VW1002=1)安全判定 ─────────────────────────────────────────
+  # 车体 5.5m×2.1m，原地转一圈扫出的是一个圆，必须确认圆内无障碍物才允许转。
+  # 判定逻辑见 RotationSafetyService，只做判定不下发旋转指令。
+  rotate:
+    # 旋转中心(底盘 2.1×2.1 的中心)在雷达后方多少米。
+    # footprint 前0.5m/后5.0m，横向雷达不在中线上(左1.2m/右0.9m)，扫转半径取较大侧1.2m
+    # R = max(√((0.5+d)²+1.2²), √((5.0-d)²+1.2²))
+    #   d=1.75 → R=3.46m(底盘在车身正中，也是理论最小值)
+    #   d=0    → R=5.14m(按雷达原点算，最保守)
+    # ⚠ 现场实测确认，改错会导致净空判定偏乐观 → 直接撞车
+    center-offset-m: 1.75
+    # 扫转圆外再留的安全余量
+    safety-margin-m: 0.5
+    # 雷达安装高度(离地)。点云 z 靠它换算成离地高度，需现场实测
+    # ⚠ 曾误配 2.0，会把离地 1~2m 的障碍物(人/料堆)算成负高度被当地面滤掉 → 旋转判定漏检
+    lidar-height-m: 1.0
+    # 车体总高，高于此高度的点撞不到车，忽略
+    vehicle-height-m: 2.3
+    # 地面滤除高度，低于此离地高度的点视为地面反射
+    ground-clearance-m: 0.10
+    # 扇区数据有效期(滚动窗口)。mid360 是非重复扫描，单帧覆盖不全，需累积多帧
+    cloud-window-ms: 1000
+    # 最低方位角覆盖率，低于此值判定为"数据不足"并禁止旋转(无数据≠安全)
+    min-coverage: 0.80
+    # 判定车体静止的阈值，超过则清空已累积扇区(车一动，车体系下的累积数据就失效了)
+    stationary-tolerance-m: 0.20
+    stationary-tolerance-rad: 0.10
+
+# ── 建图出图方式 ─────────────────────────────────────────────────────────
+mapping:
+  # grid(默认) = 用 Java 实时累积的占据栅格出图(MappingGridService)。
+  #              保存时不发 SIGINT、不碰 fast_lio、不重启整栈，秒级完成，
+  #              保存完 Nav2 一直活着，可以马上继续导航。「清空重扫」也变成瞬时。
+  # pcd        = 老流程。SIGINT 杀 fast_lio 逼它落盘 PCD → python 转 pgm → 整栈重启(20s+)。
+  #              数据源是 fast_lio 自己内存里那份，不受 Java 断连影响。
+  #              只在怀疑栅格图不对(比如 Java 中途重启过、缺了一段)时临时切回来用。
+  save-mode: grid
+  grid:
+    # 栅格分辨率(米/格)。⚠ 累积时就定死了，/save 传的 resolution 改不了它，
+    # 要变必须改这里再重新建图。和 nav2 costmap 的 resolution 保持一致。
+    resolution: 0.05
+    # 累积时的粗筛高度门限，单位米，坐标是 camera_init 系的 z(原点=雷达开机位置，不是地面)。
+    # 放得比保存时的 zMin/zMax 宽，好让保存时还能再筛一次。
+    z-min: -5.0
+    z-max: 10.0
+    # 一个格子至少被多少「帧」看到才写进地图，用来滤掉建图时从旁边走过的人。
+    # 点云订阅节流 200ms(5Hz)，人以 1m/s 走每帧跨 0.2m = 4 个格子，
+    # 所以人在任一格子上只留下 1 帧；墙面/立柱会被连续几十上百帧看到。
+    # ⚠ 必须按「帧」计数不是按「点」：人身上一帧就有十几个点落在同一格，
+    #   按点算 hits 直接虚高过门限，过滤等于没做。
+    # 调大 → 滤得更干净但远处只瞥过两眼的真障碍会丢；扫得很快/很急时可调到 2。
+    min-hits: 3
+
+# ── 常驻导航栈(rosbridge + 雷达 + fast_lio + pc2scan + Nav2) ──────────────
+# 建图不再单独启 fast_lio，直接复用这个 launch 拉起的那一个。
+# save-mode=pcd 时保存地图才会 SIGINT 掉 fast_lio 并由 MappingController 自动重启整栈；
+# 默认的 grid 模式全程不动进程。
+ros:
+  # Java 启动阶段是否检查或创建 nav2_params_fastlio.yaml。
+  map:
+    startup-init:
+      enabled: false
+  robot-full:
+    launch-file: /home/ros/robot_full.launch.py
+    # Java 起的子进程不继承人工终端的 source，这两个 setup.bash 必须显式 source
+    ros-setup: /opt/ros/humble/setup.bash
+    # 等导航栈就绪的时间。robot_full.launch.py 里 Nav2 是 T+12s 才启动，要留够余量
+    ready-wait-ms: 20000
+    # 车体自身遮挡过滤(livox_self_filter.py)。保存地图后 Java 自动重启栈时透传成 SELF_FILTER 环境变量。
+    # ⚠ 必须和你人工 ros2 launch 时用的值一致，不然重启后过滤会悄悄关掉、下一张图又出车体重影。
+    #
+    # 默认 true —— 不过滤的话车体自身点会同时污染建图和导航:
+    #   建图: 车体轮廓被写进 PCD，且 fast_lio 被这些静止强反射点拽住 → 前后错位的重影
+    #   导航: 落在 pc2scan 高度带(0.1~1.5m)内 → /scan 上的假障碍，还会挡住清障射线
+    #
+    # 唯一该关掉的情况: 过滤节点跟不上 mid360 的帧率、开始积压。
+    # 判据 `ros2 topic delay /livox/lidar_filtered` 单调上涨(2026-08 实测过到 41s)，
+    # 此时 fast_lio 会拿过期点云配准并把位姿发散成百万米级，比重影严重得多。
+    # 真遇上应该去修过滤实现(改 C++)，而不是长期关着过滤跑。
+    self-filter: true

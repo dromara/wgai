@@ -17,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.http.*;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.*;
@@ -74,7 +75,19 @@ public class SzrSpeakController {
     @Autowired
     private SzrEventSubscriber eventSubscriber;
 
-    private final RestTemplate restTemplate = new RestTemplate();
+    /**
+     * ⚠ 必须设超时。RestTemplate 默认无限等待，驱动服务地址填错或机器不可达时
+     * 会把 szr-speak 这个单线程池整个卡住，后续所有播报请求排队不动，
+     * 而且没有任何日志 —— 极难排查。
+     */
+    private final RestTemplate restTemplate = buildRestTemplate();
+
+    private static RestTemplate buildRestTemplate() {
+        SimpleClientHttpRequestFactory f = new SimpleClientHttpRequestFactory();
+        f.setConnectTimeout(5000);
+        f.setReadTimeout(30000);
+        return new RestTemplate(f);
+    }
 
     /** 切句提交是串行的耗时操作，放线程池里跑，别占住 HTTP 线程 */
     private final ExecutorService pool = Executors.newSingleThreadExecutor(r -> {
@@ -86,7 +99,10 @@ public class SzrSpeakController {
     /**
      * 提交一段文本播报。
      *
-     * <p>请求体：{@code {"text":"...", "ttsId":"<tab_audio_tts主键>", "sid":33}}
+     * <p>请求体：{@code {"text":"...", "ttsId":"<tab_audio_tts主键>", "sid":33, "split":true}}
+     *
+     * <p>{@code split} 默认 true（按标点切句，首句更快开口）；
+     * 传 false 则整段当一句，原文一字不动播出去。
      */
     @ApiOperation(value = "提交播报文本", notes = "切句 -> TTS -> 推送数字人")
     @PostMapping("/text")
@@ -99,6 +115,10 @@ public class SzrSpeakController {
         Integer sid = body.getInteger("sid");
         int minChars = body.getIntValue("minChars") > 0 ? body.getIntValue("minChars") : 12;
         int maxChars = body.getIntValue("maxChars") > 0 ? body.getIntValue("maxChars") : 40;
+        // split=false 时整段当一句处理，不做任何切分。
+        // 适合调用方已经自己控制好粒度、或者要求原文一字不动播出去的场景。
+        Boolean splitFlag = body.getBoolean("split");
+        boolean doSplit = splitFlag == null || splitFlag;
 
         TabAudioTts cfg = ttsId == null ? null : tabAudioTtsService.getById(ttsId);
         if (cfg == null) {
@@ -106,13 +126,25 @@ public class SzrSpeakController {
         }
         int speakerId = sid != null ? sid : (cfg.getAudioSid() == null ? 0 : cfg.getAudioSid());
 
-        List<String> sentences = SentenceSplitter.split(text, minChars, maxChars);
+        List<String> sentences;
+        if (doSplit) {
+            sentences = SentenceSplitter.split(text, minChars, maxChars);
+        } else {
+            // 不切句：整段作为一句。仍要去掉首尾空白，
+            // 纯标点/纯空白的文本送进 TTS 会产出零音素并崩掉合成进程。
+            sentences = new ArrayList<>();
+            String whole = text.trim();
+            if (!whole.isEmpty()) {
+                sentences.add(whole);
+            }
+        }
         if (sentences.isEmpty()) {
-            return Result.error("切句结果为空");
+            return Result.error(doSplit ? "切句结果为空" : "文本为空");
         }
 
         String taskId = "szr-" + System.currentTimeMillis();
-        log.info("[szr] 任务 {} 切出 {} 句, sid={}", taskId, sentences.size(), speakerId);
+        log.info("[szr] 任务 {} {} {} 句, sid={}", taskId,
+                doSplit ? "切出" : "不切句，共", sentences.size(), speakerId);
 
         // 订阅是按需启动的：没有播报任务时不连接，免得驱动服务没开就一直重连刷日志。
         // 必须在提交前拉起，否则前几句的播放事件会漏掉。
@@ -120,7 +152,17 @@ public class SzrSpeakController {
 
         // 全部句子一次性排进队列，不要等一句播完再发下一句 ——
         // Python 侧生成比播放快，提前排队才能让画面连续、句间不回落到静置
-        pool.submit(() -> dispatch(taskId, sentences, cfg, speakerId));
+        // ⚠ 用 execute 不用 submit：submit 会把异常塞进 Future，
+        //   没人调 get() 就彻底消失，表现为"提交了但一条日志都没有"。
+        //   再套一层 catch Throwable —— Error（NoSuchMethodError / UnsatisfiedLinkError
+        //   / OutOfMemoryError）不是 Exception，下面 dispatch 里的 catch 抓不到。
+        pool.execute(() -> {
+            try {
+                dispatch(taskId, sentences, cfg, speakerId);
+            } catch (Throwable t) {
+                log.warn("[szr] ❌ 任务 {} 整体失败: {}", taskId, t.toString(), t);
+            }
+        });
 
         Map<String, Object> ret = new HashMap<>();
         ret.put("taskId", taskId);
@@ -131,22 +173,40 @@ public class SzrSpeakController {
 
     private void dispatch(String taskId, List<String> sentences, TabAudioTts cfg, int sid) {
         File dir = new File(upLoadPath, "szr_tts");
+        log.info("[szr] 任务 {} 开始处理，输出目录 {}", taskId, dir.getAbsolutePath());
+
         for (int i = 0; i < sentences.size(); i++) {
             String sentence = sentences.get(i);
             String tag = taskId + "-" + i;
+            // ⚠ 必须抓 Throwable 不能只抓 Exception：
+            //   换 sherpa jar 后常见的 NoSuchMethodError / UnsatisfiedLinkError 都是 Error，
+            //   只抓 Exception 的话会静默穿透，连一行日志都没有。
             try {
                 File wav = new File(dir, tag + ".wav");
-                szrTtsService.synthesize(cfg, sentence, sid, wav);
+
+                log.info("[szr] {} ① 开始合成 ({}/{}) {}", tag, i + 1, sentences.size(), sentence);
+                double sec = szrTtsService.synthesize(cfg, sentence, sid, wav);
+                if (sec <= 0 || !wav.isFile() || wav.length() == 0) {
+                    throw new IllegalStateException("合成未产出有效音频，wav="
+                            + wav.getAbsolutePath() + " exists=" + wav.isFile()
+                            + " size=" + (wav.isFile() ? wav.length() : -1));
+                }
+                log.info("[szr] {} ② 合成完毕 {}s，文件 {} bytes", tag,
+                        String.format("%.2f", sec), wav.length());
 
                 playEventService.register(tag, taskId, i, sentences.size(), sentence);
 
+                log.info("[szr] {} ③ 提交驱动服务 {} ({})", tag, driverConfig.baseUrl(),
+                        driverConfig.needUpload() ? "上传文件" : "同机路径");
                 submitToDriver(wav, tag);
-                log.info("[szr] 已提交 {} ({}/{}) {}", tag, i + 1, sentences.size(), sentence);
-            } catch (Exception e) {
-                log.error("[szr] 第 {} 句提交失败: {}", i, e.getMessage(), e);
+                log.info("[szr] {} ✅ 已提交 ({}/{})", tag, i + 1, sentences.size());
+            } catch (Throwable t) {
+                log.warn("[szr] {} ❌ 第 {} 句失败 [{}]: {}",
+                        tag, i + 1, t.getClass().getSimpleName(), t.getMessage(), t);
                 playEventService.push("sentence_error", tag, sentence, i, sentences.size());
             }
         }
+        log.info("[szr] 任务 {} 处理结束", taskId);
     }
 
     /**
@@ -270,5 +330,23 @@ public class SzrSpeakController {
         } catch (Exception e) {
             return Result.error("驱动服务不可达(" + driverConfig.baseUrl() + "): " + e.getMessage());
         }
+    }
+
+    /** 数字人当前占用情况（GPU 同时只允许一个 WebSocket 客户端）。 */
+    @GetMapping("/connection/list")
+    public Result<Map<String, Object>> connectionList() {
+        Map<String, Object> ret = new HashMap<>();
+        ret.put("total", WebSocketSzr.onlineCount());
+        ret.put("records", WebSocketSzr.onlineConnections());
+        return Result.OK(ret);
+    }
+
+    /** 管理员强制移除指定用户的数字人连接。 */
+    @DeleteMapping("/connection/{userId}")
+    public Result<String> disconnect(@PathVariable("userId") String userId) {
+        if (WebSocketSzr.disconnect(userId)) {
+            return Result.OK("已移除用户数字人连接");
+        }
+        return Result.error("连接不存在或已断开，请刷新后重试");
     }
 }

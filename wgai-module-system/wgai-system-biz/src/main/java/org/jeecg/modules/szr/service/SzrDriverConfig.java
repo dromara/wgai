@@ -95,7 +95,7 @@ public class SzrDriverConfig {
             log.warn("[szr] tab_szr_python 里没有 py_name={} 且 py_url 非空的记录，" +
                     "回落到 {}。请在「数字人-Python脚本」页面新增一条。", DRIVER_NAME, FALLBACK_URL);
         } catch (Exception e) {
-            log.error("[szr] 读取驱动服务配置失败，回落到 {}: {}", FALLBACK_URL, e.getMessage());
+            log.warn("[szr] 读取驱动服务配置失败，回落到 {}: {}", FALLBACK_URL, e.getMessage());
         }
         cachedUrl = FALLBACK_URL;
         cachedNeedUpload = true;

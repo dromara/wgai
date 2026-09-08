@@ -8,6 +8,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import com.google.gson.JsonObject;
@@ -78,6 +79,10 @@ public class MapController {
 
     /** nav2 params 文件路径(与 robot_full.launch.py 中的路径一致) */
     private static final String NAV2_PARAMS_PATH = "/home/ros/nav2_params_fastlio.yaml";
+
+    /** 默认不在 Java 启动阶段检查/生成 Nav2 参数文件，按需由地图功能生成。 */
+    @Value("${ros.map.startup-init.enabled:false}")
+    private boolean mapStartupInitEnabled;
 
     /**
      * 自定义行为树目录 —— 车辆物理上无法原地旋转,behavior_server 不注册 spin。
@@ -158,6 +163,10 @@ public class MapController {
      */
     @PostConstruct
     public void init() {
+        if (!mapStartupInitEnabled) {
+            log.info("[地图初始化] 已通过 ros.map.startup-init.enabled=false 关闭，跳过 Nav2 参数文件检查");
+            return;
+        }
         try {
             File f = new File(NAV2_PARAMS_PATH);
             if (!f.exists()) {

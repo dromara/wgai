@@ -74,8 +74,13 @@ public class SzrPlayEventService {
 
         SentenceMeta meta = sentenceIndex.get(tag);
         if (meta == null) {
-            log.warn("[szr] 收到未知 tag 的播放事件: {} {} (来自{})", event, tag, from);
-            push(event, tag, "", -1, -1);
+            // 常见于：Java 重启后内存索引丢了，但驱动服务还在播之前排队的音频；
+            // 或 SSE 断线重连时用 ?since= 补发了更早的事件。
+            //
+            // ⚠ 这种事件不能推给前端 —— 推过去就是 index=-1 / text=""，
+            //   前端拿它去匹配句子会错位，比收不到还糟。直接丢弃。
+            log.warn("[szr] 丢弃未知 tag 的播放事件: {} {} (来自{})，"
+                    + "多半是本服务重启前提交的任务，或 SSE 补发的历史事件", event, tag, from);
             return;
         }
 
