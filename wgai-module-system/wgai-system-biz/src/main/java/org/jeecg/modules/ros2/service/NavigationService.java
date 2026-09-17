@@ -26,6 +26,9 @@ public class NavigationService {
     @Autowired
     private ROS2BridgeService ros2Bridge;
 
+    @Autowired
+    private ObstacleGuardService obstacleGuardService;
+
     /** 是否已经完成 advertise(每次 WebSocket 连接只需 advertise 一次) */
     private volatile boolean advertised = false;
 
@@ -48,6 +51,12 @@ public class NavigationService {
         advertised = false;
     }
 
+    /** advertise 只对当前这条 rosbridge 连接有效；以前 resetAdvertised 没人调，重连后一直按"已声明"直接 publish */
+    @javax.annotation.PostConstruct
+    public void registerReconnectReset() {
+        ros2Bridge.addConnectListener(this::resetAdvertised);
+    }
+
     // ===================== 发送 AMCL 初始位姿 =====================
 
     /**
@@ -63,6 +72,14 @@ public class NavigationService {
      * @param theta 朝向(弧度)
      */
     public void sendInitialPose(double x, double y, double theta) {
+        sendInitialPose(x, y, theta, 0.5, 0.26);
+    }
+
+    /**
+     * @param xyStd  位置不确定范围 1σ(m)，AMCL 按它把粒子撒开
+     * @param yawStd 朝向不确定范围 1σ(rad)
+     */
+    public void sendInitialPose(double x, double y, double theta, double xyStd, double yawStd) {
         if (!advertised) advertiseTopics();
 
         JsonObject msg = new JsonObject();
@@ -70,7 +87,7 @@ public class NavigationService {
 
         JsonObject poseWithCov = new JsonObject();
         poseWithCov.add("pose",       buildPose(x, y, theta));
-        poseWithCov.add("covariance", buildCovariance());
+        poseWithCov.add("covariance", buildCovariance(xyStd, yawStd));
         msg.add("pose", poseWithCov);
 
         ros2Bridge.publish("/initialpose",
@@ -90,13 +107,21 @@ public class NavigationService {
     public void sendNavigationGoal(Double x, Double y, Double theta) {
         if (!advertised) advertiseTopics();
 
+        // 前端给的是**雷达(body 原点)**该停的位置，而 Nav2 的 robot_base_frame 是 base_link(转向中心，
+        // 在雷达后方约 2.8m，见 MapController.writeNav2Params)。不换算的话车会多往前冲一截车身。
+        double cx = obstacleGuardService.getSteerCenterX();
+        double cy = obstacleGuardService.getSteerCenterY();
+        double gx = x + Math.cos(theta) * cx - Math.sin(theta) * cy;
+        double gy = y + Math.sin(theta) * cx + Math.cos(theta) * cy;
+
         JsonObject msg = new JsonObject();
         msg.add("header", buildHeader("map"));
-        msg.add("pose",   buildPose(x, y, theta));
+        msg.add("pose",   buildPose(gx, gy, theta));
 
         ros2Bridge.publish("/goal_pose", "geometry_msgs/PoseStamped", msg);
-        log.info("导航目标已发送: x={}, y={}, theta={}°",
-                x, y, Math.toDegrees(theta));
+        log.info("导航目标已发送: 雷达点 ({}, {}) → base_link ({}, {}), theta={}°",
+                String.format("%.2f", x), String.format("%.2f", y),
+                String.format("%.2f", gx), String.format("%.2f", gy), Math.toDegrees(theta));
     }
 
     // ===================== 取消导航 =====================
@@ -177,17 +202,18 @@ public class NavigationService {
      * AMCL 协方差矩阵(6x6,行优先 36 元素)
      * 对角线: [x_var, y_var, z_var, roll_var, pitch_var, yaw_var]
      */
-    private JsonArray buildCovariance() {
+    private JsonArray buildCovariance(double xyStd, double yawStd) {
+        double v = xyStd * xyStd, w = yawStd * yawStd;
         double[] cov = {
-                0.25, 0,    0, 0, 0, 0,
-                0,    0.25, 0, 0, 0, 0,
-                0,    0,    0, 0, 0, 0,
-                0,    0,    0, 0, 0, 0,
-                0,    0,    0, 0, 0, 0,
-                0,    0,    0, 0, 0, 0.068
+                v, 0, 0, 0, 0, 0,
+                0, v, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, w
         };
         JsonArray arr = new JsonArray();
-        for (double v : cov) arr.add(v);
+        for (double c : cov) arr.add(c);
         return arr;
     }
 }

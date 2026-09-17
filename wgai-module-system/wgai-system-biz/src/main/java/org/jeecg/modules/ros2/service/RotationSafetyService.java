@@ -19,7 +19,7 @@ import java.util.Map;
  *
  * ─── 扫转半径怎么算 ───────────────────────────────────────────────────────
  * footprint 以雷达安装点(= body 系原点, fast_lio 惯例)为原点:
- *   前端 +0.5m / 后端 -5.0m / 左 +1.2m / 右 -0.9m  (与 MapController.ROBOT_FOOTPRINT 一致)
+ *   前端 +0.5m / 后端 -5.0m / 左 +1.2m / 右 -0.9m  (与 MapController.FP_* 一致)
  * 雷达横向不在车身中线上，左右不对称；扫转半径取到最远角点，所以横向按较大的一侧(1.2m)算。
  * 旋转中心在雷达后方 centerOffsetM 处(底盘 2.1×2.1 的中心)，于是:
  *
@@ -50,7 +50,7 @@ import java.util.Map;
 @Service
 public class RotationSafetyService {
 
-    // ======================== 车体 footprint(与 MapController.ROBOT_FOOTPRINT 保持一致) ========================
+    // ======================== 车体 footprint(与 MapController.FP_* 保持一致) ========================
 
     /** 车体前端距雷达(body 原点) */
     private static final double FOOTPRINT_FRONT_M = 0.5;
@@ -67,45 +67,49 @@ public class RotationSafetyService {
 
     // ======================== 配置项 ========================
 
+    // 下面这批 @Value 字段全部 volatile：AgvParamService 会在运行时(HTTP 线程)按
+    // tab_ros_python.agv_param 的内容反射改写它们，而读取发生在点云回调线程。不加 volatile
+    // 就可能出现"页面显示已生效、判定用的还是旧值"。加参数时记得一并加。
+
     /**
      * 旋转中心(底盘 2.1×2.1 的中心)在雷达**后方**多少米。
      * 默认 0 = 按雷达原点算(R=5.14m)，是最保守的取值:
      * 只会"该转的时候不让转"，不会"不该转的时候放行"。现场实测后必须改成真实值。
      */
     @Value("${plc.rotate.center-offset-m:0.0}")
-    private double centerOffsetM;
+    private volatile double centerOffsetM;
 
     /** 扫转圆外再留的安全余量 */
     @Value("${plc.rotate.safety-margin-m:0.5}")
-    private double safetyMarginM;
+    private volatile double safetyMarginM;
 
     /** 雷达安装高度(离地)。用于把点云 z 换算成"离地高度"，判断障碍物是否在车身高度带内 */
     @Value("${plc.rotate.lidar-height-m:2.0}")
-    private double lidarHeightM;
+    private volatile double lidarHeightM;
 
     /** 车体总高。高于此高度的点撞不到车，忽略 */
     @Value("${plc.rotate.vehicle-height-m:2.3}")
-    private double vehicleHeightM;
+    private volatile double vehicleHeightM;
 
     /** 地面滤除高度。低于此离地高度的点视为地面反射，忽略 */
     @Value("${plc.rotate.ground-clearance-m:0.10}")
-    private double groundClearanceM;
+    private volatile double groundClearanceM;
 
     /** 扇区数据有效期(滚动窗口)，超期视为无数据 */
     @Value("${plc.rotate.cloud-window-ms:1000}")
-    private long cloudWindowMs;
+    private volatile long cloudWindowMs;
 
     /** 最低方位角覆盖率，低于此值判定为"数据不足"，禁止旋转 */
     @Value("${plc.rotate.min-coverage:0.80}")
-    private double minCoverage;
+    private volatile double minCoverage;
 
     /** 判定车体是否静止的位移阈值，超过则清空已累积扇区 */
     @Value("${plc.rotate.stationary-tolerance-m:0.20}")
-    private double stationaryToleranceM;
+    private volatile double stationaryToleranceM;
 
     /** 判定车体是否静止的转角阈值(rad)，超过则清空已累积扇区 */
     @Value("${plc.rotate.stationary-tolerance-rad:0.10}")
-    private double stationaryToleranceRad;
+    private volatile double stationaryToleranceRad;
 
     // ======================== 扇区滚动窗口 ========================
 
@@ -132,6 +136,9 @@ public class RotationSafetyService {
     }
 
     /** 允许旋转所需的净空半径 = 扫转半径 + 安全余量 */
+    /** 旋转中心在雷达后方多少米 */
+    public double getCenterOffsetM() { return centerOffsetM; }
+
     public double getRequiredRadiusM() {
         return getSweptRadiusM() + safetyMarginM;
     }

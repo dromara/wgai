@@ -71,6 +71,9 @@ public class NavigationController {
     @Autowired
     private org.jeecg.modules.ros2.service.RotationSafetyService rotationSafetyService;
 
+    @Autowired
+    private org.jeecg.modules.ros2.service.ManeuverService maneuverService;
+
     // ===================== 发送导航目标 =====================
 
     /**
@@ -86,7 +89,7 @@ public class NavigationController {
      */
     @PostMapping("/goal")
     @ApiOperation("设置导航目标")
-    public Result<Void> setGoal(@Validated @RequestBody NavigationGoalDTO goal) {
+    public Result<?> setGoal(@Validated @RequestBody NavigationGoalDTO goal) {
         // ⭐ Bug 2 fix: 全局重定位收敛保护(仅时间窗口, 不卡协方差 —— 协方差是否收敛只作为
         // /localization-ready 的提示信息, 不在这里硬拦截, 避免协方差因传感器噪声/未收敛
         // 长期高于阈值时把所有导航目标永久堵死)
@@ -102,14 +105,29 @@ public class NavigationController {
             );
         }
 
-        log.info("[导航目标] 收到目标点: x={}, y={}, theta={}°",
-                goal.getX(), goal.getY(), Math.toDegrees(goal.getTheta()));
+        log.info("[导航目标] 收到目标点: x={}, y={}, theta={}, 侧向对位={}",
+                goal.getX(), goal.getY(),
+                goal.getTheta() == null ? "自动(按方位角)" : Math.toDegrees(goal.getTheta()) + "°",
+                goal.getSideApproachM());
         if (hardwareService.isEmergencyStopActive()) {
             log.warn("[导航目标] 检测到 Java 侧急停锁, 设置新目标前自动解除, 恢复 cmd_vel -> PLC 转发");
             hardwareService.clearEmergencyStopLock();
         }
-        navigationService.sendNavigationGoal(goal.getX(), goal.getY(), goal.getTheta());
-        return Result.OK("导航目标已设置");
+        // 起点预旋转 → Nav2 → 终点对位/失败侧移，全部在 ManeuverService 里异步编排
+        try {
+            Map<String, Object> r = maneuverService.startMission(goal.getX(), goal.getY(), goal.getTheta(),
+                    goal.getSideApproachM(), Boolean.TRUE.equals(goal.getPrecise()));
+            String note = (String) r.get("note");
+            return Result.OK("导航目标已设置(朝向 " + Math.round(Math.toDegrees((Double) r.get("theta"))) + "°)"
+                    + (note.isEmpty() ? "" : "，" + note), r);
+        } catch (org.jeecg.modules.ros2.service.ManeuverService.GoalRejectedException e) {
+            // 带上车身框和障碍格，前端画出来看是哪里压住了
+            Result<Object> res = Result.error(e.getMessage());
+            res.setResult(e.data);
+            return res;
+        } catch (IllegalArgumentException e) {
+            return Result.error(e.getMessage());
+        }
     }
 
     // ===================== 取消导航 =====================
@@ -125,6 +143,8 @@ public class NavigationController {
     @PostMapping("/cancel")
     @ApiOperation("取消导航")
     public Result<Void> cancel() {
+        // 先停机动(原地转/平移在 ≤50ms 内停车退出)，再取消 Nav2
+        maneuverService.abort("手动取消");
         // ⭐ Bug 3 fix: 真正取消 Nav2 action
         boolean actionCancelled = cancelNav2Action();
         // 零速度兜底(action cancel 需要一个控制周期才生效)
@@ -287,9 +307,14 @@ public class NavigationController {
         double x     = body.getOrDefault("x",     0.0);
         double y     = body.getOrDefault("y",     0.0);
         double theta = body.getOrDefault("theta", 0.0);
+        // 位置/朝向的不确定范围(1σ)。人在地图上点不准，范围给大一点 AMCL 才有机会在附近找到真位置；
+        // 全局重定位(粒子撒满全图)在本项目基本收敛不了，"大概位置 + 范围"就是它的替代
+        double xyStd     = Math.max(0.1, Math.min(5.0, body.getOrDefault("xyStd", 0.5)));
+        double yawStdDeg = Math.max(3.0, Math.min(180.0, body.getOrDefault("yawStdDeg", 15.0)));
 
         bridgeService.setNavMode(true);
-        navigationService.sendInitialPose(x, y, theta);
+        navigationService.sendInitialPose(x, y, theta, xyStd, Math.toRadians(yawStdDeg));
+        refineLocalization(x, y, theta, xyStd, yawStdDeg);
 
         // 初始位姿也会触发粒子重置,记录时间;因为是精确位置,等待时间设短一些
         // 用 MIN_CONVERGENCE_MS / 3 近似(约 5 秒),通过更新 lastGlobalLocalizationTime
@@ -298,6 +323,74 @@ public class NavigationController {
 
         log.info("手动设置初始位姿: x={}, y={}, theta={}", x, y, theta);
         return Result.OK("初始位姿已发送(x=" + x + ", y=" + y + ", theta=" + theta + ")");
+    }
+
+    private final java.util.concurrent.ExecutorService refineExecutor = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "amcl-refine");
+        t.setDaemon(true);
+        return t;
+    });
+    private final AtomicLong refineSeq = new AtomicLong();
+
+    /**
+     * 设完初始位姿后，车不动也让 AMCL 用当前这帧激光反复匹配收敛。
+     * AMCL 默认要车走过 update_min_d(0.25m)/转过 update_min_a 才更新滤波器，车静止时粒子一直停在人点的那个
+     * (点不准的)位置 → 开出去才发现地图和实际偏很大。/request_nomotion_update 逼它不动也更新一次，
+     * 连续催几十次，粒子就收拢到激光和地图对得最好的位置。
+     */
+    private void refineLocalization(double setX, double setY, double setTheta, double xyStd, double yawStdDeg) {
+        final long id = refineSeq.incrementAndGet();
+        // 范围越大需要的迭代越多
+        final int rounds = xyStd > 1.5 || yawStdDeg > 60 ? 60 : 25;
+        refineExecutor.submit(() -> {
+            try {
+                Thread.sleep(500);   // 等 AMCL 先按 /initialpose 撒完粒子
+                for (int i = 0; i < rounds && refineSeq.get() == id; i++) {
+                    bridgeService.callService("/request_nomotion_update", "std_srvs/srv/Empty",
+                            new com.google.gson.JsonObject(), 1000);
+                    Thread.sleep(250);
+                }
+                if (refineSeq.get() != id) return;   // 又设了一次初始位姿，这轮作废
+                double cxx = bridgeService.getLastAmclCovXX(), cyy = bridgeService.getLastAmclCovYY();
+                double[] p = bridgeService.getLastAmclPose();
+                boolean ok = bridgeService.isAmclConverged(CONVERGENCE_COV_THRESHOLD);
+                log.info("[定位修正] 原地匹配 {} 次完成: 位姿={} 协方差 xx={} yy={} {}", rounds,
+                        p == null ? "无" : String.format("(%.2f, %.2f, %.0f°)", p[0], p[1], Math.toDegrees(p[2])),
+                        String.format("%.3f", cxx), String.format("%.3f", cyy), ok ? "已收敛" : "未收敛");
+                // 收敛到哪了？跑得比给的不确定范围还远，多半是**匹配错了地方**(走廊/料堆这种局部长得都差不多)。
+                // 2026-09-16 现场：设好朝向后 AMCL 把车转了 90°、位置也挪了。宁可报出来让人重设，也别让它带着错位姿开车。
+                double drift = 0, yawDriftDeg = 0;
+                boolean suspicious = false;
+                if (p != null) {
+                    drift = Math.hypot(p[0] - setX, p[1] - setY);
+                    double dy = p[2] - setTheta;
+                    while (dy >  Math.PI) dy -= 2 * Math.PI;
+                    while (dy < -Math.PI) dy += 2 * Math.PI;
+                    yawDriftDeg = Math.abs(Math.toDegrees(dy));
+                    suspicious = drift > Math.max(1.0, xyStd * 2) || yawDriftDeg > Math.max(20.0, yawStdDeg * 1.5);
+                }
+                java.util.Map<String, Object> d = new java.util.LinkedHashMap<>();
+                d.put("status", "refined");
+                d.put("converged", ok && !suspicious);
+                d.put("covXX", cxx);
+                d.put("covYY", cyy);
+                d.put("driftM", drift);
+                d.put("yawDriftDeg", yawDriftDeg);
+                if (suspicious) {
+                    log.warn("[定位修正] ⚠ 收敛结果离设定值 {}m / {}°，超出给定的不确定范围，疑似匹配错位置",
+                            String.format("%.2f", drift), String.format("%.0f", yawDriftDeg));
+                }
+                d.put("message", suspicious
+                        ? String.format("⚠ 定位匹配到了离你设的位置 %.2fm、朝向差 %.0f° 的地方，很可能匹配错了。"
+                                + "请重新设置初始点位，位置误差选「±0.5m 较准」、朝向选「±15° 较准」；"
+                                + "若仍这样，多半是这一片环境长得太像，遥控车走 2~3m 再设一次", drift, yawDriftDeg)
+                        : ok ? "定位已收敛，可以发导航目标"
+                        : "定位还没收敛(不确定范围仍偏大)：让车慢速直行 1~2m 帮助收敛，或把初始点位点得更准些再设一次");
+                pushService.pushToAll("localization_status", d);
+            } catch (Exception e) {
+                log.warn("[定位修正] 失败: {}", e.getMessage());
+            }
+        });
     }
 
     // ===================== 收敛状态查询(前端轮询用) =====================
@@ -403,6 +496,7 @@ public class NavigationController {
     @ApiOperation("硬件紧急停车 (直达 PLC)")
     public Result<Void> emergencyStop() {
         hardwareService.emergencyStop();
+        maneuverService.abort("急停");
         navigationService.cancelNavigation();  // 同步停 Nav2
         return Result.OK("🛑 紧急停车已执行");
     }

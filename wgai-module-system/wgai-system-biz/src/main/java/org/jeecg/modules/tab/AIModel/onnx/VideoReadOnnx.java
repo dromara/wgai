@@ -8,6 +8,7 @@ import com.alibaba.fastjson.JSONObject;
 import lombok.extern.slf4j.Slf4j;
 import org.bytedeco.ffmpeg.global.avutil;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
+import org.bytedeco.javacv.FFmpegLogCallback;
 import org.bytedeco.javacv.Frame;
 import org.bytedeco.javacv.Java2DFrameConverter;
 import org.jeecg.modules.demo.audio.entity.TabAudioDevice;
@@ -64,6 +65,13 @@ public class VideoReadOnnx implements Runnable {
     private RedisTemplate redisTemplate;
     public Integer TARGET_FRAME_INTERVAL = 300;
     public String videoUrl;
+
+    // 识别可使用备注中的RTSP，推送使用播放地址供前端关联同一路视频。
+    private String getPlaybackUrl() {
+        String playbackUrl = tabAiModelBund == null ? null : tabAiModelBund.getSendUrl();
+        return playbackUrl == null || playbackUrl.trim().isEmpty() ? videoUrl : playbackUrl;
+    }
+
     public String userId;
     private volatile long lastFrameTime = 0;
     public String namesUrl;
@@ -374,6 +382,7 @@ public class VideoReadOnnx implements Runnable {
     private void sendEmptyVideoFrame(long grabTimestamp, long streamPts, long rawStreamPts, String reason) {
         JSONObject bja = new JSONObject();
         bja.put("cmd",       "video");
+        bja.put("url", getPlaybackUrl());
         bja.put("number",    grabTimestamp);
         bja.put("streamPts", rawStreamPts);
         bja.put("rawStreamPts", rawStreamPts);
@@ -487,7 +496,7 @@ public class VideoReadOnnx implements Runnable {
                 bj.put("y",         c.box.y);
                 bj.put("width",     c.box.width);
                 bj.put("height",    c.box.height);
-                bj.put("url",       videoUrl);
+                bj.put("url", getPlaybackUrl());
                 bj.put("name",      className + "_" + permId);
                 bj.put("className", aiBase.getChainName());
                 bj.put("color",     CommonColorsVue(c.classId));
@@ -503,6 +512,7 @@ public class VideoReadOnnx implements Runnable {
 
             JSONObject bja = new JSONObject();
             bja.put("cmd",       "video");
+        bja.put("url", getPlaybackUrl());
             bja.put("number",    grabTimestamp);
             bja.put("streamPts", rawStreamPts);
             bja.put("rawStreamPts", rawStreamPts);
@@ -750,7 +760,7 @@ public class VideoReadOnnx implements Runnable {
             bj.put("y", lost.box.y);
             bj.put("width", lost.box.width);
             bj.put("height", lost.box.height);
-            bj.put("url", videoUrl);
+            bj.put("url", getPlaybackUrl());
             bj.put("name", className + "_" + lost.permId);
             bj.put("className", aiBase.getChainName());
             bj.put("color", CommonColorsVue(lost.classId));
@@ -768,6 +778,7 @@ public class VideoReadOnnx implements Runnable {
 
         JSONObject bja = new JSONObject();
         bja.put("cmd", "video");
+        bja.put("url", getPlaybackUrl());
         bja.put("number", grabTimestamp);
         bja.put("streamPts", rawStreamPts);
         bja.put("rawStreamPts", rawStreamPts);
@@ -787,6 +798,10 @@ public class VideoReadOnnx implements Runnable {
         catch (Exception e) { log.warn("[检查流状态异常]", e); return false; }
     }
     public FFmpegFrameGrabber createOptimizedGrabber() throws Exception {
+        // 将解封装器的原始警告接入Java日志，保留未知FLV编码等关键诊断信息。
+        FFmpegLogCallback.set();
+        log.info("[视频解码运行库] FFmpeg={}, HTTP-FLV={}",
+                avutil.av_version_info().getString(), isHttpFlvUrl());
         Exception lastException = null;
 
         try {
@@ -799,6 +814,9 @@ public class VideoReadOnnx implements Runnable {
         try {
             return startGrabber("Intel", "qsv", resolveQsvCodecName());
         } catch (Exception e) {
+            if (lastException != null) {
+                e.addSuppressed(lastException);
+            }
             lastException = e;
             log.warn("[Intel解码失败，切换CPU解码] {}", e.getMessage());
         }
@@ -809,17 +827,42 @@ public class VideoReadOnnx implements Runnable {
             if (lastException != null) {
                 e.addSuppressed(lastException);
             }
-            throw e;
+            log.warn("[CPU低延迟解码失败，使用宽松探测重试] {}", e.getMessage());
+            try {
+                return startGrabber("CPU宽松探测", null, null, true);
+            } catch (Exception probeException) {
+                probeException.addSuppressed(e);
+                log.error("[视频流初始化失败] 宽松探测仍失败，请检查源流是否包含有效视频编码头，以及当前FFmpeg是否支持该封装和编码");
+                throw probeException;
+            }
         }
     }
 
     private FFmpegFrameGrabber startGrabber(String mode, String hwaccel, String videoCodecName) throws Exception {
+        return startGrabber(mode, hwaccel, videoCodecName, false);
+    }
+
+    private FFmpegFrameGrabber startGrabber(String mode, String hwaccel, String videoCodecName,
+                                            boolean relaxedProbe) throws Exception {
         FFmpegFrameGrabber grabber = new FFmpegFrameGrabber(videoUrl);
         try {
             if (isHttpFlvUrl()) {
                 grabber.setFormat("flv");
             }
             applyLowLatencyOptions(grabber);
+            if (relaxedProbe) {
+                // 启动探测失败时允许等待编码头/关键帧，不再沿用低延迟探测限制。
+                // 同时恢复封装自动识别，避免URL中的.flv与实际响应不一致。
+                grabber.setFormat(null);
+                grabber.setOption("probesize", "10000000");
+                grabber.setOption("analyzeduration", "10000000");
+                grabber.setOption("stimeout", "15000000");
+                grabber.setOption("rw_timeout", "15000000");
+                grabber.setOption("avioflags", "0");
+                grabber.setOption("fflags", "0");
+                grabber.setOption("max_delay", "500000");
+                grabber.setOption("reorder_queue_size", "-1");
+            }
             if (hwaccel != null && hwaccel.length() > 0) {
                 grabber.setOption("hwaccel", hwaccel);
             }
@@ -838,7 +881,6 @@ public class VideoReadOnnx implements Runnable {
     }
 
     private void applyLowLatencyOptions(FFmpegFrameGrabber grabber) {
-        grabber.setOption("loglevel",       "-8");
         grabber.setOption("stimeout",       "3000000");
         grabber.setOption("rw_timeout",     "3000000");
         grabber.setOption("allowed_media_types", "video");

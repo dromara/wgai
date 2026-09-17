@@ -63,6 +63,30 @@ public class TabModelTryController extends JeecgController<TabModelTry, ITabMode
 	 private ITabModelTryOrgService tabModelTryOrgService;
 	 @Autowired
 	 private ITabEasyPicService tabEasyPicService;
+
+	 @Autowired
+	 private org.jeecg.modules.demo.train.service.impl.ModelFileRestoreService modelFileRestoreService;
+
+	 @AutoLog(value = "模型预训练-从XML恢复")
+	 @ApiOperation(value = "从XML目录恢复模型和图片标注", notes = "递归恢复标签、标注图、背景图及模型图片关联")
+	 @PostMapping("/restoreFromXml")
+	 public Result<?> restoreFromXml(@RequestBody com.alibaba.fastjson.JSONObject request) {
+		 long started = System.currentTimeMillis();
+		 log.info("[模型恢复][收到请求] 模型ID={}，模型名称={}，模型目录={}，XML目录={}，等待执行",
+				 request.getString("modelId"), request.getString("modelName"), request.getString("imageDir"), request.getString("xmlDir"));
+		 try {
+			 com.alibaba.fastjson.JSONObject restored = modelFileRestoreService.restore(request);
+			 log.info("[模型恢复][{}][完成，事务已提交] XML总数={}，新增={}，更新={}，标注图={}，背景图={}，保留={}，失败={}，总耗时={}ms",
+					 restored.getString("modelId"), restored.get("total"), restored.get("inserted"), restored.get("updated"),
+					 restored.get("annotated"), restored.get("backgrounds"), restored.get("skipped"), restored.get("failed"),
+					 System.currentTimeMillis() - started);
+			 return Result.OK(restored);
+		 } catch (Exception e) {
+			 log.error("[模型恢复][失败，未完成提交] 模型目录=" + request.getString("imageDir")
+					 + "，耗时=" + (System.currentTimeMillis() - started) + "ms", e);
+			 return Result.error("恢复失败：" + e.getMessage());
+		 }
+	 }
 	/**
 	 * 分页列表查询
 	 *

@@ -5,7 +5,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.jeecg.modules.szr.websocket.WebSocketSzr;
 import org.springframework.stereotype.Service;
 
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -30,6 +32,15 @@ public class SzrPlayEventService {
 
     /** 已处理过的事件，用于两条来路同时开启时去重 */
     private final Map<String, Long> handled = new ConcurrentHashMap<>();
+
+    /**
+     * 被打断作废的句子 tag。
+     *
+     * <p>打断之后驱动服务还会为「已经在播的那一句」补一条 sentence_end 上来
+     * （它切回静置画面就会认为这句播完了），那条事件必须丢掉：
+     * 推给前端会让前端以为这句正常说完了，做错收尾动作。
+     */
+    private final Map<String, Long> cancelled = new ConcurrentHashMap<>();
 
     /** 去重记录的保留时长，超过就清掉，避免无限增长 */
     private static final long DEDUP_TTL_MS = 5 * 60_000L;
@@ -72,6 +83,13 @@ public class SzrPlayEventService {
         }
         cleanupDedup(now);
 
+        if (cancelled.containsKey(tag)) {
+            // 打断前就已经在播的那一句，驱动服务切回静置后仍会补一条 sentence_end。
+            // 静默丢掉：前端已经收到 task_cancelled 了，再来一条 end 只会让它误判。
+            log.info("[szr] 忽略已打断句子的事件 {} {} (来自{})", event, tag, from);
+            return;
+        }
+
         SentenceMeta meta = sentenceIndex.get(tag);
         if (meta == null) {
             // 常见于：Java 重启后内存索引丢了，但驱动服务还在播之前排队的音频；
@@ -94,6 +112,35 @@ public class SzrPlayEventService {
         }
     }
 
+    /**
+     * 打断：作废所有在途句子，并给每个还没播完的任务推一条 {@code task_cancelled}。
+     *
+     * <p>必须推这条事件 —— {@code task_end} 只在最后一句播完时才发，
+     * 被打断的任务永远等不到它，前端会一直卡在"播报中"。
+     *
+     * @return 被作废的 taskId 集合
+     */
+    public Set<String> cancelAll() {
+        long now = System.currentTimeMillis();
+        Set<String> taskIds = new LinkedHashSet<>();
+        for (Map.Entry<String, SentenceMeta> e : sentenceIndex.entrySet()) {
+            taskIds.add(e.getValue().taskId);
+            cancelled.put(e.getKey(), now);
+        }
+        sentenceIndex.clear();
+        for (String taskId : taskIds) {
+            JSONObject msg = new JSONObject();
+            msg.put("event", "task_cancelled");
+            msg.put("tag", taskId);
+            msg.put("text", "");
+            msg.put("ts", now);
+            WebSocketSzr.broadcast(msg.toJSONString());
+            log.info("[szr] 推送前端 task_cancelled {}", taskId);
+        }
+        cleanupCancelled(now);
+        return taskIds;
+    }
+
     /** 合成失败等本地产生的事件，直接推前端 */
     public void push(String event, String tag, String text, int index, int total) {
         JSONObject msg = new JSONObject();
@@ -112,5 +159,9 @@ public class SzrPlayEventService {
             return;
         }
         handled.entrySet().removeIf(e -> now - e.getValue() > DEDUP_TTL_MS);
+    }
+
+    private void cleanupCancelled(long now) {
+        cancelled.entrySet().removeIf(e -> now - e.getValue() > DEDUP_TTL_MS);
     }
 }

@@ -94,4 +94,43 @@ public class TabSzrPython implements Serializable {
 	@Dict(dicCode = "yn")
     @ApiModelProperty(value = "音频是否上传：1=上传文件 0=同机直接给路径")
     private java.lang.Integer needUpload;
+
+	/*
+	 * -------------------------------------------------------------------------
+	 * 以下四个路径只有 py_name = 'musetalk-train' 那一行才用得上，
+	 * 是「训练数字人形象」功能要读写/执行的文件。
+	 *
+	 * ⚠ 全部填【绝对路径】。Java 拿它们直接读写文件、执行命令，
+	 *   相对路径会相对 Java 进程的工作目录，几乎必然找错。
+	 * ⚠ 这套功能要求 Java 和驱动服务在同一台服务器上。
+	 * -------------------------------------------------------------------------
+	 */
+
+	/**虚拟环境activate脚本*/
+	/* 预处理必须先进虚拟环境，直接用系统 python 会缺 torch/mmcv 一堆依赖 */
+	@Excel(name = "虚拟环境", width = 30)
+    @ApiModelProperty(value = "虚拟环境activate脚本绝对路径")
+    private java.lang.String pyVenv;
+
+	/**预处理配置realtime.yaml*/
+	/* ⚠ 每次点训练都会被整体覆盖，不要往里面写要长期保留的内容 */
+	@Excel(name = "预处理配置", width = 30)
+    @ApiModelProperty(value = "预处理配置realtime.yaml绝对路径")
+    private java.lang.String pyConf;
+
+	/**驱动服务config.yaml*/
+	/*
+	 * 切换数字人时只改它的 avatar.id / avatar.idle_video / extra_avatars 三处，
+	 * 做的是定点行替换，文件里的注释会原样保留。
+	 * MuseTalk 根目录和版本号也从这个文件的 musetalk.root / musetalk.version 读，
+	 * 不用再单独配一遍。
+	 */
+	@Excel(name = "驱动服务配置", width = 30)
+    @ApiModelProperty(value = "驱动服务config.yaml绝对路径")
+    private java.lang.String pyStreamConf;
+
+	/**驱动服务restart.sh*/
+	@Excel(name = "重启脚本", width = 30)
+    @ApiModelProperty(value = "驱动服务restart.sh绝对路径")
+    private java.lang.String pyRestart;
 }

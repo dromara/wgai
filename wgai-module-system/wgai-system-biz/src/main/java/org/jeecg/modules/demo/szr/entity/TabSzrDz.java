@@ -84,4 +84,44 @@ public class TabSzrDz implements Serializable {
 	@Excel(name = "数字人标签", width = 15)
     @ApiModelProperty(value = "数字人标签")
     private java.lang.String szrBq;
+	/**驱动形象ID*/
+	/*
+	 * MuseTalk 预处理缓存的目录名，对应驱动服务上的
+	 * <MuseTalk根目录>/results/<版本>/avatars/<avatar_id>/
+	 *
+	 * ⚠ 每个要说话的动作视频都必须单独跑过一次 avatar 预处理才会有这个目录 ——
+	 *   说话画面的底板只来自这个缓存，驱动服务不会去读原始视频文件。
+	 * ⚠ 填了不存在的 id 不会报错，驱动服务会退回默认形象并打告警，
+	 *   现象是"选了动作但画面没变"。用 GET /szr/speak/avatars 核对实际加载了哪些。
+	 */
+	@Excel(name = "驱动形象ID", width = 20)
+    @ApiModelProperty(value = "驱动形象ID")
+    private java.lang.String avatarId;
+	/**动作类型*/
+	/* 0=静置待机（不说话时循环播放，播报时用不到）  1=说话驱动 */
+	@Excel(name = "动作类型", width = 15, replace = {"静置待机_0", "说话驱动_1"})
+	@Dict(dicCode = "szr_dz_type")
+    @ApiModelProperty(value = "动作类型:0=静置待机 1=说话驱动")
+    private java.lang.Integer dzType;
+	/**是否默认说话动作*/
+	/* 播报接口没传 dzId 时用这条。同一个数字人下应当只有一条为 1 */
+	@Excel(name = "默认动作", width = 15, replace = {"否_0", "是_1"})
+	@Dict(dicCode = "yn")
+    @ApiModelProperty(value = "是否默认说话动作:1=是 0=否")
+    private java.lang.Integer isDefault;
+	/**训练状态*/
+	/*
+	 * 0=未训练 1=训练中 2=成功 3=失败。
+	 * ⚠ 只有 2 才是真正可用的：预处理缓存目录存在、驱动服务能加载。
+	 *   其余状态即使填了 avatar_id，播报时也会被驱动服务退回默认形象。
+	 */
+	@Excel(name = "训练状态", width = 15, dicCode = "szr_train_status")
+	@Dict(dicCode = "szr_train_status")
+    @ApiModelProperty(value = "训练状态:0未训练 1训练中 2成功 3失败")
+    private java.lang.Integer trainStatus;
+	/**训练结果说明*/
+	/* 失败原因，或成功时的帧数/分辨率摘要。直接显示在列表页，省得去翻服务器日志 */
+	@Excel(name = "训练结果说明", width = 40)
+    @ApiModelProperty(value = "训练结果说明")
+    private java.lang.String trainMsg;
 }

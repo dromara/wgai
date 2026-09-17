@@ -88,4 +88,7 @@ public class TabRosPython implements Serializable {
 	@Excel(name = "执行顺序", width = 15)
     @ApiModelProperty(value = "执行顺序")
     private java.lang.String sort;
+	/**AGV运行参数JSON，key 为 application.yml 里的 plc.* 配置项，只存改过的项，其余走 yml 默认值*/
+    @ApiModelProperty(value = "AGV运行参数JSON")
+    private java.lang.String agvParam;
 }

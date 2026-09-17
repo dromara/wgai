@@ -53,7 +53,9 @@ import org.jeecg.common.aspect.annotation.AutoLog;
 public class TabRosPythonController extends JeecgController<TabRosPython, ITabRosPythonService> {
 	@Autowired
 	private ITabRosPythonService tabRosPythonService;
-	
+	@Autowired
+	private org.jeecg.modules.ros2.service.AgvParamService agvParamService;
+
 	/**
 	 * 分页列表查询
 	 *
@@ -98,7 +100,54 @@ public class TabRosPythonController extends JeecgController<TabRosPython, ITabRo
 		 tabRosPythonService.startPy(modelTryList);
 		 return Result.OK("添加成功！");
 	 }
-	
+
+	/**
+	 * AGV 运行参数面板的数据源：参数定义 + 当前生效值 + 已保存的值。
+	 *
+	 * 参数只认 ros_name = AgvParamService.PARAM_RECORD_NAME 的那一条固定记录，
+	 * 不存在时会用 application.yml 的现值自动建出来，所以这个接口不需要传 id。
+	 * defs 里带了名称/分组/单位/取值范围/说明，页面照着渲染即可，加参数不用改前端。
+	 */
+	@ApiOperation(value="ROS脚本-AGV参数查询", notes="AGV运行参数定义与当前值")
+	@GetMapping(value = "/agvParam")
+	public Result<Map<String, Object>> queryAgvParam() {
+		TabRosPython record = agvParamService.getParamRecord();
+		Map<String, Object> values = new HashMap<>();
+		String raw = record == null ? null : record.getAgvParam();
+		if (raw != null && !raw.trim().isEmpty()) {
+			try {
+				values.putAll(JSON.parseObject(raw));
+			} catch (Exception e) {
+				// 手工改库改坏了不至于让整个面板打不开，当没配处理，页面会显示成全默认
+				log.warn("[AGV参数] agv_param 不是合法 JSON: {}", e.getMessage());
+			}
+		}
+		Map<String, Object> data = new HashMap<>();
+		data.put("defs", agvParamService.listParams());
+		data.put("values", values);
+		return Result.OK(data);
+	}
+
+	/**
+	 * 保存 AGV 运行参数并**立即生效**，不用重启服务 —— 这正是把参数从 yml 挪进库的目的。
+	 * 值会按定义表里的 min/max 钳位后再落库；提交空值 = 恢复该项的 yml 默认值。
+	 */
+	@AutoLog(value = "ROS脚本-AGV参数保存")
+	@ApiOperation(value="ROS脚本-AGV参数保存", notes="保存并立即下发AGV运行参数")
+	@PostMapping(value = "/agvParam")
+	public Result<String> saveAgvParam(@RequestBody Map<String, String> values) {
+		try {
+			int n = agvParamService.saveAndApply(values);
+			return Result.OK("已保存并生效，共 " + n + " 项");
+		} catch (IllegalArgumentException e) {
+			return Result.error(e.getMessage());
+		} catch (Exception e) {
+			log.error("[AGV参数] 保存失败", e);
+			return Result.error("保存失败: " + e.getMessage());
+		}
+	}
+
+
 	/**
 	 *   添加
 	 *

@@ -17,6 +17,7 @@ import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 import java.net.URI;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
@@ -49,6 +50,9 @@ public class ROS2BridgeService {
     @Autowired
     private MappingGridService mappingGridService; // 建图占据栅格（同样吃抽稀前的全量点）
 
+    @Autowired
+    private ObstacleGuardService obstacleGuardService; // 前向走廊避障（自动导航"前面有东西就停"）
+
     private WebSocketSession session;
     private final Gson gson = new Gson();
     private final AtomicInteger reconnectAttempts = new AtomicInteger(0);
@@ -66,23 +70,91 @@ public class ROS2BridgeService {
     private volatile double lastAmclCovXX = Double.MAX_VALUE;
     private volatile double lastAmclCovYY = Double.MAX_VALUE;
 
+    /** connect() 每次重连都 new 一个 handler，这里始终指向最新那个(odom 位姿缓存在它身上) */
+    private volatile ROS2WebSocketHandler activeHandler;
+
+    private final List<java.util.function.BiConsumer<Integer, Long>> navTerminalListeners =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /** 订阅导航终态 (status 4/5/6, goal stamp 纳秒)。handler 重连换了也不用重新注册 */
+    public void addNavTerminalListener(java.util.function.BiConsumer<Integer, Long> l) {
+        navTerminalListeners.add(l);
+    }
+
+    private final List<Runnable> planListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /** 订阅"收到一条 /plan" */
+    public void addPlanListener(Runnable l) {
+        planListeners.add(l);
+    }
+
+    /** 取消 Nav2 当前全部导航目标(走 rosbridge，毫秒级；不 fork ros2 CLI)。成功返回 true */
+    public boolean cancelAllNavGoals() {
+        com.google.gson.JsonArray uuid = new com.google.gson.JsonArray();
+        for (int i = 0; i < 16; i++) uuid.add(0);
+        JsonObject goalId = new JsonObject();
+        goalId.add("uuid", uuid);
+        JsonObject stamp = new JsonObject();
+        stamp.addProperty("sec", 0);
+        stamp.addProperty("nanosec", 0);
+        JsonObject info = new JsonObject();
+        info.add("goal_id", goalId);
+        info.add("stamp", stamp);
+        JsonObject args = new JsonObject();
+        args.add("goal_info", info);   // 全零 uuid + 零时间戳 = 取消所有目标
+        return callService("/navigate_to_pose/_action/cancel_goal", "action_msgs/srv/CancelGoal", args, 3000) != null;
+    }
+
+    private void fireNavTerminal(Integer status, Long stampNs) {
+        for (java.util.function.BiConsumer<Integer, Long> l : navTerminalListeners) {
+            l.accept(status, stampNs);
+        }
+    }
+
+    /**
+     * 最近一次 /Odometry 位姿 [x, y, theta](camera_init 系)，超过 maxAgeMs 没更新返回 null。
+     * 50Hz 连续不跳变，适合做机动闭环；AMCL 只在车动过阈值才更新，原地小角度转根本不出新值。
+     */
+    public double[] getOdomPose(long maxAgeMs) {
+        ROS2WebSocketHandler h = activeHandler;
+        double[] p = h == null ? null : h.getOdomPose();
+        if (p == null || System.currentTimeMillis() - (long) p[3] > maxAgeMs) return null;
+        return new double[]{p[0], p[1], p[2]};
+    }
+
     public void setWebSocketHandler(ROS2WebSocketHandler handler) {
         this.webSocketHandler = handler;
     }
 
+    /**
+     * 期望的位姿来源模式，connect() 里要重新喂给新 handler。
+     * ⚠ handler 是每次(重)连都 new 的实例，它自己的 navMode 会重置回 true；
+     *   而且 setWebSocketHandler 从来没人调过 → setNavMode 一直只打印"handler 还未注入,跳过"，
+     *   建图时位姿源切不到 /Odometry，图标用的还是 AMCL 的 map 系坐标，
+     *   和 camera_init 系的点云差多少就偏多少(2026-09-16 现场"建图时圆点位置不对")
+     */
+    private volatile boolean desiredNavMode = true;
+
     // === 加个对外的开关方法 ===
     public void setNavMode(boolean nav) {
-        if (webSocketHandler != null) {
-            webSocketHandler.setNavMode(nav);
+        desiredNavMode = nav;
+        ROS2WebSocketHandler h = activeHandler != null ? activeHandler : webSocketHandler;
+        if (h != null) {
+            h.setNavMode(nav);
         } else {
-            log.warn("setNavMode 调用时 handler 还未注入,跳过");
+            log.warn("setNavMode({}) 时还没有连接上 rosbridge，已记下，连上后自动应用", nav);
         }
+    }
+
+    public boolean isNavMode() {
+        return desiredNavMode;
     }
     @PostConstruct
     public void init() {
         if (ros2Config.isAutoConnect()) {
             connect();
         }
+        odomWatchdog.scheduleWithFixedDelay(this::checkOdomAlive, 5, 2, java.util.concurrent.TimeUnit.SECONDS);
     }
 
     /**
@@ -92,6 +164,31 @@ public class ROS2BridgeService {
      */
     public double[] getLastAmclPose() {
         return lastAmclPose;
+    }
+
+    /** 收到最近一次 /amcl_pose 时的里程计位姿 [x,y,theta]，null = 当时没有新鲜里程计 */
+    private volatile double[] amclOdomRef = null;
+
+    /**
+     * 当前车在 map 系的估计位姿 = 最近一次 AMCL 位姿 ⊕ 此后 fast_lio 里程计的相对位移。
+     * AMCL 车静止时不发新位姿、request_nomotion_update 有时也催不出来(现场"AMCL 5s 内没有新位姿")，
+     * 但 fast_lio 一直在跑，拿它把上次 AMCL 位姿推到现在，精度≈AMCL 本身 + 里程计短时漂移(厘米级)。
+     * @return null = 没有 AMCL 位姿，或里程计(当时/现在)不新鲜
+     */
+    public double[] getEstimatedMapPose() {
+        double[] a = lastAmclPose, ref = amclOdomRef, now = getOdomPose(1500);
+        if (a == null || ref == null || now == null) return null;
+        double dx = now[0] - ref[0], dy = now[1] - ref[1];
+        double c0 = Math.cos(ref[2]), s0 = Math.sin(ref[2]);
+        double lx = c0 * dx + s0 * dy, ly = -s0 * dx + c0 * dy;          // 位移换到当时的车体系
+        double ca = Math.cos(a[2]), sa = Math.sin(a[2]);
+        double th = a[2] + (now[2] - ref[2]);
+        return new double[]{a[0] + ca * lx - sa * ly, a[1] + sa * lx + ca * ly, Math.atan2(Math.sin(th), Math.cos(th))};
+    }
+
+    /** 最近一次收到 /amcl_pose 的时刻(ms)，0 = 没收到过 */
+    public long getLastAmclPoseMs() {
+        return lastAmclPoseMs;
     }
 
     /**
@@ -140,6 +237,7 @@ public class ROS2BridgeService {
 
             lastAmclPose   = new double[]{x, y, theta};
             lastAmclPoseMs = System.currentTimeMillis();
+            amclOdomRef    = getOdomPose(300);   // 同一时刻的里程计，用来往后推算(见 getEstimatedMapPose)
 
             if (poseWithCov.has("covariance")) {
                 com.google.gson.JsonArray cov = poseWithCov.getAsJsonArray("covariance");
@@ -164,11 +262,17 @@ public class ROS2BridgeService {
                     hardwareService,
                     rotationSafetyService,
                     mappingGridService,
+                    obstacleGuardService,
                     this::onConnected,
                     this::attemptReconnect,
                     this::onServiceResponse,
                     this::updateAmclPose      // ← 新增：/amcl_pose 收到时更新本地缓存
             );
+            handler.setNavTerminalListener(this::fireNavTerminal);
+            handler.setPlanListener(() -> planListeners.forEach(Runnable::run));
+            handler.setNavMode(desiredNavMode);   // 重连后把位姿来源模式重新喂给新 handler
+            activeHandler = handler;
+            webSocketHandler = handler;
 
             URI uri = new URI(ros2Config.getBridgeUrl());
             session = webSocketClient.doHandshake(handler, new WebSocketHttpHeaders(), uri).get();
@@ -183,8 +287,25 @@ public class ROS2BridgeService {
     }
 
     private void onConnected(WebSocketSession connectedSession) {
-        if (this.session == null) this.session = connectedSession;
+        // ⚠ 必须无条件换成新连接。原来写的是 if (session == null)：Java 刚启动时 session 为空没问题，
+        //   但 rosbridge 断开重连时 session 还是旧的已关闭连接 → 下面的订阅全发到死连接上丢了，
+        //   等 connect() 里 doHandshake().get() 返回才换成新 session，订阅早错过了 →
+        //   /Odometry /amcl_pose /plan 点云全收不到、isConnected() 却是 true。
+        //   现场表现"重启 ROS 栈、切菜单都没用，只有重启 Java 才恢复"(2026-09-15)
+        this.session = connectedSession;
+        connectedAtMs = System.currentTimeMillis();
         subscribeToTopics();
+        for (Runnable l : connectListeners) {
+            try { l.run(); } catch (Exception e) { log.warn("重连回调异常: {}", e.getMessage()); }
+        }
+    }
+
+    private volatile long connectedAtMs = 0L;
+    private final List<Runnable> connectListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /** 每次(重新)连上 rosbridge 后回调，用来重置 advertise 之类只对单个连接有效的状态 */
+    public void addConnectListener(Runnable l) {
+        connectListeners.add(l);
     }
 
     /**
@@ -298,8 +419,8 @@ public class ROS2BridgeService {
             send(json.toString());
         }
 
-        // 等 50ms 让 rosbridge 处理 unsubscribe
-        try { Thread.sleep(50); } catch (InterruptedException ignored) {}
+        // 等 rosbridge 处理完 unsubscribe 再订(50ms 在点云繁忙时不够，见 resubscribeFastLioTopics)
+        try { Thread.sleep(300); } catch (InterruptedException ignored) {}
 
         // 再 subscribe(此时 Nav2 已起来,DDS discovery 能正确握手)
         subscribe("/plan",        "nav_msgs/Path", 500);
@@ -330,11 +451,54 @@ public class ROS2BridgeService {
             send(json.toString());
         }
 
-        try { Thread.sleep(50); } catch (InterruptedException ignored) {}
+        // ⚠ 50ms 不够：WebSocket 上正挤着大点云，rosbridge 可能在新 subscribe 之后才处理到 unsubscribe，
+        //   结果把刚订上的又退掉 → Java 永久收不到 /Odometry(2026-09-15 现场"切个菜单回来里程计就没了")。
+        //   另有 startOdomWatchdog() 兜底自愈
+        try { Thread.sleep(300); } catch (InterruptedException ignored) {}
 
         subscribe("/cloud_registered", "sensor_msgs/PointCloud2", 200);
         subscribe("/Odometry", "nav_msgs/Odometry", 100);
         log.info("✅ fast_lio topic 已重新订阅");
+    }
+
+    private final java.util.concurrent.ScheduledExecutorService odomWatchdog =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "odom-watchdog");
+                t.setDaemon(true);
+                return t;
+            });
+    private volatile long lastOdomResubMs = 0L;
+
+    /**
+     * /Odometry 断流自愈：曾经收到过、现在超过 3s 没来、rosbridge 还连着 → 只补发 subscribe(不先 unsubscribe，
+     * 避免再撞上面那个乱序)。rosbridge 对同一客户端同一 topic 重复 subscribe 不会重复推送。
+     * 10s 内最多补一次，免得 fast_lio 真挂了时刷屏。
+     */
+    private void checkOdomAlive() {
+        try {
+            ROS2WebSocketHandler h = activeHandler;
+            if (h == null || !isConnected()) return;
+            double[] p = h.getOdomPose();
+            long now = System.currentTimeMillis();
+            if (p == null) {
+                // 这个连接上一条都没收到过(重连后订阅没发出去的老症状)：连上 8s 还没有就把全部话题重订一遍
+                if (now - connectedAtMs > 8000 && now - lastOdomResubMs > 10_000) {
+                    lastOdomResubMs = now;
+                    log.warn("[里程计看门狗] 连上 rosbridge {}ms 仍未收到任何 /Odometry，重新订阅全部话题", now - connectedAtMs);
+                    subscribeToTopics();
+                }
+                return;
+            }
+            if (now - (long) p[3] > 3000 && now - lastOdomResubMs > 10_000) {
+                lastOdomResubMs = now;
+                log.warn("[里程计看门狗] {}ms 没收到 /Odometry，补发订阅 /Odometry /cloud_registered。"
+                        + "若持续出现，在机器人上 ros2 topic hz /Odometry 确认 fast_lio 是否在跑", now - (long) p[3]);
+                subscribe("/Odometry", "nav_msgs/Odometry", 100);
+                subscribe("/cloud_registered", "sensor_msgs/PointCloud2", 200);
+            }
+        } catch (Exception e) {
+            log.debug("[里程计看门狗] 异常: {}", e.getMessage());
+        }
     }
     /**
      * 预先声明话题类型
@@ -420,21 +584,26 @@ public class ROS2BridgeService {
         }
     }
 
+    private final java.util.concurrent.atomic.AtomicBoolean reconnectScheduled =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    /**
+     * 断线重连。
+     * ⚠ 以前超过 maxReconnectAttempts(10 次×5s=50s)就永久放弃，ROS 栈重启慢一点 Java 就再也连不回去，
+     *   只能重启 Java。现在超过次数后不放弃，改成每 30s 试一次。
+     *   也不再在回调线程里 sleep + 递归 connect()(断得久了栈会越压越深)，改为调度执行，同一时刻只排一个。
+     */
     private void attemptReconnect() {
+        if (!reconnectScheduled.compareAndSet(false, true)) return;
         int attempts = reconnectAttempts.incrementAndGet();
-        if (ros2Config.getMaxReconnectAttempts() > 0
-                && attempts > ros2Config.getMaxReconnectAttempts()) {
-            log.error("达到最大重连次数，停止重连");
-            return;
-        }
-        log.info("尝试重连 ({}/{})", attempts,
-                ros2Config.getMaxReconnectAttempts() > 0 ? ros2Config.getMaxReconnectAttempts() : "∞");
-        try {
-            Thread.sleep(ros2Config.getReconnectInterval());
+        int max = ros2Config.getMaxReconnectAttempts();
+        long delay = (max > 0 && attempts > max) ? 30_000L : ros2Config.getReconnectInterval();
+        log.info("{}ms 后尝试重连 (第 {} 次{})", delay, attempts, (max > 0 && attempts > max) ? "，已超过快速重连次数，改为每 30s 一次" : "");
+        odomWatchdog.schedule(() -> {
+            reconnectScheduled.set(false);
+            if (isConnected()) return;
             connect();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        }, delay, java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 
     /**

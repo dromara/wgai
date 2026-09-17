@@ -65,6 +65,13 @@ public class VideoReadOnnxPose implements Runnable {
     private RedisTemplate redisTemplate;
     public Integer TARGET_FRAME_INTERVAL = 300;
     public String videoUrl;
+
+    // 识别可使用备注中的RTSP，推送使用播放地址供前端关联同一路视频。
+    private String getPlaybackUrl() {
+        String playbackUrl = tabAiModelBund == null ? null : tabAiModelBund.getSendUrl();
+        return playbackUrl == null || playbackUrl.trim().isEmpty() ? videoUrl : playbackUrl;
+    }
+
     public String userId;
     private volatile long lastFrameTime = 0;
     public String namesUrl;
@@ -343,6 +350,7 @@ public class VideoReadOnnxPose implements Runnable {
                 getIdMapper(netPush).tickEmpty();
                 JSONObject bja = new JSONObject();
                 bja.put("cmd",       "video");
+        bja.put("url", getPlaybackUrl());
                 bja.put("number",    grabTimestamp);
                 bja.put("streamPts", streamPts);
                 bja.put("list",      new ArrayList<>());
@@ -406,7 +414,7 @@ public class VideoReadOnnxPose implements Runnable {
                 bj.put("y",         c.box.y);
                 bj.put("width",     c.box.width);
                 bj.put("height",    c.box.height);
-                bj.put("url",       videoUrl);
+                bj.put("url", getPlaybackUrl());
                 bj.put("name",      aiBase.getChainName() + permId);
                 bj.put("color",     CommonColorsVue(0));
                 bj.put("number",    grabTimestamp);
@@ -418,6 +426,7 @@ public class VideoReadOnnxPose implements Runnable {
 
             JSONObject bja = new JSONObject();
             bja.put("cmd",       "video");
+        bja.put("url", getPlaybackUrl());
             bja.put("number",    grabTimestamp);
             bja.put("streamPts", streamPts);
             bja.put("list",      jsonlist);

@@ -37,6 +37,30 @@ public class WebSocketPushService {
     @Autowired
     private WebSocket webSocket;
 
+    // ─────────────────── 点云按需推送 ───────────────────
+    //
+    // ⚠ 点云每帧 ~3000 点、按 JSON 对象编码 ~100KB，5Hz ≈ 4Mbps，而且以前不管谁在看都广播。
+    //   只有建图页用它；浏览器在另一台电脑上，这 4Mbps 全压在主机那块 WiFi 上，
+    //   和 PLC 的 S7 通信抢同一个无线网卡 → ping 从几毫秒涨到 1~4 秒、页面控制记录丢、地图图片加载不出来，
+    //   控制指令和急停也跟着延迟(2026-09-16 现场)。
+    //   改成跟建图状态走：点「开始建图」/「清空重扫」才推，「取消建图」/「保存地图」就停。导航页不需要点云。
+    //   ⚠ 只管"推给浏览器"。Java 从 rosbridge 收点云照常(本机回环不占 WiFi)，避障/旋转判定/建图栅格都靠它。
+
+    private volatile boolean cloudPushEnabled = false;
+
+    /** MappingController 在开始/清空重扫时开，取消/保存时关 */
+    public void setCloudPushEnabled(boolean enabled) {
+        if (cloudPushEnabled != enabled) {
+            log.info("[点云推送] {}", enabled ? "开始往页面推送点云(建图中)" : "停止往页面推送点云");
+        }
+        cloudPushEnabled = enabled;
+    }
+
+    /** 当前是否往页面推点云 */
+    public boolean isCloudPushWanted() {
+        return cloudPushEnabled;
+    }
+
     // ─────────────────── 高频实时数据（直连 WebSocket，tryLock 丢帧） ───────────────────
 
     /**

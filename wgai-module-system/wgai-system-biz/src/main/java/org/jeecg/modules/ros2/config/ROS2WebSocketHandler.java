@@ -9,6 +9,7 @@ import com.google.gson.JsonObject;
 import lombok.extern.slf4j.Slf4j;
 import lombok.var;
 import org.jeecg.modules.ros2.service.MappingGridService;
+import org.jeecg.modules.ros2.service.ObstacleGuardService;
 import org.jeecg.modules.ros2.service.RobotHardwareService;
 import org.jeecg.modules.ros2.service.RotationSafetyService;
 import org.jeecg.modules.ros2.service.VelocityMonitorService;
@@ -60,6 +61,8 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
     private final RotationSafetyService  rotationSafetyService;
     /** 建图占据栅格:同样吃抽稀前的全量点,让保存地图不必再杀 fast_lio 取 PCD */
     private final MappingGridService     mappingGridService;
+    /** 前向走廊避障:自动导航时"前面多少米有东西就停"的数据源,同样吃全量点 */
+    private final ObstacleGuardService   obstacleGuardService;
     private final Gson gson = new Gson();
     private final Consumer<WebSocketSession> onConnectCallback;
     private final Runnable onDisconnectCallback;
@@ -125,6 +128,33 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
     private volatile double cachedOdomY     = 0.0;
     private volatile double cachedOdomTheta = 0.0;
     private volatile boolean hasOdomPose    = false;
+    private volatile long    lastObstaclePushMs = 0L;
+    private volatile long    lastCloudPushMs = 0L;
+    private volatile boolean lastObstacleOverridePushed = false;
+    private volatile long   cachedOdomMs    = 0L;
+
+    /** 最近一次 /Odometry 位姿 [x, y, theta, 收到时刻ms]，没收到过返回 null。机动闭环(原地转/平移)靠它 */
+    public double[] getOdomPose() {
+        if (!hasOdomPose) return null;
+        return new double[]{cachedOdomX, cachedOdomY, cachedOdomTheta, cachedOdomMs};
+    }
+
+    /**
+     * 导航终态回调 (status, goal_info.stamp 纳秒)。ManeuverService 靠它接"到达后对位 / 失败后侧移重试"。
+     * 带 stamp 是因为 status_list 会重播历史目标，订阅方要按自己发目标的时刻把旧目标的终态筛掉。
+     */
+    private volatile java.util.function.BiConsumer<Integer, Long> navTerminalListener;
+
+    public void setNavTerminalListener(java.util.function.BiConsumer<Integer, Long> l) {
+        this.navTerminalListener = l;
+    }
+
+    /** 每收到一条 /plan 回调。ManeuverService 靠"发了目标多久没出路径"判断规划失败，不用等 BT 把恢复动作全跑完 */
+    private volatile Runnable planListener;
+
+    public void setPlanListener(Runnable l) {
+        this.planListener = l;
+    }
 
     public ROS2WebSocketHandler(
             VelocityMonitorService velocityService,
@@ -132,6 +162,7 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
             RobotHardwareService hardwareService,
             RotationSafetyService rotationSafetyService,
             MappingGridService mappingGridService,
+            ObstacleGuardService obstacleGuardService,
             Consumer<WebSocketSession> onConnectCallback,
             Runnable onDisconnectCallback,
             Consumer<JsonObject> onServiceResponseCallback,
@@ -141,6 +172,7 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
         this.hardwareService           = hardwareService;
         this.rotationSafetyService     = rotationSafetyService;
         this.mappingGridService        = mappingGridService;
+        this.obstacleGuardService      = obstacleGuardService;
         this.onConnectCallback         = onConnectCallback;
         this.onDisconnectCallback      = onDisconnectCallback;
         this.onServiceResponseCallback = onServiceResponseCallback;
@@ -152,8 +184,9 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         log.info("✅ ROS2 Bridge 连接建立: {}", session.getId());
-        session.setTextMessageSizeLimit(20 * 1024 * 1024);
-        session.setBinaryMessageSizeLimit(20 * 1024 * 1024);
+        // load_map 响应带整张地图，大地图 JSON 能到几十 MB，20MB 上限会把连接直接断掉
+        session.setTextMessageSizeLimit(200 * 1024 * 1024);
+        session.setBinaryMessageSizeLimit(200 * 1024 * 1024);
         if (onConnectCallback != null) onConnectCallback.accept(session);
     }
 
@@ -274,6 +307,39 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
                         cachedOdomX, cachedOdomY, cachedOdomTheta);
             }
 
+            // ★ 前向走廊避障:同样必须用全量点。和旋转判定不同,它逐帧算不累积,
+            //   因为自动导航时车一直在动,累积出来的车体系数据下一帧就失效了。
+            //   ⚠ 这条线以前是断的:RobotHardwareService#updateObstacleDistance 从来没人调用,
+            //     obstacle.stop.distance 配了也白配,车不会因为前面有东西而停。
+            if (obstacleGuardService != null && hasOdomPose) {
+                // 舵角要传当前**实际下发**的那个(已过 ramp),走廊才会跟着车真正在转的方向弯。
+                // 2026-09 现场:走廊固定朝正前方时,右打舵会一路开到右侧蹭上才停。
+                // 有转角反馈就用反馈：舵轮转动途中车按实际角度走，按实发值画走廊会弯错
+                double steerDeg = hardwareService == null ? 0 : hardwareService.getSteerAngleForGuardDeg();
+                double clearance = obstacleGuardService.updateFromCloud(
+                        rawData, pointStep, totalPoints,
+                        xOffset, yOffset, zOffset,
+                        cachedOdomX, cachedOdomY, cachedOdomTheta, steerDeg);
+                if (hardwareService != null) {
+                    hardwareService.updateObstacleDistance(clearance);
+                }
+                JSONObject ob = new JSONObject();
+                // 走廊内没东西时前端显示 -1(= 无障碍),不要推 MAX_VALUE 过去
+                ob.put("minDistance", clearance == Double.MAX_VALUE ? -1
+                        : Math.round(clearance * 100.0) / 100.0);
+                ob.put("override",  hardwareService != null && hardwareService.isObstacleOverride());
+                ob.put("threshold", hardwareService == null ? 0 : hardwareService.getObstacleStopDistance());
+                ob.put("steerAngleDeg", Math.round(steerDeg * 10.0) / 10.0);
+                // 判定逐帧做(拦停不能慢)，推前端只是显示，2Hz 足够；拦停状态变化时立刻推
+                long nowMs = System.currentTimeMillis();
+                boolean overrideNow = hardwareService != null && hardwareService.isObstacleOverride();
+                if (nowMs - lastObstaclePushMs >= 500 || overrideNow != lastObstacleOverridePushed) {
+                    lastObstaclePushMs = nowMs;
+                    lastObstacleOverridePushed = overrideNow;
+                    pushService.pushToAll("obstacle_update", ob);
+                }
+            }
+
             // ★ 建图栅格累积:同样要用全量点。开关在 service 自己身上(由 /start、/cancel 控制),
             //   这里无条件喂,它内部判 enabled。
             //   ⚠ 别改成判 navMode:那是本类的实例字段,而 ROS2BridgeService.connect() 每次重连
@@ -295,6 +361,19 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
             float pushZMin = mappingGridService != null ? (float) mappingGridService.getAcceptZMin() : -5f;
             float pushZMax = mappingGridService != null ? (float) mappingGridService.getAcceptZMax() : 10f;
 
+            // 没有建图页在看就不编码、不推(见 WebSocketPushService.requestCloudPush)。
+            // 安全判定和建图栅格在上面已经用全量点处理完，不受影响
+            if (!pushService.isCloudPushWanted()) return;
+
+            // 建图时也控一下量(浏览器、PLC 同走一个 WiFi 网关)：
+            //   ① 最多 2Hz。前端本来就按体素累积成整图，少推几帧不缺东西，只是新区域出现得慢半拍
+            //   ② 扁平数组 p=[x,y,z,x,y,z...]、保留 2 位小数(1cm，前端体素 8cm 足够)。
+            //      原来每点 {"x":..,"y":..,"z":..} 三位小数，同样 3000 点体积大一倍多
+            //   合计从 ~4Mbps 降到 ~1Mbps 以内
+            long pushNow = System.currentTimeMillis();
+            if (pushNow - lastCloudPushMs < 500) return;
+            lastCloudPushMs = pushNow;
+
             JSONArray points = new JSONArray();
             for (int i = 0; i < totalPoints; i += step) {
                 int base = i * pointStep;
@@ -309,11 +388,9 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
                     continue;
                 if (z < pushZMin || z > pushZMax) continue;
 
-                JSONObject pt = new JSONObject();
-                pt.put("x", Math.round(x * 1000.0) / 1000.0);
-                pt.put("y", Math.round(y * 1000.0) / 1000.0);
-                pt.put("z", Math.round(z * 1000.0) / 1000.0);
-                points.add(pt);
+                points.add(Math.round(x * 100.0) / 100.0);
+                points.add(Math.round(y * 100.0) / 100.0);
+                points.add(Math.round(z * 100.0) / 100.0);
             }
 
             if (points.isEmpty()) {
@@ -322,9 +399,9 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
             }
 
             JSONObject cloudData = new JSONObject();
-            cloudData.put("points",    points);
+            cloudData.put("p",         points);   // 扁平 [x,y,z,...]，前端 utreeMap.handleCloud 还原
             cloudData.put("totalRaw",  totalPoints);
-            cloudData.put("pushCount", points.size());
+            cloudData.put("pushCount", points.size() / 3);
 
             // 心跳日志:每隔 POINT_CLOUD_LOG_INTERVAL_MS 打一行,确认点云在正常传输,不刷屏
             long now = System.currentTimeMillis();
@@ -333,7 +410,7 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
                 // 带上栅格状态:光看"点云正常接收"会误以为建图数据也在攒,
                 // 实际累积开关没开时一个格都不会进,保存时才发现是空图
                 log.info("📡 点云正常接收: 原始{}点 → 推送{}点 | 建图栅格: {}",
-                        totalPoints, points.size(),
+                        totalPoints, points.size() / 3,
                         mappingGridService == null ? "未接入"
                                 : (mappingGridService.isEnabled()
                                         ? "累积中 " + mappingGridService.cellCount() + " 格"
@@ -378,7 +455,9 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
             cachedOdomX     = posX;
             cachedOdomY     = posY;
             cachedOdomTheta = theta;
+            cachedOdomMs    = System.currentTimeMillis();
             hasOdomPose     = true;
+            if (hardwareService != null) hardwareService.updateOdomPose(posX, posY, cachedOdomMs);
 
             // 1) 始终缓存速度
             double linearVel  = 0;
@@ -418,8 +497,11 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
      * AMCL 不发速度,这里附带 cachedLinearVel/cachedAngularVel
      * (来自最近一次的 /Odometry 或 /cmd_vel)。
      *
-     * 注意:此方法不受 navMode 限制 —— 建图时 AMCL 不在运行,本来就收不到 /amcl_pose;
-     *      多一层 if 反而是冗余,直接信任源头即可。
+     * ⚠ 必须判 navMode。原注释写的"建图时 AMCL 不在运行"在**常驻导航栈**下不成立:
+     *   建图时 Nav2/AMCL 照样跑着,还在按上一张地图发 /amcl_pose(map 系),
+     *   而建图页画的点云是 camera_init 系 → 图标和点云差了整个 map→camera_init 的位移,
+     *   现场表现"建图时圆点位置不对"(2026-09-16)。
+     *   位姿缓存(onAmclPoseCallback)不受影响,照常更新,只是不往前端推 robot_pose。
      */
     private void handleAmclPose(JsonObject msg) {
         try {
@@ -438,7 +520,8 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
             poseData.put("linearVel",  cachedLinearVel);
             poseData.put("angularVel", cachedAngularVel);
 
-            pushService.pushToAll("robot_pose", poseData);
+            // 建图模式(navMode=false)下位姿由 /Odometry 推，和点云同一个坐标系；这里推了就会把它覆盖掉
+            if (navMode) pushService.pushToAll("robot_pose", poseData);
 
             // ★ 更新 ROS2BridgeService 位姿缓存，供 MapController 位姿自动保存使用
             //   （替代原来每5s fork ros2 topic echo 的 shell 命令）
@@ -466,33 +549,45 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
 
             JSONArray posesArray = new JSONArray();
             for (int i = 0; i < total; i += step) {
-                JsonObject position = poses.get(i).getAsJsonObject()
-                        .getAsJsonObject("pose").getAsJsonObject("position");
-                JSONObject pt = new JSONObject();
-                pt.put("x", position.get("x").getAsDouble());
-                pt.put("y", position.get("y").getAsDouble());
-                posesArray.add(pt);
+                posesArray.add(planPointAsRadar(poses.get(i).getAsJsonObject()));
             }
 
             // 确保终点被包含
             if (total > 1) {
-                JsonObject lastPos = poses.get(total - 1).getAsJsonObject()
-                        .getAsJsonObject("pose").getAsJsonObject("position");
-                JSONObject lastPt = new JSONObject();
-                lastPt.put("x", lastPos.get("x").getAsDouble());
-                lastPt.put("y", lastPos.get("y").getAsDouble());
-                posesArray.add(lastPt);
+                posesArray.add(planPointAsRadar(poses.get(total - 1).getAsJsonObject()));
             }
 
             JSONObject pathData = new JSONObject();
             pathData.put("poses", posesArray);
             pushService.pushToAll("path_update", pathData);
+            if (planListener != null) planListener.run();
 
             log.info("✅ 导航路径推送: 原始{}点 → 下采样{}点", total, posesArray.size());
 
         } catch (Exception e) {
             log.warn("处理 /plan 路径失败: {}", e.getMessage());
         }
+    }
+
+    /**
+     * /plan 的点是 Nav2 base_link(转向中心，雷达后方约 2.8m)走的轨迹。前端的车图标和目标点都按雷达画，
+     * 直接画出来路径两头都比图标缩进一截车身，看着像"路径短了"。按每个点的朝向平移回雷达位置再推。
+     */
+    private JSONObject planPointAsRadar(JsonObject poseStamped) {
+        JsonObject pose = poseStamped.getAsJsonObject("pose");
+        JsonObject position = pose.getAsJsonObject("position");
+        double x = position.get("x").getAsDouble();
+        double y = position.get("y").getAsDouble();
+        if (obstacleGuardService != null && pose.has("orientation")) {
+            double yaw = quaternionToYaw(pose.getAsJsonObject("orientation"));
+            double cx = obstacleGuardService.getSteerCenterX(), cy = obstacleGuardService.getSteerCenterY();
+            x -= Math.cos(yaw) * cx - Math.sin(yaw) * cy;
+            y -= Math.sin(yaw) * cx + Math.cos(yaw) * cy;
+        }
+        JSONObject pt = new JSONObject();
+        pt.put("x", x);
+        pt.put("y", y);
+        return pt;
     }
 
     private void handlePath(JsonObject msg) {
@@ -574,6 +669,14 @@ public class ROS2WebSocketHandler extends TextWebSocketHandler {
             statusData.put("reached",   reached);
             statusData.put("failed",    failed);
             pushService.pushToAll("nav_status", statusData);
+
+            if (status >= 4 && navTerminalListener != null) {
+                try {
+                    navTerminalListener.accept(status, latestStamp);
+                } catch (Exception e) {
+                    log.warn("导航终态回调异常: {}", e.getMessage(), e);
+                }
+            }
 
             if (reached) {
                 log.info("🎉 导航完成!机器人已到达目标点");

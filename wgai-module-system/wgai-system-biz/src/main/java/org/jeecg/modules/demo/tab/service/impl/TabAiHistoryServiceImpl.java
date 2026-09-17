@@ -831,14 +831,21 @@ public class TabAiHistoryServiceImpl extends ServiceImpl<TabAiHistoryMapper, Tab
             beforePush.setIsBy(tabAiModelBund.getIsBy()!=null?tabAiModelBund.getIsBy():1);
             beforePush.setTabVideoUtil(tabVideoUtil);
             RedisCacheHolder.put(tabAiModelBund.getId()  + "videoRead",true);
+            // 备注可配置识别专用流地址（如RTSP），未配置时兼容原视频地址。
+            boolean useRemarkUrl = StringUtils.isNotBlank(tabAiModelBund.getRemake());
+            String videoUrl = useRemarkUrl
+                    ? tabAiModelBund.getRemake().trim() : tabAiModelBund.getSendUrl();
+            log.info("[识别流地址选择] 绑定ID={}, 来源={}, 协议={}", tabAiModelBund.getId(),
+                    useRemarkUrl ? "备注(remake)" : "原地址(sendUrl)",
+                    StringUtils.substringBefore(videoUrl, ":"));
             String savePath="";
             if(tabAiModel1.getModelDify()!=null&&tabAiModel1.getModelDify()==2){  //姿态识别
                 log.info("姿态识别");
-                savePath=modelYolo3.SendVideoLocalhostYoloV11ThreadPose(beforePush,tabAudioDevice,tabAiModelBund,userId,tabAiModel1.getAiNameName(),tabAiModelBund.getSendUrl(),path,webSocket,redisUtil,redisTemplate);
+                savePath=modelYolo3.SendVideoLocalhostYoloV11ThreadPose(beforePush,tabAudioDevice,tabAiModelBund,userId,tabAiModel1.getAiNameName(),videoUrl,path,webSocket,redisUtil,redisTemplate);
 
             }else{
                 log.info("图像识别");
-                savePath=modelYolo3.SendVideoLocalhostYoloV11Thread(beforePush,tabAudioDevice,tabAiModelBund,userId,tabAiModel1.getAiNameName(),tabAiModelBund.getSendUrl(),path,webSocket,redisUtil,redisTemplate);
+                savePath=modelYolo3.SendVideoLocalhostYoloV11Thread(beforePush,tabAudioDevice,tabAiModelBund,userId,tabAiModel1.getAiNameName(),videoUrl,path,webSocket,redisUtil,redisTemplate);
 
             }
             if(savePath.equals("error")){

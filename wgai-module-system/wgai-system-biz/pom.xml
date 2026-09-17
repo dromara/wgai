@@ -171,7 +171,8 @@
 		<dependency>
 			<groupId>org.bytedeco</groupId>
 			<artifactId>javacv-platform</artifactId>
-			<version>1.5.10</version>
+			<!-- FFmpeg 8.0.1: supports legacy HEVC FLV CodecID 12 and Enhanced FLV. -->
+			<version>1.5.13</version>
 		</dependency>
 
 <!--		<dependency>-->

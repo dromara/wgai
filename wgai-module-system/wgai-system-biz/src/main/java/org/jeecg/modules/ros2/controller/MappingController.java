@@ -169,6 +169,13 @@ public class MappingController {
     @Autowired
     MappingGridService mappingGridService;
 
+    /**
+     * 点云推给浏览器的开关：开始建图/清空重扫时开，取消/保存时关。
+     * 以前无差别广播(~4Mbps)，全压在主机 WiFi 上和 PLC 通信抢带宽(2026-09-16)
+     */
+    @Autowired
+    org.jeecg.modules.ros2.service.WebSocketPushService pushService;
+
     // ==================== 启动建图 ====================
     @PostMapping("/connection")
     @ApiOperation("启动 fast_lio 建图")
@@ -212,7 +219,8 @@ public class MappingController {
             mappingGridService.setEnabled(true);
         }
 
-        // ⭐ 进入建图模式,前端 robot_pose 改用 /Odometry 来源
+        // ⭐ 进入建图模式,前端 robot_pose 改用 /Odometry 来源；开始往页面推点云
+        pushService.setCloudPushEnabled(true);
         ros2BridgeService.setNavMode(false);
 
         // ⭐ rosbridge 的订阅会绑死在当时的 publisher 上。上一轮保存地图会重启整个 robot_full，
@@ -369,6 +377,7 @@ public class MappingController {
         }
         // 建图模式下前端 robot_pose 取自 /Odometry，退出建图要切回 AMCL
         ros2BridgeService.setNavMode(true);
+        pushService.setCloudPushEnabled(false);
         // 停止往栅格里攒新点，但已攒的保留 —— 取消之后仍然可以直接点保存
         mappingGridService.setEnabled(false);
         log.info("⏸ 取消建图（fast_lio 继续运行，已扫描数据保留，未重启任何进程）");
@@ -395,6 +404,7 @@ public class MappingController {
             mappingGridService.clear();
             mappingGridService.setEnabled(true);
             ros2BridgeService.setNavMode(false);
+            pushService.setCloudPushEnabled(true);
             log.info("🗑 已清空建图栅格，立即重新开始累积（未重启任何进程）");
             Map<String, Object> res = new LinkedHashMap<>();
             res.put("restarting", false);
@@ -411,6 +421,7 @@ public class MappingController {
                     log.info("🗑 丢弃当前建图数据，重启 robot_full 重新开始扫描...");
                     restartRobotFull();
                     ros2BridgeService.setNavMode(false);
+                    pushService.setCloudPushEnabled(true);
                     ros2BridgeService.resubscribeFastLioTopics();
                     log.info("✅ 已重新开始扫描");
                 } catch (Exception e) {
@@ -585,6 +596,7 @@ public class MappingController {
         }
 
         lastSaveResult = null;
+        pushService.setCloudPushEnabled(false);   // 保存 = 建图结束，不再往页面推点云
         final Map<String, String> params = (body != null) ? body : new HashMap<>();
 
         executor.submit(new Runnable() {
