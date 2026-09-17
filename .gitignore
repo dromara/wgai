@@ -9,3 +9,5 @@ rebel.xml
 
 ## front
 **/*.lock
+/wgai-module-system/.claude/
+/wgai-module-system/.claude/
