@@ -5,6 +5,9 @@ import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 import lombok.extern.slf4j.Slf4j;
+import org.jeecg.common.util.SpringContextUtils;
+import org.jeecg.modules.demo.video.service.ITabAiWarningService;
+import org.jeecg.modules.demo.video.service.impl.AlarmWorkService;
 import org.apache.commons.lang.StringUtils;
 import org.bytedeco.ffmpeg.global.avcodec;
 import org.bytedeco.javacv.*;
@@ -66,7 +69,40 @@ public class identifyTypeNew {
 
 
     //v3 验证是否通过
+    /** Releases per-inference native buffers even when detection returns early. */
+    private static final class NativeMats implements AutoCloseable {
+        private final Set<Mat> values = Collections.newSetFromMap(new IdentityHashMap<Mat, Boolean>());
+        <T extends Mat> T keep(T mat) { values.add(mat); return mat; }
+        @Override public void close() { for (Mat mat : values) mat.release(); }
+    }
+
+    static void appendPredictions(Mat detectionMat, boolean hasObjectness, int classCount, float confThreshold,
+                                  List<Integer> classIds, List<Float> confidences, List<Rect2d> boxes2d) {
+        int rows = detectionMat.rows(), cols = detectionMat.cols();
+        int scoresStartCol = hasObjectness ? 5 : 4;
+            float[] predictions = new float[rows * cols];
+            detectionMat.get(0, 0, predictions);
+            for (int i = 0; i < rows; i++) {
+                int offset = i * cols;
+                int classId = 0;
+                float maxClassScore = -Float.MAX_VALUE;
+                for (int c = scoresStartCol; c < cols; c++) {
+                    float score = predictions[offset + c];
+                    if (score > maxClassScore) { maxClassScore = score; classId = c - scoresStartCol; }
+                }
+                float confidence = hasObjectness ? predictions[offset + 4] * maxClassScore : maxClassScore;
+                if (confidence > confThreshold && classId < classCount) {
+                    float centerX = predictions[offset], centerY = predictions[offset + 1];
+                    float width = predictions[offset + 2], height = predictions[offset + 3];
+                    classIds.add(classId);
+                    confidences.add(confidence);
+                    boxes2d.add(new Rect2d(centerX - width / 2, centerY - height / 2, width, height));
+                }
+            }
+    }
+
     public retureBoxInfo detectObjects(TabAiSubscriptionNew tabAiSubscriptionNew, Mat image, Net net, List<String> classNames, NetPush netPush) {
+        try (NativeMats nativeMats = new NativeMats()) {
 
         retureBoxInfo retureBoxInfo=new retureBoxInfo();
         retureBoxInfo.setFlag(false);
@@ -76,12 +112,13 @@ public class identifyTypeNew {
             // 读取输入图像
             Long a = System.currentTimeMillis();
             // 将图像传递给模型进行目标检测
-            Mat blob = Dnn.blobFromImage(image, 1.0 / 255, new Size(416, 416), new Scalar(0), true, false);
+            Mat blob = nativeMats.keep(Dnn.blobFromImage(image, 1.0 / 255, new Size(416, 416), new Scalar(0), true, false));
             net.setInput(blob);
             // 将图像传递给模型进行目标检测
             List<Mat> result = new ArrayList<>();
             List<String> outBlobNames = net.getUnconnectedOutLayersNames();
             net.forward(result, outBlobNames);
+            result.forEach(nativeMats::keep);
 
             // 处理检测结果
             float confThreshold = 0.56f;
@@ -90,8 +127,8 @@ public class identifyTypeNew {
             List<Integer> classIds = new ArrayList<>();
             for (Mat level : result) {
                 for (int i = 0; i < level.rows(); ++i) {
-                    Mat row = level.row(i);
-                    Mat scores = level.row(i).colRange(5, level.cols());
+                    Mat row = nativeMats.keep(level.row(i));
+                    Mat scores = nativeMats.keep(row.colRange(5, level.cols()));
                     Core.MinMaxLocResult minMaxLocResult = Core.minMaxLoc(scores);
                     Point classIdPoint = minMaxLocResult.maxLoc;
                     double confidence = row.get(0, 4)[0];
@@ -114,10 +151,10 @@ public class identifyTypeNew {
             }
 
             // 执行非最大抑制，消除重复的边界框
-            MatOfRect2d boxes = new MatOfRect2d(boundingBoxes.toArray(new Rect2d[0]));
-            MatOfFloat confidencesMat = new MatOfFloat();
+            MatOfRect2d boxes = nativeMats.keep(new MatOfRect2d(boundingBoxes.toArray(new Rect2d[0])));
+            MatOfFloat confidencesMat = nativeMats.keep(new MatOfFloat());
             confidencesMat.fromList(confidences);
-            MatOfInt indices = new MatOfInt();
+            MatOfInt indices = nativeMats.keep(new MatOfInt());
             Dnn.NMSBoxes(boxes, confidencesMat, confThreshold, 0.4f, indices);
 
             if (indices.empty()) {
@@ -174,6 +211,8 @@ public class identifyTypeNew {
 
 
         return retureBoxInfo;
+
+        }
     }
 
     /***
@@ -214,7 +253,7 @@ public class identifyTypeNew {
                 long dim1 = output.size(1);
                 long dim2 = output.size(2);
 
-                System.out.println("输出维度: [" + dim0 + ", " + dim1 + ", " + dim2 + "]");
+                log.info("输出维度: [" + dim0 + ", " + dim1 + ", " + dim2 + "]");
 
                 Mat detectionMat;
                 int rows, cols;
@@ -222,7 +261,7 @@ public class identifyTypeNew {
                 // 判断是YOLOv11还是YOLOv5格式
                 if (dims == 3 && dim1 < 100 && dim2 > 1000) {
                     // YOLOv11格式 [1, 84, 8400]
-                    System.out.println("检测到YOLOv11格式");
+                    log.info("检测到YOLOv11格式");
                     Mat reshaped = output.reshape(1, (int) dim1);
                     Mat transposed = new Mat();
                     Core.transpose(reshaped, transposed);
@@ -231,13 +270,13 @@ public class identifyTypeNew {
                     cols = (int) dim1;
                 } else {
                     // YOLOv5格式
-                    System.out.println("检测到YOLOv5格式");
+                    log.info("检测到YOLOv5格式");
                     detectionMat = output.reshape(1, (int) output.size(1));
                     rows = detectionMat.rows();
                     cols = detectionMat.cols();
                 }
 
-                System.out.println("处理后矩阵: " + rows + "x" + cols);
+                log.info("处理后矩阵: " + rows + "x" + cols);
 
                 for (int i = 0; i < rows; i++) {
                     Mat detection = detectionMat.row(i);
@@ -293,7 +332,7 @@ public class identifyTypeNew {
             MatOfInt indices = new MatOfInt();
             Dnn.NMSBoxes(boxes_mat, confidences_mat, confThreshold, nmsThreshold, indices);
             if (!boxes_mat.empty() && !confidences_mat.empty()) {
-                System.out.println("不为空");
+                log.info("不为空");
                 Dnn.NMSBoxes(boxes_mat, confidences_mat, confThreshold, nmsThreshold, indices);
             }
 
@@ -355,6 +394,7 @@ public class identifyTypeNew {
 
     //v5 v8 V10 验证是否通过
     public retureBoxInfo detectObjectsV5(TabAiSubscriptionNew tabAiSubscriptionNew, Mat image, Net net, List<String> classNames, NetPush netPush,RedisTemplate redisTemplate) {
+        try (NativeMats nativeMats = new NativeMats()) {
 
         retureBoxInfo returnBox=new retureBoxInfo();
         returnBox.setFlag(false);
@@ -379,14 +419,15 @@ public class identifyTypeNew {
             // 读取输入图像
             Long a = System.currentTimeMillis();
 
-            Mat processedImage = letterboxResize(image, 640, 640);
+            Mat processedImage = nativeMats.keep(letterboxResize(image, 640, 640));
             // 将图像传递给模型进行目标检测
-            Mat blob = Dnn.blobFromImage(processedImage, 1.0 / 255, new Size(640, 640), new Scalar(0), true, false);
+            Mat blob = nativeMats.keep(Dnn.blobFromImage(processedImage, 1.0 / 255, new Size(640, 640), new Scalar(0), true, false));
             net.setInput(blob);
             // 将图像传递给模型进行目标检测
             List<Mat> result = new ArrayList<>();
             List<String> outBlobNames = net.getUnconnectedOutLayersNames();
             net.forward(result, outBlobNames);
+            result.forEach(nativeMats::keep);
 
             // 处理检测结果
             float confThreshold = 0.4f;
@@ -401,7 +442,7 @@ public class identifyTypeNew {
                 long dim1 = output.size(1);
                 long dim2 = output.size(2);
 
-                System.out.println("输出维度: [" + dim0 + ", " + dim1 + ", " + dim2 + "]");
+                log.info("输出维度: [" + dim0 + ", " + dim1 + ", " + dim2 + "]");
 
                 Mat detectionMat;
                 int rows, cols;
@@ -410,8 +451,8 @@ public class identifyTypeNew {
                 if (dims == 3 && dim1 < 100 && dim2 > 1000) {
                     // YOLOv11格式 [1, 84, 8400]
                     log.info("检测到YOLOv11格式");
-                    Mat reshaped = output.reshape(1, (int) dim1);
-                    Mat transposed = new Mat();
+                    Mat reshaped = nativeMats.keep(output.reshape(1, (int) dim1));
+                    Mat transposed = nativeMats.keep(new Mat());
                     Core.transpose(reshaped, transposed);
                     detectionMat = transposed;
                     rows = (int) dim2;
@@ -419,7 +460,7 @@ public class identifyTypeNew {
                 } else {
                     // YOLOv5格式
                     log.info("检测到YOLOv5格式");
-                    detectionMat = output.reshape(1, (int) output.size(1));
+                    detectionMat = nativeMats.keep(output.reshape(1, (int) output.size(1)));
                     rows = detectionMat.rows();
                     cols = detectionMat.cols();
                 }
@@ -427,7 +468,7 @@ public class identifyTypeNew {
                 log.info("处理后矩阵: " + rows + "x" + cols);
 
                 for (int i = 0; i < rows; i++) {
-                    Mat detection = detectionMat.row(i);
+                    Mat detection = nativeMats.keep(detectionMat.row(i));
 
                     float confidence;
                     Mat scores;
@@ -474,11 +515,12 @@ public class identifyTypeNew {
                 return returnBox;
             }
             // 执行非最大抑制，消除重复的边界框
-            MatOfRect2d boxes_mat = new MatOfRect2d();
+            MatOfRect2d boxes_mat = nativeMats.keep(new MatOfRect2d());
             boxes_mat.fromList(boxes2d);
             log.info("confidences.size{}", confidences.size());
-            MatOfFloat confidences_mat = new MatOfFloat(Converters.vector_float_to_Mat(confidences));
-            MatOfInt indices = new MatOfInt();
+            MatOfFloat confidences_mat = nativeMats.keep(new MatOfFloat());
+        confidences_mat.fromList(confidences);
+            MatOfInt indices = nativeMats.keep(new MatOfInt());
             Dnn.NMSBoxes(boxes_mat, confidences_mat, confThreshold, nmsThreshold, indices);
             if (!boxes_mat.empty() && !confidences_mat.empty()) {
                 log.info("不为空");
@@ -545,10 +587,13 @@ public class identifyTypeNew {
             }
         }
         return returnBox;
+
+        }
     }
 
 
     public boolean detectObjectsDify(TabAiSubscriptionNew pushInfo, Mat image, NetPush netPush, RedisTemplate redisTemplate,List<retureBoxInfo> retureBoxInfos) {
+        try (NativeMats nativeMats = new NativeMats()) {
 
         Net net = netPush.getNet();
         List<String> classNames = netPush.getClaseeNames();
@@ -559,12 +604,13 @@ public class identifyTypeNew {
         // 读取输入图像
         Long a = System.currentTimeMillis();
         // 将图像传递给模型进行目标检测
-        Mat blob = Dnn.blobFromImage(image, 1.0 / 255, new Size(416, 416), new Scalar(0), true, false);
+        Mat blob = nativeMats.keep(Dnn.blobFromImage(image, 1.0 / 255, new Size(416, 416), new Scalar(0), true, false));
         net.setInput(blob);
         // 将图像传递给模型进行目标检测
         List<Mat> result = new ArrayList<>();
         List<String> outBlobNames = net.getUnconnectedOutLayersNames();
         net.forward(result, outBlobNames);
+            result.forEach(nativeMats::keep);
 
         // 处理检测结果
         float confThreshold = 0.56f;
@@ -573,8 +619,8 @@ public class identifyTypeNew {
         List<Integer> classIds = new ArrayList<>();
         for (Mat level : result) {
             for (int i = 0; i < level.rows(); ++i) {
-                Mat row = level.row(i);
-                Mat scores = level.row(i).colRange(5, level.cols());
+                Mat row = nativeMats.keep(level.row(i));
+                Mat scores = nativeMats.keep(row.colRange(5, level.cols()));
                 Core.MinMaxLocResult minMaxLocResult = Core.minMaxLoc(scores);
                 Point classIdPoint = minMaxLocResult.maxLoc;
                 double confidence = row.get(0, 4)[0];
@@ -597,10 +643,10 @@ public class identifyTypeNew {
         }
 
         // 执行非最大抑制，消除重复的边界框
-        MatOfRect2d boxes = new MatOfRect2d(boundingBoxes.toArray(new Rect2d[0]));
-        MatOfFloat confidencesMat = new MatOfFloat();
+        MatOfRect2d boxes = nativeMats.keep(new MatOfRect2d(boundingBoxes.toArray(new Rect2d[0])));
+        MatOfFloat confidencesMat = nativeMats.keep(new MatOfFloat());
         confidencesMat.fromList(confidences);
-        MatOfInt indices = new MatOfInt();
+        MatOfInt indices = nativeMats.keep(new MatOfInt());
         Dnn.NMSBoxes(boxes, confidencesMat, confThreshold, 0.4f, indices);
 
         if (indices.empty()) {
@@ -641,7 +687,7 @@ public class identifyTypeNew {
         if (StringUtils.isNotBlank(saveName)) {
             saveName = savepath + saveName + ".jpg";
         } else {
-            saveName = savepath + System.currentTimeMillis() + ".jpg";
+            saveName = savepath + java.util.UUID.randomUUID() + ".jpg";
         }
         log.info("存储地址{}", saveName);
         File imageFile = new File(saveName);
@@ -649,7 +695,7 @@ public class identifyTypeNew {
             imageFile.delete();
         }
         Imgcodecs.imwrite(saveName, image);
-        String base64Img = base64Image(saveName);
+        String base64Img = null;
         //组装参数
         pushEntity push = new pushEntity();
         push.setVideo(pushInfo.getBeginEventTypes());
@@ -693,6 +739,8 @@ public class identifyTypeNew {
 
 
         return true;
+
+        }
     }
 
 
@@ -866,7 +914,7 @@ public class identifyTypeNew {
             //setBeforeImg(image,"end");
             if(netPush.getWarinngMethod()==1){//0 是识别到报警  1 是未识别到报警
                 log.info("[未识别到推送数据]:{}",netPush.getIsFollow());
-                String   saveName = savepath + System.currentTimeMillis() + ".jpg";
+                String   saveName = savepath + java.util.UUID.randomUUID() + ".jpg";
                 Imgcodecs.imwrite(saveName, image);
                 isOk(pushInfo,netPush,redisTemplate,saveName,tabAiModel,netPush.getNoDifText(),1,netPush.getNoDifText(),netPush.getNoDifText(),savepath);
             }
@@ -1012,7 +1060,7 @@ public class identifyTypeNew {
 //        if (StringUtils.isNotBlank(saveName)) {
 //            saveName = savepath + saveName + ".jpg";
 //        } else {
-        String   saveName = savepath + System.currentTimeMillis() + ".jpg";
+        String   saveName = savepath + java.util.UUID.randomUUID() + ".jpg";
 //        }
 
         log.info("存储地址{}", saveName);
@@ -1266,7 +1314,7 @@ public class identifyTypeNew {
             log.warn("{}: 检测框数量异常: {}", pushInfo.getName(), allConfidences.size());
             if (netPush.getWarinngMethod() == 1) {
                 String savepath = uploadpath + File.separator + "push" + File.separator;
-                String saveName = savepath + System.currentTimeMillis() + ".jpg";
+                String saveName = savepath + java.util.UUID.randomUUID() + ".jpg";
                 Imgcodecs.imwrite(saveName, image);
                 isOk(pushInfo, netPush, redisTemplate, saveName, tabAiModel,
                         netPush.getNoDifText(), 1, netPush.getNoDifText(),
@@ -1407,7 +1455,7 @@ public class identifyTypeNew {
             file.mkdirs();
         }
 
-        String saveName = savepath + System.currentTimeMillis() + ".jpg";
+        String saveName = savepath + java.util.UUID.randomUUID() + ".jpg";
         File imageFile = new File(saveName);
         if (imageFile.exists()) {
             imageFile.delete();
@@ -1431,6 +1479,7 @@ public class identifyTypeNew {
         }
     }
     public boolean detectObjectsDifyV5Pose(TabAiSubscriptionNew pushInfo, Mat image, NetPush netPush, RedisTemplate redisTemplate,List<retureBoxInfo> retureBoxInfos) {
+        try (NativeMats nativeMats = new NativeMats()) {
 
         long time = Long.parseLong(pushInfo.getEventNumber());
         Object beforTime = redisTemplate.opsForValue().get(netPush.getId());
@@ -1454,15 +1503,16 @@ public class identifyTypeNew {
         Long a = System.currentTimeMillis();
         // 将图像传递给模型进行目标检测
         // ==========关键修正1: 使用letterbox预处理 以前不必须纠正 后续v8 v10 v11需要纠正==========
-        Mat processedImage = letterboxResize(image, 640, 640);
+        Mat processedImage = nativeMats.keep(letterboxResize(image, 640, 640));
 
         // 创建blob - 注意参数调整
-        Mat blob = Dnn.blobFromImage(processedImage, 1.0 / 255.0, new Size(640, 640), new Scalar(0, 0, 0), true, false, CvType.CV_32F);
+        Mat blob = nativeMats.keep(Dnn.blobFromImage(processedImage, 1.0 / 255.0, new Size(640, 640), new Scalar(0, 0, 0), true, false, CvType.CV_32F));
         net.setInput(blob);;
         // 将图像传递给模型进行目标检测
         List<Mat> result = new ArrayList<>();
         List<String> outBlobNames = net.getUnconnectedOutLayersNames();
         net.forward(result, outBlobNames);
+            result.forEach(nativeMats::keep);
 
         // 处理检测结果
         float confThreshold = 0.4f;
@@ -1477,7 +1527,7 @@ public class identifyTypeNew {
             long dim1 = output.size(1);
             long dim2 = output.size(2);
 
-            System.out.println("输出维度: [" + dim0 + ", " + dim1 + ", " + dim2 + "]");
+            log.info("输出维度: [" + dim0 + ", " + dim1 + ", " + dim2 + "]");
 
             Mat detectionMat;
             int rows, cols;
@@ -1485,25 +1535,25 @@ public class identifyTypeNew {
             // 判断是否为YOLO11 Pose格式 [1, 56, 8400] (4 + 1 + 51关键点)
             if (dims == 3 && dim1 == 56 && dim2 > 1000) {
                 // YOLOv11 Pose格式 [1, 56, 8400]
-                System.out.println("检测到YOLOv11 Pose格式");
-                Mat reshaped = output.reshape(1, (int) dim1);
-                Mat transposed = new Mat();
+                log.info("检测到YOLOv11 Pose格式");
+                Mat reshaped = nativeMats.keep(output.reshape(1, (int) dim1));
+                Mat transposed = nativeMats.keep(new Mat());
                 Core.transpose(reshaped, transposed);
                 detectionMat = transposed;
                 rows = (int) dim2;
                 cols = (int) dim1;
             } else {
                 // 标准格式处理
-                System.out.println("检测到标准格式");
-                detectionMat = output.reshape(1, (int) output.size(1));
+                log.info("检测到标准格式");
+                detectionMat = nativeMats.keep(output.reshape(1, (int) output.size(1)));
                 rows = detectionMat.rows();
                 cols = detectionMat.cols();
             }
 
-            System.out.println("处理后矩阵: " + rows + "x" + cols);
+            log.info("处理后矩阵: " + rows + "x" + cols);
 
             for (int i = 0; i < rows; i++) {
-                Mat detection = detectionMat.row(i);
+                Mat detection = nativeMats.keep(detectionMat.row(i));
 
                 float confidence;
 
@@ -1545,7 +1595,7 @@ public class identifyTypeNew {
 
             if(netPush.getWarinngMethod()==1){//0 是识别到报警  1 是未识别到报警
                 log.info("[未识别到推送数据]:{}",netPush.getIsFollow());
-                String   saveName = savepath + System.currentTimeMillis() + ".jpg";
+                String   saveName = savepath + java.util.UUID.randomUUID() + ".jpg";
                 Imgcodecs.imwrite(saveName, image);
                 isOk(pushInfo,netPush,redisTemplate,saveName,tabAiModel,netPush.getNoDifText(),1,netPush.getNoDifText(),netPush.getNoDifText(),savepath);
             }
@@ -1553,11 +1603,12 @@ public class identifyTypeNew {
         }
         log.info("NMS前检测框数量: " + boxes2d.size());
         // 执行非最大抑制，消除重复的边界框
-        MatOfRect2d boxes_mat = new MatOfRect2d();
+        MatOfRect2d boxes_mat = nativeMats.keep(new MatOfRect2d());
         boxes_mat.fromList(boxes2d);
 
-        MatOfFloat confidences_mat = new MatOfFloat(Converters.vector_float_to_Mat(confidences));
-        MatOfInt indices = new MatOfInt();
+        MatOfFloat confidences_mat = nativeMats.keep(new MatOfFloat());
+        confidences_mat.fromList(confidences);
+        MatOfInt indices = nativeMats.keep(new MatOfInt());
         Dnn.NMSBoxes(boxes_mat, confidences_mat, confThreshold, nmsThreshold, indices);
         if (!boxes_mat.empty() && !confidences_mat.empty()) {
             log.info("不为空");
@@ -1693,7 +1744,7 @@ public class identifyTypeNew {
 //        if (StringUtils.isNotBlank(saveName)) {
 //            saveName = savepath + saveName + ".jpg";
 //        } else {
-        String   saveName = savepath + System.currentTimeMillis() + ".jpg";
+        String   saveName = savepath + java.util.UUID.randomUUID() + ".jpg";
 //        }
 
         log.info("存储地址{}", saveName);
@@ -1743,9 +1794,12 @@ public class identifyTypeNew {
 
 
         return true;
+
+        }
     }
 
     public boolean detectObjectsDifyV5(TabAiSubscriptionNew pushInfo, Mat image, NetPush netPush, RedisTemplate redisTemplate,List<retureBoxInfo> retureBoxInfos) {
+        try (NativeMats nativeMats = new NativeMats()) {
 
         long time = Long.parseLong(pushInfo.getEventNumber());
         Object beforTime = redisTemplate.opsForValue().get(netPush.getId());
@@ -1769,15 +1823,16 @@ public class identifyTypeNew {
         Long a = System.currentTimeMillis();
         // 将图像传递给模型进行目标检测
         // ==========关键修正1: 使用letterbox预处理 以前不必须纠正 后续v8 v10 v11需要纠正==========
-        Mat processedImage = letterboxResize(image, 640, 640);
+        Mat processedImage = nativeMats.keep(letterboxResize(image, 640, 640));
 
         // 创建blob - 注意参数调整
-        Mat blob = Dnn.blobFromImage(processedImage, 1.0 / 255.0, new Size(640, 640), new Scalar(0, 0, 0), true, false, CvType.CV_32F);
+        Mat blob = nativeMats.keep(Dnn.blobFromImage(processedImage, 1.0 / 255.0, new Size(640, 640), new Scalar(0, 0, 0), true, false, CvType.CV_32F));
         net.setInput(blob);;
         // 将图像传递给模型进行目标检测
         List<Mat> result = new ArrayList<>();
         List<String> outBlobNames = net.getUnconnectedOutLayersNames();
         net.forward(result, outBlobNames);
+            result.forEach(nativeMats::keep);
 
         // 处理检测结果
         float confThreshold = 0.4f;
@@ -1805,8 +1860,8 @@ public class identifyTypeNew {
                     // YOLOv11格式: [1, C, N] 其中 C=(4+类别数), N=锚点数
                     // 例如: [1, 6, 8400] 或 [1, 84, 8400]
                     formatType = "YOLOv11";
-                    Mat reshaped = output.reshape(1, (int) dim1);
-                    Mat transposed = new Mat();
+                    Mat reshaped = nativeMats.keep(output.reshape(1, (int) dim1));
+                    Mat transposed = nativeMats.keep(new Mat());
                     Core.transpose(reshaped, transposed);
                     detectionMat = transposed;
                     rows = (int) dim2;  // 8400
@@ -1815,13 +1870,13 @@ public class identifyTypeNew {
                     // YOLOv5格式: [1, N, C] 其中 N=锚点数, C=(5+类别数)
                     // 例如: [1, 25200, 85]
                     formatType = "YOLOv5";
-                    detectionMat = output.reshape(1, (int) dim1);
+                    detectionMat = nativeMats.keep(output.reshape(1, (int) dim1));
                     rows = (int) dim1;  // 25200
                     cols = (int) dim2;  // 85
                 } else {
                     // 尝试自动推断
                     log.error("警告: 非标准维度,尝试自动处理");
-                    detectionMat = output.reshape(1, (int) dim1);
+                    detectionMat = nativeMats.keep(output.reshape(1, (int) dim1));
                     rows = detectionMat.rows();
                     cols = detectionMat.cols();
                     formatType = "AUTO";
@@ -1871,49 +1926,7 @@ public class identifyTypeNew {
             // ========== 统一的置信度计算 ==========
             int scoresStartCol = hasObjectness ? 5 : 4;  // 类别分数起始列
 
-            for (int i = 0; i < rows; i++) {
-                Mat detection = detectionMat.row(i);
-
-                float confidence;
-                int classId;
-
-                // 提取类别分数
-                Mat scores = detection.colRange(scoresStartCol, cols);
-                Core.MinMaxLocResult minMaxResult = Core.minMaxLoc(scores);
-                float maxClassScore = (float) minMaxResult.maxVal;
-                classId = (int) minMaxResult.maxLoc.x;
-
-                if (hasObjectness) {
-                    // YOLOv5: confidence = objectness × max_class_score
-                    float objectness = (float) detection.get(0, 4)[0];
-                    confidence = objectness * maxClassScore;
-                } else {
-                    // YOLOv11: confidence = max_class_score
-                    confidence = maxClassScore;
-                }
-
-                if (confidence > confThreshold) {
-                    float centerX = (float) detection.get(0, 0)[0];
-                    float centerY = (float) detection.get(0, 1)[0];
-                    float width = (float) detection.get(0, 2)[0];
-                    float height = (float) detection.get(0, 3)[0];
-
-                    float left = centerX - width / 2;
-                    float top = centerY - height / 2;
-
-                    // 验证类别ID有效性
-                    if (classId < 0 || classId >= actualClassCount) {
-                        System.err.println("警告: 无效的类别ID " + classId + ",跳过");
-                        continue;
-                    }
-
-                    classIds.add(classId);
-                    confidences.add(confidence);
-                    boxes2d.add(new Rect2d(left, top, width, height));
-
-
-                }
-            }
+            appendPredictions(detectionMat, hasObjectness, classNames.size(), confThreshold, classIds, confidences, boxes2d);
         }
         boolean flag;
         String savepath = uploadpath + File.separator + "push" + File.separator;
@@ -1923,7 +1936,7 @@ public class identifyTypeNew {
 
             if(netPush.getWarinngMethod()==1){//0 是识别到报警  1 是未识别到报警
                 log.info("[未识别到推送数据]:{}",netPush.getIsFollow());
-                String   saveName = savepath + System.currentTimeMillis() + ".jpg";
+                String   saveName = savepath + java.util.UUID.randomUUID() + ".jpg";
                 Imgcodecs.imwrite(saveName, image);
                 isOk(pushInfo,netPush,redisTemplate,saveName,tabAiModel,netPush.getNoDifText(),1,netPush.getNoDifText(),netPush.getNoDifText(),savepath);
             }
@@ -1931,11 +1944,12 @@ public class identifyTypeNew {
         }
         log.info("NMS前检测框数量: " + boxes2d.size());
         // 执行非最大抑制，消除重复的边界框
-        MatOfRect2d boxes_mat = new MatOfRect2d();
+        MatOfRect2d boxes_mat = nativeMats.keep(new MatOfRect2d());
         boxes_mat.fromList(boxes2d);
 
-        MatOfFloat confidences_mat = new MatOfFloat(Converters.vector_float_to_Mat(confidences));
-        MatOfInt indices = new MatOfInt();
+        MatOfFloat confidences_mat = nativeMats.keep(new MatOfFloat());
+        confidences_mat.fromList(confidences);
+        MatOfInt indices = nativeMats.keep(new MatOfInt());
         Dnn.NMSBoxes(boxes_mat, confidences_mat, confThreshold, nmsThreshold, indices);
         if (!boxes_mat.empty() && !confidences_mat.empty()) {
             log.info("不为空");
@@ -2066,7 +2080,7 @@ public class identifyTypeNew {
 //        if (StringUtils.isNotBlank(saveName)) {
 //            saveName = savepath + saveName + ".jpg";
 //        } else {
-        String   saveName = savepath + System.currentTimeMillis() + ".jpg";
+        String   saveName = savepath + java.util.UUID.randomUUID() + ".jpg";
 //        }
 
         log.info("存储地址{}", saveName);
@@ -2116,6 +2130,8 @@ public class identifyTypeNew {
 
 
         return true;
+
+        }
     }
 
 
@@ -2312,7 +2328,7 @@ public class identifyTypeNew {
             String filename = debugPath + "roi_" + roiIndex + "_" +
                     System.currentTimeMillis() + ".jpg";
             Imgcodecs.imwrite(filename, roiMat);
-            log.debug("ROI[{}]已保存至: {}", roiIndex, filename);
+            log.info("ROI[{}]已保存至: {}", roiIndex, filename);
         } catch (Exception ex) {
             log.error("保存ROI失败", ex);
         }
@@ -2423,7 +2439,7 @@ public class identifyTypeNew {
             log.warn("未检测到任何目标");
             if (netPush.getWarinngMethod() == 1) {
                 String savepath = uploadpath + File.separator + "push" + File.separator;
-                String saveName = savepath + System.currentTimeMillis() + ".jpg";
+                String saveName = savepath + java.util.UUID.randomUUID() + ".jpg";
                 Imgcodecs.imwrite(saveName, image);
                 isOk(pushInfo, netPush, redisTemplate, saveName, tabAiModel,
                         netPush.getNoDifText(), 1, netPush.getNoDifText(),
@@ -2511,7 +2527,7 @@ public class identifyTypeNew {
             file.mkdirs();
         }
 
-        String saveName = savepath + System.currentTimeMillis() + ".jpg";
+        String saveName = savepath + java.util.UUID.randomUUID() + ".jpg";
         Imgcodecs.imwrite(saveName, image);
 
         Long endTime = System.currentTimeMillis();
@@ -2542,7 +2558,7 @@ public class identifyTypeNew {
             double xOriginal = scaleCoordinate(x640, 640, imageWidth);
             double yOriginal = scaleCoordinate(y640, 640, imageHeight);
 
-            log.debug("坐标转换: 640系({}, {}) → 原图系({}, {}) [原图尺寸: {}×{}]",
+            log.info("坐标转换: 640系({}, {}) → 原图系({}, {}) [原图尺寸: {}×{}]",
                     x640, y640, xOriginal, yOriginal, imageWidth, imageHeight);
 
             // 获取所有形状
@@ -2570,7 +2586,7 @@ public class identifyTypeNew {
                     inThisShape = xOriginal >= startX && xOriginal <= endX
                             && yOriginal >= startY && yOriginal <= endY;
 
-                    log.debug("矩形{} 判断: ({}, {}) in [{}, {}] - [{}, {}] = {}",
+                    log.info("矩形{} 判断: ({}, {}) in [{}, {}] - [{}, {}] = {}",
                             i + 1, xOriginal, yOriginal, startX, startY, endX, endY, inThisShape);
 
                 } else if ("polygon".equals(type)) {
@@ -2578,7 +2594,7 @@ public class identifyTypeNew {
                     JSONArray points = coordinates.getJSONArray("points");
                     inThisShape = isPointInPolygon(xOriginal, yOriginal, points);
 
-                    log.debug("多边形{} 判断: ({}, {}) 顶点数={} 结果={}",
+                    log.info("多边形{} 判断: ({}, {}) 顶点数={} 结果={}",
                             i + 1, xOriginal, yOriginal, points.size(), inThisShape);
                 }
 
@@ -2633,9 +2649,13 @@ public class identifyTypeNew {
         // 将缩放后的图像复制到画布中心
         Rect roi = new Rect(dx, dy, newWidth, newHeight);
         Mat roiMat = new Mat(letterboxed, roi);
-        resized.copyTo(roiMat);
-
-        return letterboxed;
+        try {
+            resized.copyTo(roiMat);
+            return letterboxed;
+        } finally {
+            roiMat.release();
+            resized.release();
+        }
     }
 
     public static boolean isPointInArea(double px, double py, double x, double y, double width, double height) {
@@ -2861,11 +2881,11 @@ public class identifyTypeNew {
     ) {
 
         log.warn("model{}-{}", tabAiModel.getAiName(), warnText);
-        Thread t = new Thread(() -> {
+        boolean accepted = SpringContextUtils.getBean(AlarmWorkService.class).submit(pushInfo.getId(), () -> {
             try {
 
 
-                String base64Img = base64Image(saveName);
+                String base64Img = null;
                 //组装参数
                 pushEntity push = new pushEntity();
                 push.setCameraName(pushInfo.getName());
@@ -2887,10 +2907,10 @@ public class identifyTypeNew {
                     long recordTime = netPush.getTabAiVideoSetting().getRecordTime();
                     recordVideo = RecordVideo(pushInfo.getBeginEventTypes(), savePath, recordTime, netPush.getId());
                     if (StringUtils.isNotEmpty(recordVideo)) {
-                        log.error("录像完成:{}", recordVideo);
+                        log.info("录像完成:{}", recordVideo);
                         if (netPush.getTabAiVideoSetting().getIsAnalysis() == 0) { //是否开启分析
                             //需要分析录像视频逐帧分析
-                            log.error("开始分析视频");
+                            log.info("开始分析视频");
                             recordVideo = analysisVideo(recordVideo, netPush, savePath);
                         }
                     }
@@ -2909,30 +2929,36 @@ public class identifyTypeNew {
                     }
                 }
 
-                if (pushInfo.getPushStatic() == 0) {// 0 开启 1未开启
-                    log.info("[已经开启推送第三方]：");
-
-                    if(StringUtils.isNotEmpty(recordVideo)){
-                        String base64Mp4 = base64Image(recordVideo);
-                        push.setVideo(base64Mp4);
-                    }
-                    JSONObject ob = RestUtil.post(pushInfo.getEventUrl(), (JSONObject) JSONObject.toJSON(push));
-                    log.info("返回内容：" + ob);
-
-                } else {
-                    log.info("[当前设置为：不推送第三方]");
-                }
-
                 if(netPush.getTabAiVideoSetting().getSaveLocalhost()==0){ //保存到本地
                     log.info("[本地也保存]");
                     push.setAlarmPicData(saveName);
                     push.setVideo(recordVideo);
                     // 获取 pushInfo 的路径部分
 
-                    JSONObject ob = RestUtil.post("http://127.0.0.1:9998/wgai/video/tabAiWarning/addPush", (JSONObject) JSONObject.toJSON(push));
+                    SpringContextUtils.getBean(ITabAiWarningService.class).savePush(push);
+                }
 
-                    log.info("返回内容：" + ob);
-                }else{
+                if (pushInfo.getPushStatic() == 0) {// 0 开启 1未开启
+                    push.setAlarmPicData(base64Image(saveName));
+                    push.setVideo(null);
+                    log.info("[已经开启推送第三方]：");
+
+                    if(StringUtils.isNotEmpty(recordVideo)){
+                        String base64Mp4 = base64Image(recordVideo);
+                        push.setVideo(base64Mp4);
+                    }
+                    try {
+                        JSONObject ob = RestUtil.post(pushInfo.getEventUrl(), (JSONObject) JSONObject.toJSON(push));
+                        log.info("第三方返回：{}", ob);
+                    } catch (Exception e) {
+                        log.error("[第三方推送失败] taskId={}", pushInfo.getId(), e);
+                    }
+
+                } else {
+                    log.info("[当前设置为：不推送第三方]");
+                }
+
+                if(netPush.getTabAiVideoSetting().getSaveLocalhost()!=0){
                     log.info("[不保存本地录像]");
                     File imageFile = new File(recordVideo);
                     if (imageFile.exists()) {
@@ -2943,14 +2969,12 @@ public class identifyTypeNew {
 
 
             } catch (Exception exception) {
-                exception.printStackTrace();
-                log.error("[推送失败：{}]", pushInfo.getId());
+                log.error("[报警处理失败] taskId={}", pushInfo.getId(), exception);
             }
         });
-        t.start();
 
-        log.error("推送结束-间隔时间{}-{}", pushInfo.getId());
-        return true;
+
+        return accepted;
     }
 
 

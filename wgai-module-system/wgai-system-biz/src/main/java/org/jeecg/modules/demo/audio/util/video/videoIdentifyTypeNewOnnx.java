@@ -7,6 +7,9 @@ import ai.onnxruntime.OrtSession;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import lombok.extern.slf4j.Slf4j;
+import org.jeecg.common.util.SpringContextUtils;
+import org.jeecg.modules.demo.video.service.ITabAiWarningService;
+import org.jeecg.modules.demo.video.service.impl.AlarmWorkService;
 import org.apache.commons.lang.StringUtils;
 import org.bytedeco.ffmpeg.global.avcodec;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
@@ -927,7 +930,7 @@ public class videoIdentifyTypeNewOnnx {
                         Double.parseDouble(netPush.getTabVideoUtil().getCanvasWidth()),
                         Double.parseDouble(netPush.getTabVideoUtil().getCanvasHeight()));
                 if (!isPointFlag) {
-                    log.debug("检测框不在指定区域内，跳过");
+                    log.info("检测框不在指定区域内，跳过");
                     continue;
                 }
             }
@@ -935,7 +938,7 @@ public class videoIdentifyTypeNewOnnx {
             // 2. 前置模型关联过滤（如果使用了ROI检测）
             if (det.fromROIIndex >= 0 && netPush.getIsFollow() == 0) {
                 // 检测结果已经在ROI内，无需再次过滤
-                log.debug("检测结果来自ROI[{}]，已通过前置过滤", det.fromROIIndex);
+                log.info("检测结果来自ROI[{}]，已通过前置过滤", det.fromROIIndex);
             }
 
             // 3. 获取类别配置
@@ -1152,7 +1155,7 @@ public class videoIdentifyTypeNewOnnx {
             String filename = debugPath + "roi_" + roiIndex + "_" +
                     System.currentTimeMillis() + ".jpg";
             Imgcodecs.imwrite(filename, roiMat);
-            log.debug("ROI[{}]已保存至: {}", roiIndex, filename);
+            log.info("ROI[{}]已保存至: {}", roiIndex, filename);
         } catch (Exception ex) {
             log.error("保存ROI失败", ex);
         }
@@ -1346,11 +1349,11 @@ public class videoIdentifyTypeNewOnnx {
     ) {
 
         log.warn("model{}-{}", tabAiModel.getAiName(), warnText);
-        Thread t = new Thread(() -> {
+        boolean accepted = SpringContextUtils.getBean(AlarmWorkService.class).submit(pushInfo.getId(), () -> {
             try {
 
 
-                String base64Img = base64Image(saveName);
+                String base64Img = null;
                 //组装参数
                 pushEntity push = new pushEntity();
                 push.setCameraName(pushInfo.getName());
@@ -1372,10 +1375,10 @@ public class videoIdentifyTypeNewOnnx {
                     long recordTime = pushInfo.getRecordTime();
                     recordVideo = RecordVideo(pushInfo.getBeginEventTypes(), savePath, recordTime, netPush.getId());
                     if (StringUtils.isNotEmpty(recordVideo)) {
-                        log.error("录像完成:{}", recordVideo);
+                        log.info("录像完成:{}", recordVideo);
                         if (pushInfo.getIsBegin() == 0) {
                             //需要分析录像视频逐帧分析
-                            log.error("开始分析视频");
+                            log.info("开始分析视频");
                             recordVideo = analysisVideo(recordVideo, netPush, savePath);
                         }
                     }
@@ -1383,7 +1386,18 @@ public class videoIdentifyTypeNewOnnx {
                     log.info("[未开启录像]");
                 }
 
+                if(pushInfo.getSaveLocalhost()==0){ //保存到本地
+                    log.info("[本地也保存]");
+                    push.setAlarmPicData(saveName);
+                    push.setVideo(recordVideo);
+                    // 获取 pushInfo 的路径部分
+
+                    SpringContextUtils.getBean(ITabAiWarningService.class).savePush(push);
+                }
+
                 if (pushInfo.getPushStatic() == 0) {// 0 开启 1未开启
+                    push.setAlarmPicData(base64Image(saveName));
+                    push.setVideo(null);
                     log.info("[推送第三方结果]：");
                     if(!pushInfo.getEventUrl().equals("localhost")){ //不进行推送
                         if(StringUtils.isNotEmpty(recordVideo)){
@@ -1397,16 +1411,7 @@ public class videoIdentifyTypeNewOnnx {
                     log.info("[当前设置为：不推送第三方]");
                 }
 
-                if(pushInfo.getSaveLocalhost()==0){ //保存到本地
-                    log.info("[本地也保存]");
-                    push.setAlarmPicData(saveName);
-                    push.setVideo(recordVideo);
-                    // 获取 pushInfo 的路径部分
 
-                    JSONObject ob = RestUtil.post("http://127.0.0.1:9998/wgai/video/tabAiWarning/addPush", (JSONObject) JSONObject.toJSON(push));
-
-                    log.info("返回内容：" + ob);
-                }
 
                 if (pushInfo.getSaveRecord() != 0 && StringUtils.isNotEmpty(recordVideo)&&pushInfo.getSaveLocalhost()!=0) {  //不保存本地录像
                     log.info("[不保存本地录像]");
@@ -1418,14 +1423,12 @@ public class videoIdentifyTypeNewOnnx {
 
 
             } catch (Exception exception) {
-                exception.printStackTrace();
-                log.error("[推送失败：{}]", pushInfo.getId());
+                log.error("[报警处理失败] taskId={}", pushInfo.getId(), exception);
             }
         });
-        t.start();
 
-        log.error("推送结束-间隔时间{}-{}", pushInfo.getId());
-        return true;
+
+        return accepted;
     }
 
     //开始录像

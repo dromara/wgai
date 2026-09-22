@@ -120,23 +120,13 @@ public class TabAiSubscriptionNewController extends JeecgController<TabAiSubscri
 		 try {
 			 String ids=tabAiSubscriptionNew.getId();
 			 List<TabAiSubscriptionNew> tabAiSubscriptionNews=tabAiSubscriptionNewService.listByIds(Arrays.asList(ids.split(",")));
-			 for (TabAiSubscriptionNew tab:tabAiSubscriptionNews) { // 1运行  0未运行
-				 if(tabAiSubscriptionNew.getRunState()==1){ //开始运行
-					 if(tab.getRunState()==1){
-						 continue;
-					 }else{
-						 log.info("【开始进程】{}-{}",tab.getName(),tab.getId());
-						 tabAiSubscriptionNewService.startAi(tab);
-					 }
-				 }else { //终止运行
-					 if(tab.getRunState()==0){
-						 continue;
-					 }else{
-						 log.info("【终止进程】{}-{}",tab.getName(),tab.getId());
-						 tabAiSubscriptionNewService.stopAi(tab);
-					 }
-				 }
-			 }
+            for (TabAiSubscriptionNew tab : tabAiSubscriptionNews) {
+                if (Integer.valueOf(1).equals(tabAiSubscriptionNew.getRunState())) {
+                    tabAiSubscriptionNewService.startAi(tab);
+                } else {
+                    tabAiSubscriptionNewService.stopAi(tab);
+                }
+            }
 
 
 		 } catch (IOException e) {

@@ -2,6 +2,8 @@ package org.jeecg.modules.demo.video.util.batch.batch;
 
 
 import lombok.extern.slf4j.Slf4j;
+import org.jeecg.modules.demo.video.util.VideoDecodePolicy;
+import org.jeecg.modules.demo.video.util.VideoFrameGate;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
 import org.bytedeco.javacv.Frame;
 import org.bytedeco.javacv.Java2DFrameConverter;
@@ -29,6 +31,7 @@ public class VideoReadPicOnnxNewBatch implements Runnable {
     private final TabAiSubscriptionNew tabAiSubscriptionNew;
     private final RedisTemplate redisTemplate;
     private final String streamId;
+    private VideoFrameGate frameGate;
     private final BatchInferenceScheduler scheduler;
 
     private static final long TARGET_FRAME_INTERVAL = 1000; // 1秒一帧
@@ -86,11 +89,18 @@ public class VideoReadPicOnnxNewBatch implements Runnable {
                     continue;
                 }
                 consecutiveNullFrames = 0;
+                if (!frameGate.accept(frame)) {
+                    if (frameGate.isWaitingTooLong()) {
+                        log.warn("[等待关键帧超时，重新连接] taskId={}", tabAiSubscriptionNew.getId());
+                        grabber = restartGrabber(grabber);
+                    }
+                    continue;
+                }
 
                 // 帧率控制 - 1秒一帧
                 long currentTime = System.currentTimeMillis();
                 if (currentTime - lastFrameTime < TARGET_FRAME_INTERVAL) {
-                    frame.close();
+
                     droppedFrames.incrementAndGet();
                     continue;
                 }
@@ -102,13 +112,13 @@ public class VideoReadPicOnnxNewBatch implements Runnable {
                     BufferedImage image = converter.getBufferedImage(frame);
 
                     if (image == null || image.getWidth() <= 0) {
-                        frame.close();
+
                         continue;
                     }
 
                     Mat matInfo = bufferedImageToMat(image);
                     if (matInfo == null || matInfo.empty()) {
-                        frame.close();
+
                         continue;
                     }
 
@@ -131,10 +141,6 @@ public class VideoReadPicOnnxNewBatch implements Runnable {
 
                 } catch (Exception e) {
                     log.error("[帧处理异常]", e);
-                } finally {
-                    if (frame != null) {
-                        frame.close();
-                    }
                 }
 
                 // 性能监控
@@ -175,7 +181,7 @@ public class VideoReadPicOnnxNewBatch implements Runnable {
         );
         probe.setOption("rtsp_transport", "tcp");
         probe.setOption("stimeout", "5000000");
-        probe.start();
+        VideoDecodePolicy.start(probe);
 
         String codecName = probe.getVideoCodecName();
         int codecId = probe.getVideoCodec();
@@ -209,26 +215,27 @@ public class VideoReadPicOnnxNewBatch implements Runnable {
         }
 
         // 基础设置
-        grabber.setOption("loglevel", "-8");
+
         grabber.setOption("rtsp_transport", "tcp");
         grabber.setOption("rtsp_flags", "prefer_tcp");
         grabber.setOption("stimeout", "3000000");
         grabber.setPixelFormat(AV_PIX_FMT_BGR24);
 
         // 实时流优化
-        grabber.setOption("flags", "low_delay");
+
         grabber.setOption("max_delay", "500000");
-        grabber.setOption("buffer_size", "512000");
-        grabber.setOption("fflags", "nobuffer+flush_packets+discardcorrupt");
-        grabber.setOption("flags2", "fast");
-        grabber.setOption("err_detect", "compliant");
-        grabber.setOption("framedrop", "1");
+
+
+
+
+
 
         // 帧率限制
-        grabber.setFrameRate(2.0); // 2fps
-        grabber.setOption("r", "2");
 
-        grabber.start();
+
+
+        VideoDecodePolicy.start(grabber);
+        frameGate = new VideoFrameGate(tabAiSubscriptionNew.getId());
         return grabber;
     }
 

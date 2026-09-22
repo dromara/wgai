@@ -87,31 +87,14 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
                     return t;
                 }
             },
-            new ThreadPoolExecutor.CallerRunsPolicy()
+            new ThreadPoolExecutor.AbortPolicy()
     );
-
-    /**
-     *   优化配置：允许2个流同时启动
-     *
-     * 为什么改为2：
-     * 1. 完全串行（Semaphore=1）启动64路太慢（64×15秒=16分钟）
-     * 2. 允许2个同时启动可以提速50%（~8分钟）
-     * 3. 2个同时创建grabber不会导致严重的资源竞争
-     * 4. 线程池有128个线程，足够支持
-     */
-    private static final Semaphore STARTUP_SEMAPHORE = new Semaphore(2);
-
-    /**
-     * 启动等待超时时间（秒）
-     * 64路视频最坏情况：64 ÷ 2 × 15秒 ≈ 8分钟
-     */
-    private static final int STARTUP_WAIT_TIMEOUT = 900; // 15分钟
 
     /**
      *   跟踪活跃任务 - 最多64个
      */
     private static final Map<String, Future<?>> ACTIVE_TASKS = new ConcurrentHashMap<>(64);
-    private static final Map<String, VideoReadPicOnnxNew> ACTIVE_INSTANCES = new ConcurrentHashMap<>(64);
+    private static final Map<String, Runnable> STOP_ACTIONS = new ConcurrentHashMap<>(64);
 
     // 原有缓存
     private static final ConcurrentHashMap<String, Net> GLOBAL_NET_CACHE = new ConcurrentHashMap<>();
@@ -121,6 +104,13 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
         thread.setDaemon(true);
         return thread;
     });
+    private volatile boolean shuttingDown;
+    private final AtomicBoolean recoveryStarted = new AtomicBoolean();
+    private final ExecutorService recoveryExecutor = Executors.newSingleThreadExecutor(r -> new Thread(r, "subscription-recovery"));
+    @Value("${ai.subscription.resume-on-startup:true}") private boolean resumeOnStartup = true;
+    @Value("${ai.subscription.frame-interval-ms:300}") private long frameIntervalMs = 300;
+    @Value("${ai.subscription.opencv-frame-interval-ms:1000}") private long opencvFrameIntervalMs = 1000;
+    @Value("${ai.subscription.max-stream-lag-ms:3000}") private long maxStreamLagMs = 3000;
     private final AtomicBoolean modelPreloadStarted = new AtomicBoolean(false);
 
     @Autowired TabAiVideoSettingMapper tabAiVideoSettingMapper;
@@ -146,12 +136,43 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
             log.info("[订阅模型启动预热] 已通过 ai.subscription.model-preload.enabled=false 关闭");
         }
 
-        log.info("[视频流服务V2.1] 64路视频专用优化版");
-        log.info("[线程池配置] 核心:64 | 最大:128 | 队列:64");
-        log.info("[启动控制] 允许2个流同时启动 (提速50%)");
-        log.info("[最大容量] 支持最多64路视频同时运行");
-        log.info("[预计启动时间] 批量启动64路: ~8分钟");
+        log.info("[订阅服务] capacity=64 resumeOnStartup={} frameIntervalMs={}", resumeOnStartup, frameIntervalMs);
 
+    }
+
+    @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
+    public void resumeSubscriptions() {
+        if (!resumeOnStartup || !recoveryStarted.compareAndSet(false, true)) return;
+        recoveryExecutor.execute(() -> {
+            try {
+                List<TabAiSubscriptionNew> tasks = list(new QueryWrapper<TabAiSubscriptionNew>().eq("run_state", 1));
+                log.info("[任务恢复开始] count={}", tasks.size());
+                for (TabAiSubscriptionNew task : tasks) {
+                    if (shuttingDown || Thread.currentThread().isInterrupted()) break;
+                    synchronized (this) {
+                        TabAiSubscriptionNew current = getById(task.getId());
+                        if (current == null || !Integer.valueOf(1).equals(current.getRunState())) continue;
+                        try {
+                            startAi(current);
+                        } catch (Exception e) {
+                            log.error("[任务恢复失败] taskId={} name={}", task.getId(), task.getName(), e);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.error("[任务恢复查询失败]", e);
+            }
+        });
+    }
+
+    private void markStopped(String id) {
+        RedisCacheHolder.put(id + "newRunPush", false);
+        try { redisTemplate.opsForValue().set(id + "newRunPush", false); }
+        catch (Exception e) { log.warn("[运行状态缓存更新失败] taskId={}", id, e); }
+        TabAiSubscriptionNew state = new TabAiSubscriptionNew();
+        state.setId(id);
+        state.setRunState(0);
+        updateById(state);
     }
 
     private void startModelPreloadAsync() {
@@ -242,12 +263,14 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
 
     @PreDestroy
     public void shutdown() {
+        shuttingDown = true;
+        recoveryExecutor.shutdownNow();
         log.info("[关闭服务] 停止所有视频流 (最多64路)...");
 
         int count = 0;
-        for (VideoReadPicOnnxNew stream : ACTIVE_INSTANCES.values()) {
+        for (Runnable stop : STOP_ACTIONS.values()) {
             try {
-                stream.forceStop();
+                stop.run();
                 count++;
             } catch (Exception e) {
                 log.warn("[停止流失败]", e);
@@ -264,77 +287,31 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
             }
         } catch (InterruptedException e) {
             executor.shutdownNow();
+            Thread.currentThread().interrupt();
         }
 
         log.info("[✓ 服务关闭完成]");
     }
 
     @Override
-    public void startAi(TabAiSubscriptionNew tabAiSubscriptionNew) {
-        String streamId = tabAiSubscriptionNew.getId();
-
-        // ==========   检查容量限制 ==========
-        if (ACTIVE_TASKS.size() >= 64) {
-            log.warn("[ 超出容量限制] 当前活跃: {}/64, 无法启动新流: {}",
-                    ACTIVE_TASKS.size(), tabAiSubscriptionNew.getName());
+    public synchronized void startAi(TabAiSubscriptionNew requested) {
+        if (shuttingDown) throw new IllegalStateException("服务正在关闭");
+        String id = requested.getId();
+        Future<?> existing = ACTIVE_TASKS.get(id);
+        if (existing != null && !existing.isDone()) {
+            log.info("[任务已运行，忽略重复启动] taskId={}", id);
             return;
         }
-
-        // ========== 检查并清理旧流 ==========
-        if (ACTIVE_TASKS.containsKey(streamId)) {
-            log.warn("[流已存在，先停止] ID: {}, 当前活跃: {}/64",
-                    streamId, ACTIVE_TASKS.size());
-            stopStreamCompletely(streamId);
-            try { Thread.sleep(2000); } catch (InterruptedException e) { }
-        }
-
-        boolean acquired = false;
+        if (ACTIVE_TASKS.size() >= 64) throw new IllegalStateException("识别任务已达到64路上限");
+        TabAiSubscriptionNew task = getById(id);
+        if (task == null) throw new IllegalArgumentException("任务不存在: " + id);
         try {
-            log.info("[排队启动] 流: {}, 排队数: {}, 活跃流: {}/64",
-                    tabAiSubscriptionNew.getName(),
-                    STARTUP_SEMAPHORE.getQueueLength(),
-                    ACTIVE_TASKS.size());
-
-            acquired = STARTUP_SEMAPHORE.tryAcquire(STARTUP_WAIT_TIMEOUT, TimeUnit.SECONDS);
-            if (!acquired) {
-                log.warn("[ 启动超时] 流: {} 等待{}秒未获得许可",
-                        tabAiSubscriptionNew.getName(), STARTUP_WAIT_TIMEOUT);
-                return;
-            }
-
-            log.info("[✓ 开始启动] 流: {} ({}/64)",
-                    tabAiSubscriptionNew.getName(), ACTIVE_TASKS.size() + 1);
-
-            startAiInternal(tabAiSubscriptionNew);
-
-            // ========== 等待真正启动 ==========
-            Thread.sleep(5000);
-
-            Future<?> task = ACTIVE_TASKS.get(streamId);
-            if (task != null && task.isDone()) {
-                try {
-                    task.get();
-                    log.warn("[流已结束] {}", tabAiSubscriptionNew.getName());
-                } catch (ExecutionException e) {
-                    log.warn("[ 启动失败] {}", tabAiSubscriptionNew.getName(), e.getCause());
-                }
-            } else {
-                log.info("[✓✓✓ 启动成功] {} | 活跃流: {}/64",
-                        tabAiSubscriptionNew.getName(), ACTIVE_TASKS.size());
-            }
-
-        } catch (InterruptedException e) {
-            log.warn("[被中断] {}", tabAiSubscriptionNew.getName(), e);
-            Thread.currentThread().interrupt();
+            startAiInternal(task);
+            log.info("[任务已提交] taskId={} name={} active={}", id, task.getName(), ACTIVE_TASKS.size());
         } catch (Exception e) {
-            log.warn("[异常] {}", tabAiSubscriptionNew.getName(), e);
-        } finally {
-            if (acquired) {
-                STARTUP_SEMAPHORE.release();
-                log.info("[✓ 释放许可] {} | 可用许可: {}/2",
-                        tabAiSubscriptionNew.getName(),
-                        STARTUP_SEMAPHORE.availablePermits());
-            }
+            try { markStopped(id); } catch (Exception stateError) { e.addSuppressed(stateError); }
+            log.error("[任务启动失败] taskId={} name={}", id, task.getName(), e);
+            throw new IllegalStateException("识别任务启动失败: " + task.getName(), e);
         }
     }
 
@@ -344,10 +321,10 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
     private void stopStreamCompletely(String streamId) {
         log.info("[完全停止] ID: {}, 活跃流: {}/64", streamId, ACTIVE_TASKS.size());
 
-        VideoReadPicOnnxNew instance = ACTIVE_INSTANCES.remove(streamId);
-        if (instance != null) {
+        Runnable stop = STOP_ACTIONS.remove(streamId);
+        if (stop != null) {
             try {
-                instance.forceStop();
+                stop.run();
                 log.info("[✓ 实例停止] ID: {}", streamId);
             } catch (Exception e) {
                 log.warn("[停止实例失败]", e);
@@ -360,14 +337,14 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
             log.info("[✓ 任务取消] ID: {}", streamId);
         }
 
+        RedisCacheHolder.put(streamId + "newRunPush", false);
         try {
             redisTemplate.opsForValue().set(streamId + "newRunPush", false);
-            RedisCacheHolder.put(streamId + "newRunPush", false);
         } catch (Exception e) {
             log.warn("[清理Redis失败]", e);
         }
 
-        try { Thread.sleep(1000); } catch (InterruptedException e) { }
+
 
         log.info("[✓ 停止完成] 剩余活跃流: {}/64", ACTIVE_TASKS.size());
     }
@@ -400,7 +377,7 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
                         log.info("未开启区域入侵识别{}", tabAiSubscriptionNew.getName());
                     }
 
-                    if (tabAiVideoSetting.getIsBefor().equals("0")) {
+                    if ("0".equals(tabAiVideoSetting.getIsBefor())) {
                         List<NetPush> BeforNetPushList = new ArrayList<>();
 
                         TabAiModel before = getTabAiModelInfo(
@@ -501,7 +478,7 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
                         allPush.setIsFollow(tabAiVideoSetting.getIsFollow() == null ? 1 : tabAiVideoSetting.getIsFollow());
                         allPush.setWarinngMethod(tabAiVideoSetting.getWarinngMethod() == null ? 0 : tabAiVideoSetting.getWarinngMethod());
                         allPush.setNoDifText(StringUtils.isEmpty(tabAiVideoSetting.getNoDifText()) ? "未定义" : tabAiVideoSetting.getNoDifText());
-                        if(tabAiVideoSetting.getIsAudio()==0){//开启播报 组装播报设备
+                        if(Integer.valueOf(0).equals(tabAiVideoSetting.getIsAudio()) && StringUtils.isNotBlank(tabAiVideoSetting.getAudioDevice())){//开启播报 组装播报设备
                            List<TabAudioDevice> tabAudioDeviceList=tabAudioDeviceMapper.selectBatchIds(Arrays.asList(tabAiVideoSetting.getAudioDevice().split(",")));
                            log.info("[开启播报：播报设备数{}]",tabAudioDeviceList.size());
                            allPush.setTabAudioDevices(tabAudioDeviceList);
@@ -511,8 +488,7 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
                     NetPushList.add(allPush);
                 }
             } else {
-                log.info("[未配置，不启动]");
-                return;
+                throw new IllegalArgumentException("任务未配置识别模型");
             }
 
             tabAiSubscriptionNew.setRunState(1);
@@ -525,31 +501,25 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
             if (tabAiSubscriptionNew.getModelJmType() != null && tabAiSubscriptionNew.getModelJmType() == 20) {  //onnx
                 log.info("onnx推理");
                 if (cameraNum == null || cameraNum < 32) {
-                    submitVideoTask(tabAiSubscriptionNew, new VideoReadPicOnnxNew(tabAiSubscriptionNew, redisTemplate));
+                    submitVideoTask(tabAiSubscriptionNew, new VideoReadPicOnnxNew(tabAiSubscriptionNew, redisTemplate, frameIntervalMs, maxStreamLagMs));
                 } else if (cameraNum == 32) {
-                    new Timer().schedule(new TimerTask() {
-                        public void run() {
-                            submitGenericTask(tabAiSubscriptionNew, new VideoReadPicNewThreeTwoOnnx(tabAiSubscriptionNew, redisTemplate));
-                        }
-                    }, 3000);
+                    submitGenericTask(tabAiSubscriptionNew, new VideoReadPicNewThreeTwoOnnx(tabAiSubscriptionNew, redisTemplate));
                 } else {
                     submitGenericTask(tabAiSubscriptionNew, new VideoReadPicOnnxNewBatch(tabAiSubscriptionNew, redisTemplate, batchScheduler));
                 }
             } else { // opencv
                 log.info("opencv dnn推理");
                 if (cameraNum == null || cameraNum < 32) {
-                    submitGenericTask(tabAiSubscriptionNew, new VideoReadPicNew(tabAiSubscriptionNew, redisTemplate));
+                    submitGenericTask(tabAiSubscriptionNew, new VideoReadPicNew(tabAiSubscriptionNew, redisTemplate, opencvFrameIntervalMs, maxStreamLagMs));
                 } else if (cameraNum == 32) {
-                    new Timer().schedule(new TimerTask() {
-                        public void run() {
-                            submitGenericTask(tabAiSubscriptionNew, new VideoReadPicNewThreeTwo(tabAiSubscriptionNew, redisTemplate));
-                        }
-                    }, 30000);
+                    submitGenericTask(tabAiSubscriptionNew, new VideoReadPicNewThreeTwo(tabAiSubscriptionNew, redisTemplate));
+                } else {
+                    throw new IllegalArgumentException("OpenCV模式不支持cameraNum大于32");
                 }
             }
 
         } catch (IOException ex) {
-            log.warn("[文件读取错误]", ex);
+            throw new IllegalStateException("模型配置文件读取失败", ex);
         }
     }
 
@@ -557,22 +527,48 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
      *   提交视频任务并跟踪（支持VideoReadPicOnnxNew类型）
      */
     private void submitVideoTask(TabAiSubscriptionNew tab, VideoReadPicOnnxNew task) {
-        String id = tab.getId();
-        Future<?> future = executor.submit(task);
-        ACTIVE_TASKS.put(id, future);
-        ACTIVE_INSTANCES.put(id, task);
-        log.info("[任务已提交] ID: {}, 活跃数: {}/64", id, ACTIVE_TASKS.size());
+        submitGenericTask(tab, task);
     }
 
-    /**
-     *   提交通用Runnable任务（用于其他视频处理器类型）
-     */
     private void submitGenericTask(TabAiSubscriptionNew tab, Runnable task) {
         String id = tab.getId();
-        Future<?> future = executor.submit(task);
+        FutureTask<Void> future = new FutureTask<Void>(() -> {
+            String previousName = Thread.currentThread().getName();
+            Thread.currentThread().setName("VideoStream-" + id + "-" + tab.getName());
+            try { task.run(); }
+            catch (Throwable e) { log.error("[任务执行失败] taskId={} name={}", id, tab.getName(), e); }
+            finally { Thread.currentThread().setName(previousName); }
+            return null;
+        }) {
+            @Override protected void done() {
+                synchronized (TabAiSubscriptionNewServiceImpl.this) {
+                    if (ACTIVE_TASKS.remove(id, this)) {
+                        STOP_ACTIONS.remove(id);
+                        if (!shuttingDown) {
+                            try { markStopped(id); }
+                            catch (Exception e) { log.error("[任务结束状态更新失败] taskId={}", id, e); }
+                        }
+                        log.info("[任务已结束] taskId={} name={} cancelled={} active={}",
+                                id, tab.getName(), isCancelled(), ACTIVE_TASKS.size());
+                    }
+                }
+            }
+        };
+        Runnable stop = null;
+        if (task instanceof VideoReadPicOnnxNew) stop = ((VideoReadPicOnnxNew) task)::forceStop;
+        else if (task instanceof VideoReadPicNew) stop = ((VideoReadPicNew) task)::forceStop;
+        else if (task instanceof VideoReadPicNewThreeTwo) stop = ((VideoReadPicNewThreeTwo) task)::forceStop;
+        else if (task instanceof VideoReadPicNewThreeTwoOnnx) stop = ((VideoReadPicNewThreeTwoOnnx) task)::forceStop;
+        else if (task instanceof VideoReadPicOnnxNewBatch) stop = ((VideoReadPicOnnxNewBatch) task)::forceStop;
+        if (stop != null) STOP_ACTIONS.put(id, stop);
         ACTIVE_TASKS.put(id, future);
-        // 注意：非VideoReadPicOnnxNew类型无法放入ACTIVE_INSTANCES
-        log.info("[任务已提交] ID: {}, 活跃数: {}/64", id, ACTIVE_TASKS.size());
+        try { executor.execute(future); }
+        catch (RuntimeException e) {
+            ACTIVE_TASKS.remove(id, future);
+            Runnable cleanup = STOP_ACTIONS.remove(id);
+            if (cleanup != null) cleanup.run();
+            throw e;
+        }
     }
 
     public TabAiModel getTabAiModelInfo(TabAiModel tabAiModel, String name) {
@@ -635,6 +631,10 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
                             options.setInterOpNumThreads(1);
                             options.setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL);
                             options.addCPU(true);
+                        }else if (tabAiModel.getModelJmType() != null && tabAiModel.getModelJmType() == 2) {
+                            log.info("开启NPU加速,需要额外编译");
+                          //  options.addCANN(0);
+
                         }
 
                         OrtSession session = env.createSession(tabAiModel.getAiWeights(), options);
@@ -652,7 +652,7 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
     }
 
     @Override
-    public void stopAi(TabAiSubscriptionNew tabAiSubscriptionNew) {
+    public synchronized void stopAi(TabAiSubscriptionNew tabAiSubscriptionNew) {
         String streamId = tabAiSubscriptionNew.getId();
         log.info("[停止流] ID: {}, 活跃流: {}/64", streamId, ACTIVE_TASKS.size());
         stopStreamCompletely(streamId);
@@ -674,110 +674,36 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
 
     @Override
     public Result<String> getVideoPic(String id) {
-        log.info("=== 开始获取图片 ===");
-        String outputPath = upLoadPath + File.separator;
         String picName = id + ".jpg";
-
         FFmpegFrameGrabber grabber = null;
-        Java2DFrameConverter converter = new Java2DFrameConverter();
-
+        Mat image = null;
         try {
-            TabAiSubscriptionNew tab = this.getById(id);
-            log.info("RTSP地址: {}", tab.getBeginEventTypes());
-
+            TabAiSubscriptionNew tab = getById(id);
+            if (tab == null) return Result.error("任务不存在");
             grabber = createOptimizedGrabber(tab);
-
-            log.info("=== 流信息 ===");
-            log.info("视频编码: {}", grabber.getVideoCodecName());
-            log.info("图像尺寸: {}x{}", grabber.getImageWidth(), grabber.getImageHeight());
-
-            Frame frame = null;
-            Mat mat = null;
-
-
-            int tryCount = 0;
-            int maxTries = 100;
-            boolean foundValidFrame = false;
-
-            log.info("开始查找有效视频帧...");
-
-            while (tryCount < maxTries && !foundValidFrame) {
-                tryCount++;
-
-                // ✅ 关键修改1: 优先获取关键帧
-                frame = grabber.grabKeyFrame();
-
-                // 如果grabKeyFrame不支持，回退到普通方式
-                if (frame == null) {
-                    frame = grabber.grabImage();
-                }
-
-                if (frame == null || frame.image == null) {
-                    if (tryCount % 20 == 0) {
-                        log.info("已尝试 {} 次，继续...", tryCount);
-                    }
-                    continue;
-                }else if (frame.imageWidth <= 0 || frame.imageHeight <= 0){
-                    if (tryCount % 20 == 0) {
-                        log.info("已尝试 {} 次，继续...", tryCount);
-                    }
-                    continue;
-
-                }
-
-                BufferedImage image = converter.getBufferedImage(frame);
-                mat = bufferedImageToMat(image);
-                log.info("✓ 第 {} 次尝试获取到有效视频帧", tryCount);
-
-                log.info("帧信息 - {}x{}, 通道:{}", frame.imageWidth, frame.imageHeight, frame.imageChannels);
-                 foundValidFrame = true;
-                 break;
-
-
-//
-//
-//                if (mat != null && !mat.empty()) {
-//                    // ✅ 关键修改3: 检查图片是否有效（非纯灰/纯黑）
-//                    if (isValidImage(mat)) {
-//                        log.info("✓ 第 {} 次尝试获取到有效视频帧", tryCount);
-//                        log.info("帧信息 - {}x{}, 通道:{}",
-//                                frame.imageWidth, frame.imageHeight, frame.imageChannels);
-//                        foundValidFrame = true;
-//                        break;
-//                    } else {
-//                        log.warn("第 {} 次获取的帧为无效图像(灰色/黑色)，继续尝试...", tryCount);
-//                        mat.release();
-//                        mat = null;
-//                    }
-//                }
+            VideoFrameGate gate = new VideoFrameGate(id);
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+            // Decode all reference pictures normally. Never fall back to an unvalidated P/B frame.
+            while (System.nanoTime() < deadline && !Thread.currentThread().isInterrupted()) {
+                Frame frame = grabber.grabImage();
+                if (frame == null) break;
+                if (!gate.accept(frame)) continue;
+                image = FrameMatView.bgr(frame);
+                String path = upLoadPath + File.separator + picName;
+                if (!Imgcodecs.imwrite(path, image)) throw new IOException("图片写入失败: " + path);
+                redisTemplate.opsForValue().set(id, picName);
+                log.info("[视频截图完成] taskId={} keyFrame={} width={} height={}", id, frame.keyFrame, frame.imageWidth, frame.imageHeight);
+                return Result.OK(picName);
             }
-
-            if (!foundValidFrame || mat == null) {
-                log.error("尝试了 {} 次后仍未获取到有效帧", maxTries);
-                return Result.error(picName);
-            }
-
-            // 保存图片
-            String fullPath = outputPath + picName;
-
-            Imgcodecs.imwrite(fullPath, mat);
-            //保存到redis
-
-            redisTemplate.opsForValue().set(id,picName);
-
-
-
-            log.info("✓ 成功保存图片: {}", picName);
-
-
-        } catch (Exception ex) {
-            log.error("获取失败!", ex);
-            return Result.error(picName);
+            log.warn("[视频截图失败，未取得有效关键帧] taskId={}", id);
+            return Result.error("未取得有效关键帧，请检查视频流");
+        } catch (Exception e) {
+            log.error("[视频截图失败] taskId={}", id, e);
+            return Result.error("获取视频图片失败");
         } finally {
-            safeRelease(converter, grabber);
+            if (image != null) image.release();
+            safeRelease(null, grabber);
         }
-
-        return Result.OK(picName);
     }
 
     /**
@@ -848,21 +774,21 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
         grabber.setOption("analyzeduration", "5000000"); // 增大分析时长
 
         // ========== 实时流优化 ==========
-        grabber.setOption("flags", "low_delay");
-        grabber.setOption("fflags", "nobuffer+discardcorrupt");
+
+
         grabber.setOption("max_delay", "500000");
-        grabber.setOption("buffer_size", "1024000");  // 增大缓冲区
+
 
         // ========== 关键：丢弃损坏帧 ==========
-        grabber.setOption("skip_frame", "nokey");     // 跳过非关键帧（加速）
-        grabber.setOption("err_detect", "careful");   // 更严格的错误检测
+
+
 
         // 像素格式
         grabber.setPixelFormat(avutil.AV_PIX_FMT_BGR24);
 
         log.info("[开始start] ...");
         long startTime = System.currentTimeMillis();
-        grabber.start();
+        VideoDecodePolicy.start(grabber);
         log.info("[✓ start完成] 耗时: {}ms", System.currentTimeMillis() - startTime);
 
         return grabber;

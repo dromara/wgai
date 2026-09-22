@@ -8,6 +8,9 @@ import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 import lombok.extern.slf4j.Slf4j;
+import org.jeecg.common.util.SpringContextUtils;
+import org.jeecg.modules.demo.video.service.ITabAiWarningService;
+import org.jeecg.modules.demo.video.service.impl.AlarmWorkService;
 import org.apache.commons.lang.StringUtils;
 import org.bytedeco.ffmpeg.global.avcodec;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
@@ -138,7 +141,7 @@ public class identifyTypeNewOnnxTest {
             log.info("【目标跟踪预警】模式启用 - 推送对象: {}", pushInfo.getName());
         }
 
-        log.info("前置检测框: {}", JSON.toJSONString(retureBoxInfos));
+        if (log.isInfoEnabled()) log.info("前置检测框: {}", JSON.toJSONString(retureBoxInfos));
 
         // ========== 2. 初始化参数 ==========
         List<String> classNames = netPush.getClaseeNames();
@@ -152,9 +155,17 @@ public class identifyTypeNewOnnxTest {
         long startTime = System.currentTimeMillis();
 
         // ========== 3. 图像预处理 ==========
+        long preprocessStarted = System.nanoTime();
         Mat processedImage = letterboxResize(image, 640, 640);
-        Imgproc.cvtColor(processedImage, processedImage, Imgproc.COLOR_BGR2RGB);
-        float[] inputData = preprocessImage(processedImage);
+        float[] inputData;
+        try {
+            Imgproc.cvtColor(processedImage, processedImage, Imgproc.COLOR_BGR2RGB);
+            inputData = preprocessImage(processedImage);
+        } finally {
+            processedImage.release();
+        }
+        log.info("[预处理耗时] taskId={} settingId={} model={} elapsedMs={}", pushInfo.getId(), netPush.getId(),
+                tabAiModel.getAiName(), (System.nanoTime() - preprocessStarted) / 1000000);
 
         // ========== 4. ONNX推理 ==========
         OrtSession session = netPush.getSession();
@@ -231,7 +242,7 @@ public class identifyTypeNewOnnxTest {
             // 获取类别配置
             TabAiBase aiBase = getAiBaseConfig(className);
             if (aiBase == null || shouldSkipClass(aiBase)) {
-                log.warn("【跳过类别：{}】", className);
+                log.info("【跳过类别：{}】", className);
                 continue;
             }
 
@@ -417,7 +428,7 @@ public class identifyTypeNewOnnxTest {
             log.info("【目标跟踪预警】模式启用 - 推送对象: {}", pushInfo.getName());
         }
 
-        log.info("前置检测框: {}", JSON.toJSONString(retureBoxInfos));
+        if (log.isInfoEnabled()) log.info("前置检测框: {}", JSON.toJSONString(retureBoxInfos));
 
         // ========== 2. 初始化参数 ==========
         List<String> classNames = netPush.getClaseeNames();
@@ -430,18 +441,24 @@ public class identifyTypeNewOnnxTest {
         long startTime = System.currentTimeMillis();
 
         // ========== 3. 图像预处理 ==========
+        long preprocessStarted = System.nanoTime();
         Mat processedImage = letterboxResize(image, 640, 640);
-        Imgproc.cvtColor(processedImage, processedImage, Imgproc.COLOR_BGR2RGB);
-        float[] inputData = preprocessImage(processedImage);
+        float[] inputData;
+        try {
+            Imgproc.cvtColor(processedImage, processedImage, Imgproc.COLOR_BGR2RGB);
+            inputData = preprocessImage(processedImage);
+        } finally {
+            processedImage.release();
+        }
+        log.info("[预处理耗时] taskId={} settingId={} model={} elapsedMs={}", pushInfo.getId(), netPush.getId(),
+                tabAiModel.getAiName(), (System.nanoTime() - preprocessStarted) / 1000000);
 
         // ========== 4. ONNX推理 ==========
         OrtSession session = netPush.getSession();
         OrtEnvironment env = netPush.getEnv();
 
 
-        try {
-            long[] shape = new long[]{1, 3, 640, 640};
-            OnnxTensor inputTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputData), shape);
+        try (OnnxTensor inputTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputData), new long[]{1, 3, 640, 640})) {
             Map<String, OnnxTensor> inputs = Collections.singletonMap(
                     session.getInputNames().iterator().next(), inputTensor);
 
@@ -460,13 +477,13 @@ public class identifyTypeNewOnnxTest {
                     long[] tensorShape = tensor.getInfo().getShape();
                     Object rawOutput = tensor.getValue();
 
-                    System.out.println("输出维度: [" + tensorShape[0] + ", " + tensorShape[1] + ", " + tensorShape[2] + "]");
+                    log.info("输出维度: [" + tensorShape[0] + ", " + tensorShape[1] + ", " + tensorShape[2] + "]");
 
                     if (rawOutput instanceof float[][][]) {
                         float[][][] batch = (float[][][]) rawOutput;
 
                         // 🔍 添加调试信息
-                        System.out.println("实际数组维度: [" + batch.length + "]["
+                        log.info("实际数组维度: [" + batch.length + "]["
                                 + batch[0].length + "][" + batch[0][0].length + "]");
 
                         //   根据实际维度判断数据格式
@@ -476,7 +493,7 @@ public class identifyTypeNewOnnxTest {
                         int debugCount = 0; // 用于控制调试输出数量
 
                         if (dim1 == 56 && dim2 > 1000) {
-                            System.out.println("  检测到格式: [batch][features][detections]");
+                            log.info("  检测到格式: [batch][features][detections]");
                             float[][] detections = batch[0];
 
 
@@ -519,9 +536,9 @@ public class identifyTypeNewOnnxTest {
 
                                             if (visibility > 0.5) {
                                                 if (i == 0) {
-                                                    System.out.println("鼻子坐标: (" + kx + "," + ky + ")");
+                                                    log.info("鼻子坐标: (" + kx + "," + ky + ")");
                                                 } else if (i == 9 || i == 10) {
-                                                    System.out.println("手腕位置: " + (i == 9 ? "左手" : "右手") + " (" + kx + "," + ky + ")");
+                                                    log.info("手腕位置: " + (i == 9 ? "左手" : "右手") + " (" + kx + "," + ky + ")");
                                                 }
                                                 highVisibilityCount++;
                                                 // 只统计高可见性的关键点范围
@@ -542,11 +559,11 @@ public class identifyTypeNewOnnxTest {
                                     float heightRatio = (height > 0) ? (keypointHeight / height) : 0;
 
                                     if (debugCount < 3) {
-                                        System.out.println(String.format("  统计: 有效坐标=%d/17, 高可见性=%d/17",
+                                        log.info(String.format("  统计: 有效坐标=%d/17, 高可见性=%d/17",
                                                 validCoordCount, highVisibilityCount));
-                                        System.out.println(String.format("  边界框: 宽=%.1f, 高=%.1f", width, height));
-                                        System.out.println(String.format("  关键点范围: 宽=%.1f, 高=%.1f", keypointWidth, keypointHeight));
-                                        System.out.println(String.format("  覆盖率: 宽度%.1f%%, 高度%.1f%%", widthRatio * 100, heightRatio * 100));
+                                        log.info(String.format("  边界框: 宽=%.1f, 高=%.1f", width, height));
+                                        log.info(String.format("  关键点范围: 宽=%.1f, 高=%.1f", keypointWidth, keypointHeight));
+                                        log.info(String.format("  覆盖率: 宽度%.1f%%, 高度%.1f%%", widthRatio * 100, heightRatio * 100));
                                         debugCount++;
                                     }
 
@@ -572,7 +589,7 @@ public class identifyTypeNewOnnxTest {
                                         hasValidKeypoints = hasReasonableSpread && (coversEnoughArea || isHighConfidenceCompact);
 
                                         if (debugCount <= 3) {
-                                            System.out.println(String.format("  验证结果: 合理分布=%s, 覆盖充分=%s, 高置信紧凑=%s, 最终=%s",
+                                            log.info(String.format("  验证结果: 合理分布=%s, 覆盖充分=%s, 高置信紧凑=%s, 最终=%s",
                                                     hasReasonableSpread, coversEnoughArea, isHighConfidenceCompact, hasValidKeypoints));
                                         }
 
@@ -582,12 +599,12 @@ public class identifyTypeNewOnnxTest {
                                         if (confidence > 0.6f && validCoordCount >= 2) {
                                             hasValidKeypoints = true;
                                             if (debugCount <= 3) {
-                                                System.out.println(String.format("  验证结果: 高置信度兜底通过 (conf=%.2f, valid=%d)",
+                                                log.info(String.format("  验证结果: 高置信度兜底通过 (conf=%.2f, valid=%d)",
                                                         confidence, validCoordCount));
                                             }
                                         } else {
                                             if (debugCount <= 3) {
-                                                System.out.println(String.format("  验证结果: 高可见性关键点不足(%d<3)", highVisibilityCount));
+                                                log.info(String.format("  验证结果: 高可见性关键点不足(%d<3)", highVisibilityCount));
                                             }
                                         }
                                     }
@@ -605,14 +622,14 @@ public class identifyTypeNewOnnxTest {
                                                 String.format("%.0f%%", heightRatio * 100));
                                     } else {
                                         if (debugCount <= 3) {
-                                            System.out.println(String.format("❌ 过滤掉检测框[%d]: 关键点分布异常", i));
+                                            log.info(String.format("❌ 过滤掉检测框[%d]: 关键点分布异常", i));
                                         }
                                     }
                                 }
                             }
                         } else if (dim1 > 1000 && dim2 == 56) {
                             // 格式: [1][8400][56] - 检测在前
-                            System.out.println("⚠️ 检测到格式: [batch][detections][features]");
+                            log.info("⚠️ 检测到格式: [batch][detections][features]");
 
                             for (int i = 0; i < dim1; i++) {
                                 float[] detection = batch[0][i];  // [56]
@@ -652,7 +669,7 @@ public class identifyTypeNewOnnxTest {
                                         log.info("检测到人体: 置信度={}, 坐标=({},{},{},{})",
                                                 confidence, left, top, width, height);
                                     } else {
-                                        System.out.println("⚠️ 跳过无效检测 (置信度=" + confidence + "): 无有效关键点");
+                                        log.info("⚠️ 跳过无效检测 (置信度=" + confidence + "): 无有效关键点");
                                     }
                                 }
                             }
@@ -667,7 +684,7 @@ public class identifyTypeNewOnnxTest {
             // ========== 5. 检测结果验证 ==========
             log.info("NMS前检测框数量: " + boxes2d.size());
             if(boxes2d.size()<=0){
-                log.error("未识别到{}",netPush.getTabAiModel().getAiName());
+                log.info("未识别到{}",netPush.getTabAiModel().getAiName());
                 return false;
             }
             //  应用非极大值抑制
@@ -761,7 +778,7 @@ public class identifyTypeNewOnnxTest {
                 TabAiBase aiBase = VideoSendReadCfg.map.get(fallResult.getStatus());
                 if (aiBase != null) {
                     if (StringUtils.isNotEmpty(aiBase.getSpaceThree()) && aiBase.getSpaceThree().equals("N")) {
-                        log.warn("【当前不推送：{}】", fallResult.getStatus());
+                        log.info("【当前不推送：{}】", fallResult.getStatus());
                         continue;
                     }
                 } else {
@@ -1051,9 +1068,7 @@ public class identifyTypeNewOnnxTest {
         float confThreshold = 0.35f;
 
         //   创建新的FloatBuffer并确保position为0
-        FloatBuffer buffer = FloatBuffer.allocate(inputData.length);
-        buffer.put(inputData);
-        buffer.flip(); // 重置position到0,这很关键!
+        FloatBuffer buffer = FloatBuffer.wrap(inputData);
 
         try (OnnxTensor inputTensor = OnnxTensor.createTensor(env, buffer, shape)) {
             Map<String, OnnxTensor> inputs = Collections.singletonMap(
@@ -1184,7 +1199,7 @@ public class identifyTypeNewOnnxTest {
 
         // 将缩放后的图像放到中心
         Mat roi = output.submat(padY, padY + newHeight, padX, padX + newWidth);
-        resized.copyTo(roi);
+        try { resized.copyTo(roi); } finally { roi.release(); }
 
         ResizeResult result = new ResizeResult();
         result.resizedImage = output;
@@ -1224,7 +1239,7 @@ public class identifyTypeNewOnnxTest {
                                                 long startTime, long intervalTime) {
 
         if (allDetections.isEmpty()) {
-            log.warn("未检测到任何目标");
+            log.info("未检测到任何目标");
             handleNoDetection(pushInfo, netPush, redisTemplate, image, uploadPath, tabAiModel);
             return false;
         }
@@ -1252,7 +1267,7 @@ public class identifyTypeNewOnnxTest {
 
             String areaName = isValidDetection(pushInfo, netPush, retureBoxInfos, bbox, areaBox);
             if (areaName == null) {
-                log.debug("检测框不在指定区域内，跳过");
+                log.info("检测框不在指定区域内，跳过");
                 continue;
             }
             if (needAreaPush && StringUtils.isNotEmpty(areaName)) {
@@ -1274,13 +1289,13 @@ public class identifyTypeNewOnnxTest {
             // 2. 前置模型关联过滤（如果使用了ROI检测）
             if (det.fromROIIndex >= 0 && netPush.getIsFollow() == 0) {
                 // 检测结果已经在ROI内，无需再次过滤
-                log.debug("检测结果来自ROI[{}]，已通过前置过滤", det.fromROIIndex);
+                log.info("检测结果来自ROI[{}]，已通过前置过滤", det.fromROIIndex);
             }
 
             // 3. 获取类别配置
             TabAiBase aiBase = getAiBaseConfig(det.className);
             if (aiBase == null || shouldSkipClass(aiBase)) {
-                log.warn("【跳过类别：{}】", det.className);
+                log.info("【跳过类别：{}】", det.className);
                 continue;
             }
 
@@ -1303,7 +1318,7 @@ public class identifyTypeNewOnnxTest {
 
         // 6. 推送结果验证
         if (validCount <= 0) {
-            log.error("【无有效检测结果，不推送】");
+            log.info("【无有效检测结果，不推送】");
             return false;
         }
 
@@ -1388,18 +1403,20 @@ public class identifyTypeNewOnnxTest {
         }
 
         MatOfRect2d boxesMat = new MatOfRect2d();
-        boxesMat.fromList(detectionResult.boxes2d);
-
-        MatOfFloat confMat = new MatOfFloat(Converters.vector_float_to_Mat(detectionResult.confidences));
+        MatOfFloat confMat = new MatOfFloat();
         MatOfInt indices = new MatOfInt();
-
-        Dnn.NMSBoxes(boxesMat, confMat, confThreshold, nmsThreshold, indices);
-        // 检查NMS结果
-        if (indices.empty() || indices.rows() == 0) {
-            log.warn("NMS未返回任何索引，可能置信度阈值{}过高", confThreshold);
-            return new int[0];
+        try {
+            boxesMat.fromList(detectionResult.boxes2d);
+            confMat.fromList(detectionResult.confidences);
+            Dnn.NMSBoxes(boxesMat, confMat, confThreshold, nmsThreshold, indices);
+            if (indices.empty()) {
+                log.info("NMS未返回任何索引，可能置信度阈值{}过高", confThreshold);
+                return new int[0];
+            }
+            return indices.toArray();
+        } finally {
+            boxesMat.release(); confMat.release(); indices.release();
         }
-        return indices.toArray();
     }
 
 
@@ -1494,7 +1511,7 @@ public class identifyTypeNewOnnxTest {
             }
             String filename = debugPath + saveFilePath + roiIndex + "_" + System.currentTimeMillis() + ".jpg";
             Imgcodecs.imwrite(filename, roiMat);
-            log.debug("ROI[{}]已保存至: {}", roiIndex, filename);
+            log.info("ROI[{}]已保存至: {}", roiIndex, filename);
         } catch (Exception ex) {
             log.error("保存ROI失败", ex);
         }
@@ -1582,9 +1599,17 @@ public class identifyTypeNewOnnxTest {
         log.info("开始ONNX检测，目标类别: {}, 图像尺寸: {}x{}",targetClass,  image.cols(), image.rows());
 
         // ========== 3. 图像预处理 ==========
+        long preprocessStarted = System.nanoTime();
         Mat processedImage = letterboxResize(image, 640, 640);
-        Imgproc.cvtColor(processedImage, processedImage, Imgproc.COLOR_BGR2RGB);
-        float[] inputData = preprocessImage(processedImage);
+        float[] inputData;
+        try {
+            Imgproc.cvtColor(processedImage, processedImage, Imgproc.COLOR_BGR2RGB);
+            inputData = preprocessImage(processedImage);
+        } finally {
+            processedImage.release();
+        }
+        log.info("[预处理耗时] taskId={} settingId={} model={} elapsedMs={}", pushInfo.getId(), netPush.getId(),
+                tabAiModel.getAiName(), (System.nanoTime() - preprocessStarted) / 1000000);
 
         // ========== 4. ONNX推理 ==========
         OrtSession session = netPush.getSession();
@@ -1713,10 +1738,10 @@ public class identifyTypeNewOnnxTest {
                         String modelArea) {
 
         log.warn("model{}-{}", tabAiModel.getAiName(), warnText);
-        Thread t = new Thread(() -> {
+        boolean accepted = SpringContextUtils.getBean(AlarmWorkService.class).submit(pushInfo.getId(), () -> {
             try {
 
-                String base64Img = base64Image(saveName);
+                String base64Img = null;
                 // 组装参数
                 pushEntity push = new pushEntity();
                 push.setCameraName(pushInfo.getName());
@@ -1758,10 +1783,10 @@ public class identifyTypeNewOnnxTest {
                     long recordTime = netPush.getTabAiVideoSetting().getRecordTime();
                     recordVideo = RecordVideo(pushInfo.getBeginEventTypes(), savePath, recordTime, netPush.getId());
                     if (StringUtils.isNotEmpty(recordVideo)) {
-                        log.error("录像完成:{}", recordVideo);
+                        log.info("录像完成:{}", recordVideo);
                         if (netPush.getTabAiVideoSetting().getIsAnalysis() == 0) { //是否开启分析
                             //需要分析录像视频逐帧分析
-                            log.error("开始分析视频");
+                            log.info("开始分析视频");
                             recordVideo = analysisVideo(recordVideo, netPush, savePath);
                         }
                     }
@@ -1771,30 +1796,36 @@ public class identifyTypeNewOnnxTest {
 
 
 
-                if (pushInfo.getPushStatic() == 0) {// 0 开启 1未开启
-                    log.info("[已经开启推送第三方]：");
-
-                    if(StringUtils.isNotEmpty(recordVideo)){
-                        String base64Mp4 = base64Image(recordVideo);
-                        push.setVideo(base64Mp4);
-                    }
-                    JSONObject ob = RestUtil.post(pushInfo.getEventUrl(), (JSONObject) JSONObject.toJSON(push));
-                    log.info("返回内容：" + ob);
-
-                } else {
-                    log.info("[当前设置为：不推送第三方]");
-                }
-
                 if(netPush.getTabAiVideoSetting().getSaveLocalhost()==0){ //保存到本地
                     log.info("[本地也保存]");
                     push.setAlarmPicData(saveName);
                     push.setVideo(recordVideo);
                     // 获取 pushInfo 的路径部分
 
-                    JSONObject ob = RestUtil.post("http://127.0.0.1:9998/wgai/video/tabAiWarning/addPush", (JSONObject) JSONObject.toJSON(push));
+                    SpringContextUtils.getBean(ITabAiWarningService.class).savePush(push);
+                }
 
-                    log.info("返回内容：" + ob);
-                }else{
+                if (pushInfo.getPushStatic() == 0) {// 0 开启 1未开启
+                    push.setAlarmPicData(base64Image(saveName));
+                    push.setVideo(null);
+                    log.info("[已经开启推送第三方]：");
+
+                    if(StringUtils.isNotEmpty(recordVideo)){
+                        String base64Mp4 = base64Image(recordVideo);
+                        push.setVideo(base64Mp4);
+                    }
+                    try {
+                        JSONObject ob = RestUtil.post(pushInfo.getEventUrl(), (JSONObject) JSONObject.toJSON(push));
+                        log.info("第三方返回：{}", ob);
+                    } catch (Exception e) {
+                        log.error("[第三方推送失败] taskId={}", pushInfo.getId(), e);
+                    }
+
+                } else {
+                    log.info("[当前设置为：不推送第三方]");
+                }
+
+                if(netPush.getTabAiVideoSetting().getSaveLocalhost()!=0){
                     log.info("[不保存本地录像]");
                     File imageFile = new File(recordVideo);
                     if (imageFile.exists()) {
@@ -1805,14 +1836,12 @@ public class identifyTypeNewOnnxTest {
 
 
             } catch (Exception exception) {
-                exception.printStackTrace();
-                log.error("[推送失败：{}]", pushInfo.getId());
+                log.error("[报警处理失败] taskId={}", pushInfo.getId(), exception);
             }
         });
-        t.start();
 
-        log.error("推送结束-间隔时间{}-{}", pushInfo.getId());
-        return true;
+
+        return accepted;
     }
 
     /**
@@ -2118,41 +2147,18 @@ public class identifyTypeNewOnnxTest {
      * 图像预处理：HWC -> CHW，归一化
      */
     private float[] preprocessImage(Mat processedImage) {
-        Mat blob = null;
-        List<Mat> channels = null;
-
+        // Native HWC -> CHW directly avoids split Mats plus three temporary float arrays.
+        // Input is already RGB; swapRB must remain false.
+        Mat blob = Dnn.blobFromImage(processedImage, 1.0 / 255.0,
+                new Size(640, 640), new Scalar(0), false, false);
         try {
-            blob = new Mat();
-            processedImage.convertTo(blob, CvType.CV_32F, 1.0 / 255.0);
-
-            channels = new ArrayList<>();
-            Core.split(blob, channels);
-
-            float[] inputData = new float[3 * 640 * 640];
-            for (int c = 0; c < 3; c++) {
-                float[] data = new float[640 * 640];
-                channels.get(c).get(0, 0, data);
-                System.arraycopy(data, 0, inputData, c * 640 * 640, 640 * 640);
-            }
-            return inputData;
-
+            float[] input = new float[3 * 640 * 640];
+            blob.get(new int[]{0, 0, 0, 0}, input);
+            return input;
         } finally {
-            //   释放 blob
-            if (blob != null) {
-                blob.release();
-            }
-
-            //   释放所有 channels
-            if (channels != null) {
-                for (Mat channel : channels) {
-                    if (channel != null) {
-                        channel.release();
-                    }
-                }
-            }
+            blob.release();
         }
     }
-
 
     public Scalar getColor(String color){
         if(StringUtils.isNotEmpty(color)){
@@ -2924,14 +2930,15 @@ public class identifyTypeNewOnnxTest {
             dir.mkdirs();
         }
 
-        String fileName = savePath + System.currentTimeMillis() + ".jpg";
+        String fileName = savePath + java.util.UUID.randomUUID() + ".jpg";
         File imageFile = new File(fileName);
         if (imageFile.exists()) {
             imageFile.delete();
         }
 
-        Imgcodecs.imwrite(fileName, image);
-        log.info("图像保存路径: {}", fileName);
+        long saveStarted = System.nanoTime();
+        if (!Imgcodecs.imwrite(fileName, image)) throw new IllegalStateException("报警图片保存失败: " + fileName);
+        log.info("[图片保存] file={} elapsedMs={}", fileName, (System.nanoTime() - saveStarted) / 1000000);
 
         return fileName;
     }
@@ -2945,7 +2952,7 @@ public class identifyTypeNewOnnxTest {
         if (netPush.getWarinngMethod() == 1) { // 未识别到报警
             log.info("未识别到目标，触发报警");
             String savePath = uploadPath + File.separator + "push" + File.separator;
-            String fileName = savePath + System.currentTimeMillis() + ".jpg";
+            String fileName = savePath + java.util.UUID.randomUUID() + ".jpg";
             Imgcodecs.imwrite(fileName, image);
 
             isOk(pushInfo, netPush, redisTemplate, fileName, tabAiModel,
@@ -3017,7 +3024,7 @@ public class identifyTypeNewOnnxTest {
                 resized.copyTo(roiMat);
                 return letterboxed;
             } finally {
-                //不单独释放
+                roiMat.release();
             }
 
         } finally {
@@ -3082,7 +3089,7 @@ public class identifyTypeNewOnnxTest {
                 historicalTargets.remove(matchedTarget); // 移除已匹配的目标
                 targetNumMap.put(currentTarget, matchedTarget.getTrackNum()); // 沿用旧编号
 
-                log.debug("【目标匹配】目标ID: {} 编号: {} 更新位置: ({}, {})",
+                log.info("【目标匹配】目标ID: {} 编号: {} 更新位置: ({}, {})",
                         matchedTarget.getTargetId(),
                         matchedTarget.getTrackNum(),
                         currentTarget.getCenterX(),
@@ -3178,7 +3185,7 @@ public class identifyTypeNewOnnxTest {
             redisTemplate.opsForValue().set(redisKey, json,
                     TARGET_TIMEOUT_MS * 3, TimeUnit.MILLISECONDS);
 
-            log.debug("【保存目标】保存{}个目标到Redis", targets.size());
+            log.info("【保存目标】保存{}个目标到Redis", targets.size());
         } catch (Exception e) {
             log.error("保存目标到Redis失败", e);
         }
@@ -3218,7 +3225,7 @@ public class identifyTypeNewOnnxTest {
         }
 
         if (bestMatch != null) {
-            log.debug("【目标匹配】距离: {}", minDistance);
+            log.info("【目标匹配】距离: {}", minDistance);
         }
 
         return bestMatch;

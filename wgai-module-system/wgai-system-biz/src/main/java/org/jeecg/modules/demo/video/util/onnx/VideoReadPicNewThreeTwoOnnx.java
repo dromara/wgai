@@ -1,6 +1,8 @@
 package org.jeecg.modules.demo.video.util.onnx;
 
 import lombok.extern.slf4j.Slf4j;
+import org.jeecg.modules.demo.video.util.VideoDecodePolicy;
+import org.jeecg.modules.demo.video.util.VideoFrameGate;
 import org.bytedeco.ffmpeg.global.avutil;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
 import org.bytedeco.javacv.Frame;
@@ -73,6 +75,7 @@ public class VideoReadPicNewThreeTwoOnnx implements Runnable {
     private final TabAiSubscriptionNew tabAiSubscriptionNew;
     private final RedisTemplate redisTemplate;
     private final String streamId;
+    private VideoFrameGate frameGate;
 
     // 实例级线程池 - 改为使用全局共享
     private final ExecutorService processingExecutor;
@@ -236,10 +239,17 @@ public class VideoReadPicNewThreeTwoOnnx implements Runnable {
                     continue;
                 }
                 consecutiveNullFrames = 0;
+                if (!frameGate.accept(frame)) {
+                    if (frameGate.isWaitingTooLong()) {
+                        log.warn("[等待关键帧超时，重新连接] taskId={}", tabAiSubscriptionNew.getId());
+                        grabber = restartGrabber(grabber);
+                    }
+                    continue;
+                }
 
                 // 严格的帧率控制
                 if (currentTime - lastFrameTime < currentFrameInterval) {
-                    frame.close();
+
                     continue;
                 }
                 lastFrameTime = currentTime;
@@ -248,7 +258,7 @@ public class VideoReadPicNewThreeTwoOnnx implements Runnable {
                 if (pendingFrames.get() >= MAX_PENDING_FRAMES) {
                     log.debug("[丢弃帧防止内存堆积] 流: {}, 排队: {}",
                             tabAiSubscriptionNew.getName(), pendingFrames.get());
-                    frame.close();
+
                     droppedFrames.incrementAndGet();
                     GLOBAL_DROPPED_FRAMES.incrementAndGet();
 
@@ -394,7 +404,7 @@ public class VideoReadPicNewThreeTwoOnnx implements Runnable {
      */
     private void processFrameAsyncOptimized(Frame frame, List<NetPush> netPushList, identifyTypeNewOnnx identifyTypeAll) {
         if (forceShutdown.get() || processingExecutor.isShutdown()) {
-            frame.close();
+
             return;
         }
 
@@ -404,7 +414,7 @@ public class VideoReadPicNewThreeTwoOnnx implements Runnable {
             frameClone = frame.clone();
         } catch (Exception e) {
             log.error("[Frame克隆失败] 流: {}, 错误: {}", tabAiSubscriptionNew.getName(), e.getMessage());
-            frame.close();
+
             return;
         }
 
@@ -880,7 +890,7 @@ public class VideoReadPicNewThreeTwoOnnx implements Runnable {
         probe.setOption("stimeout", "5000000");   // 兼容性保留
         probe.setOption("max_delay", "5000000"); // 最大等待延迟
         probe.setOption("buffer_size", "1024000");
-        probe.start();
+        VideoDecodePolicy.start(probe);
         String codecName = probe.getVideoCodecName();
         int codecId = probe.getVideoCodec();
         probe.stop();
@@ -909,27 +919,28 @@ public class VideoReadPicNewThreeTwoOnnx implements Runnable {
         }
 
         // 基础设置
-        grabber.setOption("loglevel", "-8");
+
         grabber.setOption("rtsp_transport", "tcp");
         grabber.setOption("rtsp_flags", "prefer_tcp");
         grabber.setOption("stimeout", "3000000");
         grabber.setPixelFormat(avutil.AV_PIX_FMT_BGR24);
 
         // 内存友好的实时流设置
-        grabber.setOption("fflags", "nobuffer+flush_packets+discardcorrupt");
-        grabber.setOption("flags", "low_delay");
-        grabber.setOption("flags2", "fast");
+
+
+
         grabber.setOption("max_delay", "500000");
-        grabber.setOption("buffer_size", "256000"); // 更小的缓冲区，节省内存
-        grabber.setOption("err_detect", "compliant");
-        grabber.setOption("framedrop", "1");
+
+
+
 
         // 低帧率设置 - 重要的内存优化
-        grabber.setFrameRate(1.0); // 降低到1fps，大幅减少内存消耗
-        grabber.setOption("r", "1");
-        grabber.setOption("threads", "1"); // 限制解码线程数
 
-        grabber.start();
+
+
+
+        VideoDecodePolicy.start(grabber);
+        frameGate = new VideoFrameGate(tabAiSubscriptionNew.getId());
         return grabber;
     }
 

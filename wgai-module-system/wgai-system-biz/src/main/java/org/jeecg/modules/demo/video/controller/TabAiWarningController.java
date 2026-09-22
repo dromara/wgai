@@ -96,19 +96,7 @@ public class TabAiWarningController extends JeecgController<TabAiWarning, ITabAi
 	 //@RequiresPermissions("org.jeecg.modules.demo:tab_ai_warning:add")
 	 @PostMapping(value = "/addPush")
 	 public Result<String> addPush(@RequestBody pushEntity pushInfo) {
-		 TabAiWarning tabAiWarning=new TabAiWarning();
-		 tabAiWarning.setWarningName(pushInfo.getCameraName());
-		 tabAiWarning.setWarningType("识别报警");
-		 tabAiWarning.setWarningInfo(pushInfo.getModelName());
-		 tabAiWarning.setWaringText(pushInfo.getModelText());
-		 tabAiWarning.setWarningTime(new Date());
-		 tabAiWarning.setWarningPic(pushInfo.getAlarmPicData());
-		 tabAiWarning.setWarningCome(pushInfo.getVideo());
-		 tabAiWarning.setWaringAi(pushInfo.getModelId());
-		 tabAiWarning.setWaringState("未处理");
-		 tabAiWarning.setRemake(pushInfo.getModelArea());
-	//	 tabAiWarning.setw
-		 tabAiWarningService.save(tabAiWarning);
+		 tabAiWarningService.savePush(pushInfo);
 		 return Result.OK("添加成功！");
 	 }
 	

@@ -17,6 +17,9 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class OnnxModelCacheService {
 
+    @org.springframework.beans.factory.annotation.Value("${ai.onnx.intra-op-threads:1}")
+    private int intraOpThreads = 1;
+
     private final Map<String, OnnxModelWrapper> cache = new ConcurrentHashMap<>();
     private final Object cacheLock = new Object();
 
@@ -47,15 +50,21 @@ public class OnnxModelCacheService {
             boolean preferCuda = tabAiModel.getModelJmType() == null || tabAiModel.getModelJmType() == 1;
             if (preferCuda) {
                 try {
-                    session = env.createSession(tabAiModel.getAiWeights(), createCudaSessionOptions());
+                    try (OrtSession.SessionOptions options = createCudaSessionOptions()) {
+                        session = env.createSession(tabAiModel.getAiWeights(), options);
+                    }
                     log.info("[ONNX推理规则：CUDA GPU]");
                 } catch (Exception cudaEx) {
                     log.warn("[ONNX推理规则：CUDA创建Session失败，回退CPU] {}", cudaEx.getMessage());
-                    session = env.createSession(tabAiModel.getAiWeights(), createCpuSessionOptions());
+                    try (OrtSession.SessionOptions options = createCpuSessionOptions()) {
+                        session = env.createSession(tabAiModel.getAiWeights(), options);
+                    }
                     log.info("[ONNX推理规则：CPU]");
                 }
             } else {
-                session = env.createSession(tabAiModel.getAiWeights(), createCpuSessionOptions());
+                try (OrtSession.SessionOptions options = createCpuSessionOptions()) {
+                        session = env.createSession(tabAiModel.getAiWeights(), options);
+                    }
                 log.info("[ONNX推理规则：CPU]");
             }
             warmupOnnxSession(env, session);
@@ -69,13 +78,18 @@ public class OnnxModelCacheService {
 
     private OrtSession.SessionOptions createCudaSessionOptions() throws Exception {
         OrtSession.SessionOptions options = createBaseSessionOptions();
-        options.addCUDA();
-        return options;
+        try {
+            options.addCUDA();
+            return options;
+        } catch (Exception e) {
+            options.close();
+            throw e;
+        }
     }
 
     private OrtSession.SessionOptions createCpuSessionOptions() throws Exception {
         OrtSession.SessionOptions options = createBaseSessionOptions();
-        options.setIntraOpNumThreads(Math.max(1, Runtime.getRuntime().availableProcessors() / 2));
+        options.setIntraOpNumThreads(Math.max(1, intraOpThreads));
         options.setInterOpNumThreads(1);
         options.addCPU(true);
         return options;
@@ -83,6 +97,10 @@ public class OnnxModelCacheService {
 
     private OrtSession.SessionOptions createBaseSessionOptions() throws Exception {
         OrtSession.SessionOptions options = new OrtSession.SessionOptions();
+        options.setIntraOpNumThreads(Math.max(1, intraOpThreads));
+        options.setInterOpNumThreads(1);
+        options.addConfigEntry("session.intra_op.allow_spinning", "0");
+        options.addConfigEntry("session.inter_op.allow_spinning", "0");
         options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
         options.setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL);
         return options;

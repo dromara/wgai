@@ -19,7 +19,7 @@ import java.util.Map;
  *
  * ─── 扫转半径怎么算 ───────────────────────────────────────────────────────
  * footprint 以雷达安装点(= body 系原点, fast_lio 惯例)为原点:
- *   前端 +0.5m / 后端 -5.0m / 左 +1.2m / 右 -0.9m  (与 MapController.FP_* 一致)
+ *   前端 +0.55m / 后端 -5.20m / 左 +1.20m / 右 -0.85m  (与 MapController.FP_* 一致)
  * 雷达横向不在车身中线上，左右不对称；扫转半径取到最远角点，所以横向按较大的一侧(1.2m)算。
  * 旋转中心在雷达后方 centerOffsetM 处(底盘 2.1×2.1 的中心)，于是:
  *
@@ -52,15 +52,20 @@ public class RotationSafetyService {
 
     // ======================== 车体 footprint(与 MapController.FP_* 保持一致) ========================
 
-    /** 车体前端距雷达(body 原点) */
-    private static final double FOOTPRINT_FRONT_M = 0.5;
-    /** 车体后端距雷达(body 原点)，取正值参与计算 */
-    private static final double FOOTPRINT_BACK_M  = 5.0;
+    /** 车体前端距雷达(body 原点)。2026-09-18 卷尺复测 0.55(原估 0.5) */
+    private static final double FOOTPRINT_FRONT_M = 0.55;
     /**
-     * 车体横向距雷达的**较大**一侧(左 1.2m，右 0.9m —— 雷达不在车身中线上)。
+     * 车体后端距雷达(body 原点)，取正值参与计算。
+     * ⚠ 2026-09-18 卷尺复测 5.20，原值 5.0 少算了 20cm ——
+     *   扫转半径随之从 3.46m 涨到 3.65m，旋转所需净空直径 7.93m → 8.31m。
+     *   少算的那一档正是"判定偏乐观 → 放行了其实转不过去的地方"。
+     */
+    private static final double FOOTPRINT_BACK_M  = 5.20;
+    /**
+     * 车体横向距雷达的**较大**一侧(左 1.20m，右 0.85m —— 雷达不在车身中线上)。
      * 扫转半径取最远角点，所以只需要较大的那一侧。
      */
-    private static final double FOOTPRINT_HALF_W_M = 1.2;
+    private static final double FOOTPRINT_HALF_W_M = 1.20;
 
     /** 方位角扇区数，1°/扇区 */
     private static final int BIN_COUNT = 360;

@@ -10,5 +10,6 @@ import com.baomidou.mybatisplus.extension.service.IService;
  * @Version: V1.0
  */
 public interface ITabAiWarningService extends IService<TabAiWarning> {
+    void savePush(org.jeecg.modules.tab.entity.pushEntity pushInfo);
 
 }

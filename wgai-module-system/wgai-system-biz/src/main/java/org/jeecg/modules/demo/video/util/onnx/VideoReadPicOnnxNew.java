@@ -1,6 +1,11 @@
 package org.jeecg.modules.demo.video.util.onnx;
 
 import lombok.extern.slf4j.Slf4j;
+import org.jeecg.modules.demo.video.util.VideoDecodePolicy;
+import org.jeecg.modules.demo.video.util.VideoFrameGate;
+import org.jeecg.modules.demo.video.util.FrameMatView;
+import org.jeecg.modules.demo.video.util.StreamLagTracker;
+import org.jeecg.modules.demo.video.util.RecognitionTrace;
 import org.bytedeco.ffmpeg.global.avutil;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
 import org.bytedeco.javacv.Frame;
@@ -33,21 +38,29 @@ public class VideoReadPicOnnxNew implements Runnable {
 
     private static final ThreadLocal<TabAiSubscriptionNew> threadLocalPushInfo = new ThreadLocal<>();
     private final ThreadLocal<identifyTypeNewOnnxTest> identifyTypeNewLocal = ThreadLocal.withInitial(identifyTypeNewOnnxTest::new);
-    private final ThreadLocal<Java2DFrameConverter> converterLocal = ThreadLocal.withInitial(Java2DFrameConverter::new);
+    private final Map<String, long[]> modelStats = new ConcurrentHashMap<>();
 
     private final TabAiSubscriptionNew tabAiSubscriptionNew;
     private final RedisTemplate redisTemplate;
     private final String streamId;
+    private VideoFrameGate frameGate;
 
     private final ExecutorService processingExecutor;
     private final AtomicBoolean forceShutdown = new AtomicBoolean(false);
-    private final Set<Future<?>> activeTasks = ConcurrentHashMap.newKeySet();
 
-    private static final int MAX_PENDING_FRAMES = 3;
+    private static final int MAX_PENDING_FRAMES = 1;
     private final AtomicInteger pendingFrames = new AtomicInteger(0);
     private volatile long lastProcessTime = System.currentTimeMillis();
 
-    private static final long TARGET_FRAME_INTERVAL = 300; // 1秒3帧
+    private final long targetFrameInterval;
+    private final long maxStreamLagMs;
+    private final StreamLagTracker streamLag = new StreamLagTracker();
+    private long lastLagReconnectMs;
+    private volatile long streamLagMs;
+    private final AtomicLong processingMillis = new AtomicLong();
+    private long previousProcessed;
+    private long previousDropped;
+    private long previousProcessingMillis;
     private volatile long lastFrameTime = 0;
 
     private final AtomicLong processedFrames = new AtomicLong(0);
@@ -55,9 +68,18 @@ public class VideoReadPicOnnxNew implements Runnable {
     private volatile long lastLogTime = 0;
 
     private final BlockingQueue<Mat> matPool = new LinkedBlockingQueue<>(20);
-    private final BlockingQueue<BufferedImage> imagePool = new LinkedBlockingQueue<>(20);
 
     public VideoReadPicOnnxNew(TabAiSubscriptionNew tabAiSubscriptionNew, RedisTemplate redisTemplate) {
+        this(tabAiSubscriptionNew, redisTemplate, 300);
+    }
+
+    public VideoReadPicOnnxNew(TabAiSubscriptionNew tabAiSubscriptionNew, RedisTemplate redisTemplate, long frameIntervalMs) {
+        this(tabAiSubscriptionNew, redisTemplate, frameIntervalMs, 3000);
+    }
+
+    public VideoReadPicOnnxNew(TabAiSubscriptionNew tabAiSubscriptionNew, RedisTemplate redisTemplate, long frameIntervalMs, long maxStreamLagMs) {
+        this.maxStreamLagMs = maxStreamLagMs;
+        this.targetFrameInterval = Math.max(1, frameIntervalMs);
         this.tabAiSubscriptionNew = tabAiSubscriptionNew;
         this.redisTemplate = redisTemplate;
         this.streamId = tabAiSubscriptionNew.getId();
@@ -67,11 +89,11 @@ public class VideoReadPicOnnxNew implements Runnable {
                 60L, TimeUnit.SECONDS,
                 new ArrayBlockingQueue<>(5),
                 r -> {
-                    Thread t = new Thread(r, "VideoProcessor-" + tabAiSubscriptionNew.getName());
+                    Thread t = new Thread(r, "VideoProcessor-" + streamId + "-" + tabAiSubscriptionNew.getName());
                     t.setDaemon(true);
                     return t;
                 },
-                new ThreadPoolExecutor.CallerRunsPolicy()
+                new ThreadPoolExecutor.AbortPolicy()
         );
     }
 
@@ -80,53 +102,18 @@ public class VideoReadPicOnnxNew implements Runnable {
         threadLocalPushInfo.set(tabAiSubscriptionNew);
         FFmpegFrameGrabber grabber = null;
 
-        log.info("========== [VideoReadPicOnnxNew启动] ==========");
-        log.info("[流信息] 名称: {}, ID: {}", tabAiSubscriptionNew.getName(), tabAiSubscriptionNew.getId());
-        log.info("[视频URL] {}", tabAiSubscriptionNew.getBeginEventTypes());
-
-        // ========== ✅ 修复1：使用超时机制创建grabber ==========
+        log.info("[视频任务启动] taskId={} name={}", streamId, tabAiSubscriptionNew.getName());
+        lastLogTime = System.currentTimeMillis();
         try {
-            log.info("[准备创建grabber] 流: {}", tabAiSubscriptionNew.getName());
-
-            // 使用Future来限制创建时间
-            ExecutorService grabberCreator = Executors.newSingleThreadExecutor();
-            Future<FFmpegFrameGrabber> grabberFuture = grabberCreator.submit(() -> {
-                log.info("[子线程] 开始创建grabber");
-                FFmpegFrameGrabber g = createOptimizedGrabberSimple();
-                log.info("[子线程] grabber创建成功");
-                return g;
-            });
-
-            try {
-                grabber = grabberFuture.get(60, TimeUnit.SECONDS); // 60秒超时
-                log.info("[✓ grabber创建成功] 流: {}", tabAiSubscriptionNew.getName());
-            } catch (TimeoutException e) {
-                log .warn("[ grabber创建超时] 流: {}, 超过60秒", tabAiSubscriptionNew.getName());
-                grabberFuture.cancel(true);
-                grabberCreator.shutdownNow();
-                return;
-            } catch (Exception e) {
-                log .warn("[ grabber创建失败] 流: {}", tabAiSubscriptionNew.getName(), e);
-                grabberCreator.shutdownNow();
-                return;
-            } finally {
-                grabberCreator.shutdown();
-            }
-
-        } catch (Exception e) {
-            log .warn("[流创建异常] 流: {}", tabAiSubscriptionNew.getName(), e);
-            return;
-        }
-
-        // ========== 正常处理流程 ==========
-        try {
+            if (forceShutdown.get() || Thread.currentThread().isInterrupted()) return;
+            grabber = createOptimizedGrabberSimple();
             identifyTypeNewOnnxTest identifyTypeAll = identifyTypeNewLocal.get();
             List<NetPush> netPushList = threadLocalPushInfo.get().getNetPushList();
 
             Frame frame;
             int consecutiveNullFrames = 0;
 
-            while (!forceShutdown.get()) {
+            while (!forceShutdown.get() && !Thread.currentThread().isInterrupted()) {
                 if (!isStreamActive()) {
                     log.warn("[主动停止] {}", tabAiSubscriptionNew.getName());
                     break;
@@ -141,13 +128,18 @@ public class VideoReadPicOnnxNew implements Runnable {
                     LocalTime start = LocalTime.of(startHour, 0);
                     LocalTime end = LocalTime.of(endHour, 0);
 
-                    if (now.isBefore(start) || now.isAfter(end)) {
-                        log.warn("不在有效时段 {} ({}~{}) ({}~{})",now,startHour,endHour, startHour, endHour);
+                    if (!isWithinSchedule(now, start, end)) {
+                        log.info("[非识别时段] taskId={} now={} start={} end={}", streamId, now, start, end);
+                        if (grabber != null) {
+                            try { grabber.release(); } finally { grabber = null; streamLag.reset(); }
+                        }
                         Thread.sleep(5000);
                         continue;
                     }
                 }
 
+                if (grabber == null) grabber = createOptimizedGrabberSimple();
+                logPerformanceStats();
                 frame = grabber.grabImage();
                 if (frame == null) {
                     consecutiveNullFrames++;
@@ -160,19 +152,33 @@ public class VideoReadPicOnnxNew implements Runnable {
                     continue;
                 }
                 consecutiveNullFrames = 0;
+                if (!frameGate.accept(frame)) {
+                    if (frameGate.isWaitingTooLong()) {
+                        log.warn("[等待关键帧超时，重新连接] taskId={}", tabAiSubscriptionNew.getId());
+                        grabber = restartGrabber(grabber);
+                    }
+                    continue;
+                }
+                streamLagMs = streamLag.observe(grabber.getTimestamp(), System.nanoTime());
+                if (maxStreamLagMs > 0 && streamLagMs > maxStreamLagMs
+                        && System.currentTimeMillis() - lastLagReconnectMs > 15000) {
+                    log.warn("[视频积压重连] taskId={} name={} accumulatedLagMs={} limitMs={}",
+                            streamId, tabAiSubscriptionNew.getName(), streamLagMs, maxStreamLagMs);
+                    lastLagReconnectMs = System.currentTimeMillis();
+                    grabber = restartGrabber(grabber);
+                    droppedFrames.incrementAndGet();
+                    continue;
+                }
 
                 // 帧率控制
                 long currentTime = System.currentTimeMillis();
-                if (currentTime - lastFrameTime < TARGET_FRAME_INTERVAL) {
-                    frame.close();
+                if (currentTime - lastFrameTime < targetFrameInterval) {
                     continue;
                 }
                 lastFrameTime = currentTime;
 
                 // 队列控制
                 if (pendingFrames.get() >= MAX_PENDING_FRAMES) {
-                    log.warn("[丢帧] 排队: {}", pendingFrames.get());
-                    frame.close();
                     droppedFrames.incrementAndGet();
                     continue;
                 }
@@ -191,10 +197,10 @@ public class VideoReadPicOnnxNew implements Runnable {
 
     private void processFrameAsync(Frame frame, List<NetPush> netPushList, identifyTypeNewOnnxTest identifyTypeAll) {
         if (forceShutdown.get()) {
-            frame.close();
             return;
         }
 
+        long decodedNanos = System.nanoTime();
         Frame frameClone = null;
         try {
             frameClone = frame.clone();
@@ -206,43 +212,38 @@ public class VideoReadPicOnnxNew implements Runnable {
         pendingFrames.incrementAndGet();
         final Frame finalFrame = frameClone;
 
-        Future<?> future = processingExecutor.submit(() -> {
+        try {
+        processingExecutor.execute(() -> {
             long startTime = System.currentTimeMillis();
-            BufferedImage image = null;
             Mat matInfo = null;
+            RecognitionTrace trace = RecognitionTrace.begin(streamId, decodedNanos);
+            long queueMs = trace.elapsedMillis();
+            String workerName = Thread.currentThread().getName();
+            Thread.currentThread().setName(workerName + "-frame=" + trace.frameId);
 
             try {
                 if (forceShutdown.get()) return;
 
-                Java2DFrameConverter converter = converterLocal.get();
-                image = converter.getBufferedImage(finalFrame);
-
-                if (image == null || image.getWidth() <= 0 || image.getHeight() <= 0) {
-                    return;
-                }
-
-                if (forceShutdown.get()) return;
-
-                matInfo = bufferedImageToMat(image);
+                matInfo = FrameMatView.bgr(finalFrame);
                 if (matInfo == null || matInfo.empty()) {
                     return;
                 }
 
-                long inferenceStart = System.currentTimeMillis();
                 for (NetPush netPush : netPushList) {
                     if (forceShutdown.get()) break;
 
-                    if (System.currentTimeMillis() - inferenceStart > 10000) {
-                        log.warn("[推理超时，跳过]");
-                        break;
-                    }
-
-                    Mat mat = getMat();
+                    boolean copyRequired = netPushList.size() > 1;
+                    Mat mat = copyRequired ? getMat() : matInfo;
+                    long modelStarted = System.nanoTime();
+                    String frameThreadName = Thread.currentThread().getName();
+                    Thread.currentThread().setName(frameThreadName + "-setting=" + netPush.getId());
                     try {
-                        matInfo.copyTo(mat);
+                        if (copyRequired) matInfo.copyTo(mat);
                         processNetPush(mat, netPush, identifyTypeAll);
                     } finally {
-                        returnMat(mat);
+                        log.info("[模型处理] taskId={} frameId={} settingId={} elapsedMs={}", streamId, trace.frameId, netPush.getId(), (System.nanoTime() - modelStarted) / 1000000);
+                        Thread.currentThread().setName(frameThreadName);
+                        if (copyRequired) returnMat(mat);
                     }
                 }
 
@@ -257,18 +258,28 @@ public class VideoReadPicOnnxNew implements Runnable {
             } catch (Exception e) {
                 log .warn("[帧处理异常]", e);
             } finally {
-                if (matInfo != null) returnMat(matInfo);
-                if (image != null) returnBufferedImage(image);
+                if (matInfo != null) matInfo.release();
+                RecognitionTrace.clear();
+                Thread.currentThread().setName(workerName);
+                long elapsedMs = System.currentTimeMillis() - startTime;
+                processingMillis.addAndGet(elapsedMs);
+                log.info("[帧处理链路] taskId={} name={} frameId={} queueMs={} processMs={} decodedToFinishMs={}",
+                        streamId, tabAiSubscriptionNew.getName(), trace.frameId, queueMs, elapsedMs, trace.elapsedMillis());
                 if (finalFrame != null) finalFrame.close();
                 pendingFrames.decrementAndGet();
             }
         });
 
-        activeTasks.add(future);
-        activeTasks.removeIf(Future::isDone);
+        } catch (RejectedExecutionException e) {
+            finalFrame.close();
+            pendingFrames.decrementAndGet();
+            droppedFrames.incrementAndGet();
+            if (!forceShutdown.get()) log.warn("[帧提交失败] taskId={}", streamId, e);
+        }
     }
 
     private void processNetPush(Mat mat, NetPush netPush, identifyTypeNewOnnxTest identifyTypeAll) {
+        long started = System.nanoTime();
         try {
             if (forceShutdown.get()) return;
 
@@ -279,7 +290,11 @@ public class VideoReadPicOnnxNew implements Runnable {
             }
 
         } catch (Exception e) {
-            log .warn("[处理NetPush异常]", e);
+            log.warn("[处理模型异常] taskId={} settingId={}", streamId, netPush.getId(), e);
+        } finally {
+            String key = netPush.getId() == null ? "predecessor" : netPush.getId();
+            long[] stats = modelStats.computeIfAbsent(key, ignored -> new long[2]);
+            synchronized (stats) { stats[0]++; stats[1] += (System.nanoTime() - started) / 1000000; }
         }
     }
 
@@ -302,11 +317,11 @@ public class VideoReadPicOnnxNew implements Runnable {
 
             long inferenceTime = System.currentTimeMillis() - inferenceStart;
             if (inferenceTime > 1000) {
-                log.warn("[推理耗时: {}ms]", inferenceTime);
+                log.info("[模型耗时] taskId={} settingId={} model={} elapsedMs={}", streamId, netPush.getId(), netPush.getTabAiModel().getAiName(), inferenceTime);
             }
 
         } catch (Exception e) {
-            log .warn("[执行检测异常]", e);
+            log.warn("[执行检测异常] taskId={} settingId={} model={}", streamId, netPush.getId(), netPush.getTabAiModel().getAiName(), e);
         }
     }
 
@@ -323,12 +338,12 @@ public class VideoReadPicOnnxNew implements Runnable {
             if (i == 0) {
                 validationPassed = validateFirstModel(mat, beforePush, identifyTypeAll);
                 if (validationPassed == null || !validationPassed.isFlag()) {
-                    log.warn("[第一个模型验证失败]");
+                    log.info("[前置模型未命中] taskId={}", streamId);
                     break;
                 }
             } else {
                 if (validationPassed == null || validationPassed.getInfoList().size() <= 0) {
-                    log.warn("[前置内容为空]");
+                    log.info("[前置内容为空] taskId={}", streamId);
                     break;
                 }
                 executeDetection(mat, beforePush, identifyTypeAll, validationPassed.getInfoList());
@@ -350,12 +365,6 @@ public class VideoReadPicOnnxNew implements Runnable {
         log.info("[强制清理] 流: {}", tabAiSubscriptionNew.getName());
 
         forceShutdown.set(true);
-
-        log.info("[取消任务: {}个]", activeTasks.size());
-        activeTasks.forEach(future -> {
-            if (!future.isDone()) future.cancel(true);
-        });
-        activeTasks.clear();
 
         processingExecutor.shutdown();
         try {
@@ -381,7 +390,6 @@ public class VideoReadPicOnnxNew implements Runnable {
         try {
             identifyTypeNewLocal.remove();
             threadLocalPushInfo.remove();
-            converterLocal.remove();
         } catch (Exception e) {
             log.warn("[ThreadLocal清理异常]", e);
         }
@@ -394,7 +402,6 @@ public class VideoReadPicOnnxNew implements Runnable {
         while ((mat = matPool.poll()) != null) {
             try { mat.release(); } catch (Exception ignored) {}
         }
-        imagePool.clear();
     }
 
     private void logPerformanceStats() {
@@ -405,10 +412,23 @@ public class VideoReadPicOnnxNew implements Runnable {
             int pending = pendingFrames.get();
             long processingDelay = currentTime - lastProcessTime;
 
-            log.info("[性能] 已处理: {}, 丢弃: {}, 排队: {}, 延迟: {}ms, 丢帧率: {:.2f}%",
-                    processed, dropped, pending, processingDelay,
-                    processed > 0 ? (double) dropped / (processed + dropped) * 100 : 0);
+            long count = processed - previousProcessed;
+            long totalMs = processingMillis.get();
+            log.info("[识别统计] taskId={} name={} windowMs={} frames={} fps={} avgProcessMs={} dropped={} pending={} lastCompletedAgoMs={} accumulatedStreamLagMs={}",
+                    streamId, tabAiSubscriptionNew.getName(), currentTime - lastLogTime, count,
+                    String.format(java.util.Locale.ROOT, "%.2f", count * 1000.0 / (currentTime - lastLogTime)),
+                    count == 0 ? 0 : (totalMs - previousProcessingMillis) / count,
+                    dropped - previousDropped, pending, processingDelay, streamLagMs);
+            previousProcessed = processed;
+            previousDropped = dropped;
+            previousProcessingMillis = totalMs;
 
+            modelStats.forEach((settingId, stats) -> {
+                synchronized (stats) {
+                    if (stats[0] > 0) log.info("[模型统计] taskId={} settingId={} calls={} avgMs={}", streamId, settingId, stats[0], stats[1] / stats[0]);
+                    stats[0] = 0; stats[1] = 0;
+                }
+            });
             lastLogTime = currentTime;
         }
     }
@@ -419,33 +439,18 @@ public class VideoReadPicOnnxNew implements Runnable {
     }
 
     private void returnMat(Mat mat) {
-        if (mat != null && !mat.empty()) {
-            if (matPool.size() < 20) {
-                matPool.offer(mat);
-            } else {
-                mat.release();
-            }
-        }
+        if (mat != null && (forceShutdown.get() || !matPool.offer(mat))) mat.release();
     }
 
-    private BufferedImage getBufferedImage(int width, int height, int type) {
-        BufferedImage image = imagePool.poll();
-        if (image != null && image.getWidth() == width &&
-                image.getHeight() == height && image.getType() == type) {
-            return image;
-        }
-        return new BufferedImage(width, height, type);
-    }
-
-    private void returnBufferedImage(BufferedImage image) {
-        if (image != null && imagePool.size() < 20) {
-            imagePool.offer(image);
-        }
+    public static boolean isWithinSchedule(LocalTime now, LocalTime start, LocalTime end) {
+        if (start.equals(end)) return true;
+        return start.isBefore(end) ? !now.isBefore(start) && now.isBefore(end)
+                : !now.isBefore(start) || now.isBefore(end);
     }
 
     private boolean isStreamActive() {
         try {
-            return RedisCacheHolder.get(tabAiSubscriptionNew.getId() + "newRunPush");
+            return Boolean.TRUE.equals(RedisCacheHolder.get(streamId + "newRunPush"));
         } catch (Exception e) {
             log.warn("[检查流状态异常]", e);
             return false;
@@ -453,6 +458,7 @@ public class VideoReadPicOnnxNew implements Runnable {
     }
 
     private FFmpegFrameGrabber restartGrabber(FFmpegFrameGrabber grabber) throws Exception {
+        streamLag.reset();
         if (grabber != null) {
             grabber.stop();
             grabber.release();
@@ -462,23 +468,23 @@ public class VideoReadPicOnnxNew implements Runnable {
 
     // ========== ✅ 修复2：简化grabber创建，移除probe ==========
     public FFmpegFrameGrabber createOptimizedGrabberSimple() throws Exception {
-        log.info("[创建grabber] URL: {}", tabAiSubscriptionNew.getBeginEventTypes());
+        log.info("[连接视频流] taskId={} name={}", streamId, tabAiSubscriptionNew.getName());
 
         FFmpegFrameGrabber grabber = new FFmpegFrameGrabber(tabAiSubscriptionNew.getBeginEventTypes());
 
         // GPU设置
-        if (tabAiSubscriptionNew.getEventTypes().equals("1")) {
+        if ("1".equals(tabAiSubscriptionNew.getEventTypes())) {
             grabber.setOption("hwaccel", "cuda");
             grabber.setOption("hwaccel_device", "0");
             grabber.setOption("hwaccel_output_format", "cuda");
             log.info("[GPU加速]");
-        } else if (tabAiSubscriptionNew.getEventTypes().equals("4")) {
+        } else if ("4".equals(tabAiSubscriptionNew.getEventTypes())) {
             grabber.setOption("hwaccel", "qsv");
             log.info("[Intel加速]");
         }
 
         // 基础设置
-        grabber.setOption("loglevel", "-8");
+
         grabber.setOption("rtsp_transport", "tcp");
         grabber.setOption("rtsp_flags", "prefer_tcp");
 
@@ -490,21 +496,26 @@ public class VideoReadPicOnnxNew implements Runnable {
         grabber.setPixelFormat(avutil.AV_PIX_FMT_BGR24);
 
         // 实时流优化
-        grabber.setOption("flags", "low_delay");
-        grabber.setOption("max_delay", "500000");
-        grabber.setOption("buffer_size", "512000");
-        grabber.setOption("fflags", "nobuffer+flush_packets+discardcorrupt");
-        grabber.setOption("flags2", "fast");
-        grabber.setOption("err_detect", "compliant");
-        grabber.setOption("framedrop", "1");
 
-        grabber.setFrameRate(2.0);
-        grabber.setOption("r", "2");
+        grabber.setOption("max_delay", "500000");
+
+
+
+
+
+
+        // Sampling is controlled by targetFrameInterval; limiting decoder threads avoids CPU oversubscription.
+        grabber.setVideoOption("threads", "1");
 
         log.info("[开始start] 可能阻塞...");
         long startTime = System.currentTimeMillis();
 
-        grabber.start(); // 可能阻塞，但有超时保护
+        if (forceShutdown.get()) {
+            grabber.release();
+            throw new InterruptedException("任务已经停止");
+        }
+        VideoDecodePolicy.start(grabber);
+        frameGate = new VideoFrameGate(tabAiSubscriptionNew.getId());
 
         long duration = System.currentTimeMillis() - startTime;
         log.info("[✓ start完成] 耗时: {}ms", duration);

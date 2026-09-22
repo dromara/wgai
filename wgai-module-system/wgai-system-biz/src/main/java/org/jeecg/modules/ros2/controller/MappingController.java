@@ -149,6 +149,20 @@ public class MappingController {
     /** true = /save 触发的"停止落盘+转换pgm"整条流程正在后台跑 */
     private final AtomicBoolean converting = new AtomicBoolean(false);
 
+    /** true = 正在 pkill + 重新 ros2 launch 整栈（restartRobotFull 期间） */
+    private final AtomicBoolean stackRestarting = new AtomicBoolean(false);
+
+    /**
+     * 整栈正处在"Java 自己在动进程"的状态：pcd 落盘 / 转换 / 重启整栈。
+     *
+     * ⚠ FastLioWatchdogService 必须靠它把**我们自己弄死的** fast_lio 和
+     *   **意外挂掉的** fast_lio 区分开：pcd 模式下 /save 就是要 SIGINT 掉 fast_lio，
+     *   这期间 pgrep 当然查不到进程，看门狗不能因此急停并再重启一遍整栈。
+     */
+    public boolean isStackBusy() {
+        return pcdSaving.get() || converting.get() || stackRestarting.get();
+    }
+
     /** /save 最近一次的异步结果：{success:true,...} 或 {success:false,message:...}；null=尚未有结果（进行中或从未保存过） */
     private volatile Map<String, Object> lastSaveResult = null;
 
@@ -248,7 +262,7 @@ public class MappingController {
      * pattern 写成 '[f]astlio_mapping' 是为了让 pgrep 不匹配到承载这条命令的 bash 自身
      * （bash -c 的命令行里含有这个字符串，直接写 fastlio_mapping 会永远返回"在运行"）。
      */
-    private boolean isFastLioRunning() {
+    public boolean isFastLioRunning() {
         try {
             Process p = new ProcessBuilder("bash", "-c",
                     "pgrep -f '[f]astlio_mapping' > /dev/null").start();
@@ -389,6 +403,59 @@ public class MappingController {
         return Result.OK(res);
     }
 
+    // ==================== 手动恢复导航栈（fast_lio 掉线后用） ====================
+
+    /**
+     * 人工触发的整栈重启，用在 fast_lio 掉线（FastLioWatchdogService 报 fastlio_lost）之后。
+     *
+     * ⚠ 为什么不让看门狗自动做：导航途中悄悄重启一次栈，AMCL 定位、当前导航目标、
+     *   Nav2 各节点的生命周期状态全部作废，车可能停在半路上而上位机以为一切正常——
+     *   比"停在原地等人来看"危险得多。所以必须现场有人确认安全后再点。
+     *
+     * ⚠ 重启后 camera_init 原点 = fast_lio 新进程启动时车所在的位置，和重启前不是同一个系：
+     *   · 导航：必须重新设置初始位姿，并解除急停锁，车才会动；
+     *   · 建图：栅格累积保持关闭。已经扫到的数据还在，可以先存图；
+     *          要接着扫必须点「开始建图」重新开一轮（它会清掉旧栅格），
+     *          直接续扫会把两个坐标系的点叠在同一张图上，静默错位。
+     */
+    @PostMapping("/recover-stack")
+    @ApiOperation("手动重启整个导航栈（fast_lio 掉线后恢复用），接口立即返回")
+    public Result<Map<String, Object>> recoverStack() {
+        if (isStackBusy()) {
+            return Result.error("整栈正在保存/转换/重启中，请稍候再试");
+        }
+        // 重启期间新点会落在新坐标系里，先把累积关掉，别污染已有栅格
+        mappingGridService.setEnabled(false);
+
+        executor.submit(new Runnable() {
+            public void run() {
+                try {
+                    log.warn("[恢复] 人工触发整栈重启（fast_lio 掉线恢复）...");
+                    restartRobotFull();
+                    ros2BridgeService.resubscribeFastLioTopics();
+                    log.warn("[恢复] ✅ 导航栈已重启。请重新设置初始位姿并解除急停后再继续导航");
+                    Map<String, Object> d = new LinkedHashMap<>();
+                    d.put("title",  "导航栈已重启");
+                    d.put("detail", "请重新设置初始位姿并解除急停后再继续导航；"
+                            + "建图需点「开始建图」重新开始一轮。");
+                    pushService.pushToAllReliable("fastlio_recovered", d);
+                } catch (Exception e) {
+                    log.error("[恢复] 整栈重启失败", e);
+                    Map<String, Object> d = new LinkedHashMap<>();
+                    d.put("title",  "导航栈重启失败");
+                    d.put("detail", String.valueOf(e.getMessage()));
+                    pushService.pushToAllReliable("fastlio_lost", d);
+                }
+            }
+        });
+
+        Map<String, Object> res = new LinkedHashMap<>();
+        res.put("restarting", true);
+        res.put("message", "正在重启导航栈，约 " + (robotFullReadyWaitMs / 1000) + " 秒。"
+                + "完成后必须重新设置初始位姿并解除急停");
+        return Result.OK(res);
+    }
+
     // ==================== 清空重扫（放弃当前数据，强制重启） ====================
 
     @PostMapping("/restart")
@@ -448,7 +515,18 @@ public class MappingController {
      *
      * 阻塞方法，只能在后台线程里调用。
      */
-    private void restartRobotFull() throws Exception {
+    public void restartRobotFull() throws Exception {
+        if (!stackRestarting.compareAndSet(false, true)) {
+            throw new IllegalStateException("robot_full 正在重启中，忽略重复请求");
+        }
+        try {
+            doRestartRobotFull();
+        } finally {
+            stackRestarting.set(false);
+        }
+    }
+
+    private void doRestartRobotFull() throws Exception {
         log.info("[robot_full] 清理残余进程...");
         new ProcessBuilder("bash", "-c",
                 "pkill -9 -f '" + STACK_KILL_PATTERN + "'")
@@ -458,10 +536,16 @@ public class MappingController {
         // 与其等 20s 超时后报"fast_lio 没起来"误导排查，不如在这里就说清楚。
         waitRosbridgePortFree(10000);
 
+        // ⚠ FASTLIO_RESPAWN 必须跟着 saveMode 走：
+        //   grid 模式 → true，fast_lio 挂了 launch 自己拉起来，配合 FastLioWatchdogService 急停+告警；
+        //   pcd  模式 → false，那条流程靠 SIGINT 杀 fast_lio 逼它落盘，respawn 会立刻把它拉回来，
+        //               doStopAndWait() 永远等不到进程退出，一路卡到 10 分钟安全阀。
+        boolean fastlioRespawn = !"pcd".equalsIgnoreCase(saveMode);
         String cmd = "source " + rosSetupBash
                 + " && source " + SETUP_BASH
                 + " && LIDAR_TYPE=" + lastLidarType
                 + " SELF_FILTER=" + robotFullSelfFilter
+                + " FASTLIO_RESPAWN=" + fastlioRespawn
                 + " ros2 launch " + robotFullLaunchFile;
         log.info("[robot_full] 启动: {}", cmd);
 

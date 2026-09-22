@@ -309,6 +309,17 @@ public class MappingGridService {
         m.put("actualZMax",      none ? null : maskHighZ(gMask));
         m.put("lastUpdateMs",    lastUpdateMs);
         m.put("estimatedAreaM2", cells.size() * resolution * resolution);
+        // ⭐ 栅格占用内存估算。关键认知：这个量随**面积**涨，不随**扫描时长**涨 ——
+        //   同一块地方来回扫两小时，格子数不会再增加。所以"大厂区扫 20 分钟会不会炸"
+        //   要看的是面积不是时间。
+        //   每格 = long[CELL_LEN]{7×8=56B} + 数组头 16B + ConcurrentHashMap Node
+        //   (key Long 装箱 16B + Node 32B) ≈ 120B。
+        //   参考：0.05m 分辨率下 100m×100m 全被扫到 = 4,000,000 格 ≈ 480MB。
+        //   顶不住就把 mapping.grid.resolution 调到 0.10（内存降到 1/4，代价是图变粗）。
+        m.put("estimatedGridMemMB", Math.round(cells.size() * 120.0 / 1048576.0 * 10) / 10.0);
+        Runtime rt = Runtime.getRuntime();
+        m.put("jvmUsedMB",  (rt.totalMemory() - rt.freeMemory()) / 1048576L);
+        m.put("jvmMaxMB",   rt.maxMemory() / 1048576L);
         return m;
     }
 

@@ -129,10 +129,17 @@ public class MapController {
     private static final double SCAN_MAX_H   = 1.5;
 
     /**
-     * 车体 footprint(扒粮机 AGV,长5.5m×宽2.1m,长宽比大,不能用圆形 robot_radius 近似)。
+     * 车体 footprint(扒粮机 AGV,长5.75m×宽2.05m,长宽比大,不能用圆形 robot_radius 近似)。
      * 坐标以雷达安装点(= body 坐标系原点,fast_lio 惯例)为原点,x 轴指向前进方向(扒粮机构一端):
-     *   前端(扒粮机构): +0.5m   后端(履带底盘尾部): -5.0m
-     * 横向雷达**不在车身中线上**(现场实测): 距左侧边缘 +1.2m,距右侧边缘 -0.9m。
+     *   前端(扒粮机构): +0.55m  后端(履带底盘尾部): -5.20m
+     * 横向雷达**不在车身中线上**(现场实测): 距左侧边缘 +1.20m,距右侧边缘 -0.85m。
+     *
+     * ⚠ 2026-09-18 现场卷尺复测修正: 原值 前0.5/后-5.0/右-0.9 是估的。
+     *   **车尾少算了 20cm 是有后果的**: 机器人端 livox_self_filter 的过滤箱按 -5.0-0.15=-5.15 设,
+     *   而车尾实际在 -5.20 —— 整个 2.05m×2.3m 的车尾面都落在箱外没被滤掉,
+     *   每帧成千上万个"永远静止的近距离强反射点"进了 fast_lio 的配准输入,
+     *   把位移估计往小里拽(建图重影、里程计系统性偏小),还顺着 /cloud_registered → /scan
+     *   混进 AMCL 的观测里。定位设不准、一走就漂,根子在这。改完必须重建地图。
      * 因此这是一个前后、左右都不对称的矩形,四个方向的数值都不能互相推导。
      * 该数值必须与机器人端 livox_self_filter.py 的过滤箱体保持一致,否则
      * "SLAM 输入过滤掉的车体范围"和"costmap 认为的车体范围"对不上。
@@ -142,7 +149,7 @@ public class MapController {
      * 那种"以雷达为圆心、不分方向"的全向 min-range 过滤(那是给宇树L1腿部360°自遮挡设计的,
      * 对前后极不对称的这台车不适用)。
      */
-    private static final double FP_FRONT = 0.5, FP_BACK = -5.0, FP_LEFT = 1.2, FP_RIGHT = -0.9;
+    private static final double FP_FRONT = 0.55, FP_BACK = -5.20, FP_LEFT = 1.20, FP_RIGHT = -0.85;
 
     /** 以转向中心(base_link)为原点的 footprint 字符串，(cx,cy) 是转向中心在 body 系的坐标 */
     private static String navFootprint(double cx, double cy) {

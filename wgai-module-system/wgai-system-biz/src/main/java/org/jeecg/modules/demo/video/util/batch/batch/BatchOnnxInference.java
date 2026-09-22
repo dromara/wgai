@@ -4,6 +4,9 @@ package org.jeecg.modules.demo.video.util.batch.batch;
 import ai.onnxruntime.*;
 import com.alibaba.fastjson.JSONObject;
 import lombok.extern.slf4j.Slf4j;
+import org.jeecg.common.util.SpringContextUtils;
+import org.jeecg.modules.demo.video.service.ITabAiWarningService;
+import org.jeecg.modules.demo.video.service.impl.AlarmWorkService;
 import org.bytedeco.ffmpeg.global.avcodec;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
 import org.bytedeco.javacv.FFmpegFrameRecorder;
@@ -80,7 +83,7 @@ public class BatchOnnxInference {
                 results.add(result);
             }
 
-            log.debug("[前置批量推理完成] 批次大小:{}, 平均ROI数:{}",
+            log.info("[前置批量推理完成] 批次大小:{}, 平均ROI数:{}",
                     batchSize,
                     results.stream().mapToInt(r -> r.getInfoList() == null ? 0 : r.getInfoList().size()).average().orElse(0));
 
@@ -135,7 +138,7 @@ public class BatchOnnxInference {
             }
 
             long successCount = results.stream().filter(b -> b).count();
-            log.debug("[后置批量推理完成] 批次大小:{}, 成功:{}", batchSize, successCount);
+            log.info("[后置批量推理完成] 批次大小:{}, 成功:{}", batchSize, successCount);
 
         } catch (Exception e) {
             log.error("[后置批量推理失败]", e);
@@ -253,7 +256,7 @@ public class BatchOnnxInference {
                     tensorShape[1] < tensorShape[2] &&
                     tensorShape[1] <= (numClasses + 5);
 
-            log.debug("[输出格式] shape:[{}, {}, {}], needTranspose:{}",
+            log.info("[输出格式] shape:[{}, {}, {}], needTranspose:{}",
                     tensorShape[0], tensorShape[1], tensorShape[2], needTranspose);
 
             for (int b = 0; b < batchSize; b++) {
@@ -411,7 +414,7 @@ public class BatchOnnxInference {
             if (!matchedBoxes.isEmpty()) {
                 returnBox.setFlag(true);
                 returnBox.setInfoList(matchedBoxes);
-                log.debug("[前置模型检测成功] 目标:{}, 数量:{}", targetClass, matchedBoxes.size());
+                log.info("[前置模型检测成功] 目标:{}, 数量:{}", targetClass, matchedBoxes.size());
             }
 
         } catch (Exception e) {
@@ -758,11 +761,11 @@ public class BatchOnnxInference {
     ) {
 
         log.warn("model{}-{}", tabAiModel.getAiName(), warnText);
-        Thread t = new Thread(() -> {
+        boolean accepted = SpringContextUtils.getBean(AlarmWorkService.class).submit(pushInfo.getId(), () -> {
             try {
 
 
-                String base64Img = base64Image(saveName);
+                String base64Img = null;
                 //组装参数
                 pushEntity push = new pushEntity();
                 push.setCameraName(pushInfo.getName());
@@ -784,10 +787,10 @@ public class BatchOnnxInference {
                     long recordTime = pushInfo.getRecordTime();
                     recordVideo = RecordVideo(pushInfo.getBeginEventTypes(), savePath, recordTime, netPush.getId());
                     if (StringUtils.isNotEmpty(recordVideo)) {
-                        log.error("录像完成:{}", recordVideo);
+                        log.info("录像完成:{}", recordVideo);
                         if (pushInfo.getIsBegin() == 0) {
                             //需要分析录像视频逐帧分析
-                            log.error("开始分析视频");
+                            log.info("开始分析视频");
                             recordVideo = analysisVideo(recordVideo, netPush, savePath);
                         }
                     }
@@ -795,7 +798,18 @@ public class BatchOnnxInference {
                     log.info("[未开启录像]");
                 }
 
+                if(pushInfo.getSaveLocalhost()==0){ //保存到本地
+                    log.info("[本地也保存]");
+                    push.setAlarmPicData(saveName);
+                    push.setVideo(recordVideo);
+                    // 获取 pushInfo 的路径部分
+
+                    SpringContextUtils.getBean(ITabAiWarningService.class).savePush(push);
+                }
+
                 if (pushInfo.getPushStatic() == 0) {// 0 开启 1未开启
+                    push.setAlarmPicData(base64Image(saveName));
+                    push.setVideo(null);
                     log.info("[推送第三方结果]：");
                     if(!pushInfo.getEventUrl().equals("localhost")){ //不进行推送
                         if(StringUtils.isNotEmpty(recordVideo)){
@@ -809,16 +823,7 @@ public class BatchOnnxInference {
                     log.info("[当前设置为：不推送第三方]");
                 }
 
-                if(pushInfo.getSaveLocalhost()==0){ //保存到本地
-                    log.info("[本地也保存]");
-                    push.setAlarmPicData(saveName);
-                    push.setVideo(recordVideo);
-                    // 获取 pushInfo 的路径部分
 
-                    JSONObject ob = RestUtil.post("http://127.0.0.1:9998/wgai/video/tabAiWarning/addPush", (JSONObject) JSONObject.toJSON(push));
-
-                    log.info("返回内容：" + ob);
-                }
 
                 if (pushInfo.getSaveRecord() != 0 && StringUtils.isNotEmpty(recordVideo)&&pushInfo.getSaveLocalhost()!=0) {
                     File imageFile = new File(recordVideo);
@@ -829,14 +834,12 @@ public class BatchOnnxInference {
 
 
             } catch (Exception exception) {
-                exception.printStackTrace();
-                log.error("[推送失败：{}]", pushInfo.getId());
+                log.error("[报警处理失败] taskId={}", pushInfo.getId(), exception);
             }
         });
-        t.start();
 
-        log.error("推送结束-间隔时间{}-{}", pushInfo.getId());
-        return true;
+
+        return accepted;
     }
 
     // ==================== 辅助方法 ====================
@@ -1026,7 +1029,7 @@ public class BatchOnnxInference {
             }
 
             long successCount = results.stream().filter(b -> b).count();
-            log.debug("[姿态批量推理完成] 批次大小:{}, 成功:{}", batchSize, successCount);
+            log.info("[姿态批量推理完成] 批次大小:{}, 成功:{}", batchSize, successCount);
 
         } catch (Exception e) {
             log.error("[姿态批量推理失败]", e);
@@ -1094,7 +1097,7 @@ public class BatchOnnxInference {
             int dim1 = batch[0].length;
             int dim2 = batch[0][0].length;
 
-            log.debug("[姿态输出格式] shape:[{}, {}, {}]", dim0, dim1, dim2);
+            log.info("[姿态输出格式] shape:[{}, {}, {}]", dim0, dim1, dim2);
 
             // 判断格式: [batch][56][8400] 或 [batch][8400][56]
             boolean needTranspose = dim1 == 56 && dim2 > 1000;

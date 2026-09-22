@@ -485,6 +485,13 @@ public class NavigationController {
     @Autowired
     private RobotHardwareService hardwareService;
 
+    /**
+     * fast_lio 掉线看门狗。前端轮询它就能知道"现在是不是 camera_init 没了"，
+     * 不用等 WebSocket 那条一次性的 fastlio_lost 推送（刷新页面就丢了）。
+     */
+    @Autowired
+    private org.jeecg.modules.ros2.service.FastLioWatchdogService fastLioWatchdogService;
+
 // ─── 新接口 1: 紧急停车 ───────────────────────────────────────────────────
 
     /**
@@ -536,5 +543,28 @@ public class NavigationController {
         // 动态调整 (需在 RobotHardwareService 增加 setter)
         hardwareService.setObstacleStopDistance(distanceMeters);
         return Result.OK("障碍物停车阈值已设为 " + distanceMeters + "m");
+    }
+
+    // ==================== fast_lio 掉线看门狗 ====================
+
+    /**
+     * fast_lio 存活状态。
+     *   state=ok       正常
+     *   state=degraded 进程还在但 Java 收不到 /Odometry（多半是 rosbridge 订阅，会自愈）
+     *   state=dead     进程没了 —— Nav2 会刷 Invalid frame ID "camera_init"，车已被急停锁住，
+     *                  确认现场安全后调 POST /ros2/mapping/recover-stack 重启整栈
+     */
+    @GetMapping("/fastlio-status")
+    @ApiOperation("fast_lio 掉线看门狗状态")
+    public Result<java.util.Map<String, Object>> fastlioStatus() {
+        return Result.OK(fastLioWatchdogService.status());
+    }
+
+    /** 人工确认已处理完（重启栈 + 重设初始位姿），把看门狗状态归位 */
+    @PostMapping("/fastlio-ack")
+    @ApiOperation("人工确认 fast_lio 掉线告警已处理")
+    public Result<String> fastlioAck() {
+        fastLioWatchdogService.acknowledge();
+        return Result.OK("已确认");
     }
 }

@@ -51,14 +51,17 @@ import java.util.Map;
 @Service
 public class ObstacleGuardService {
 
+    // ⚠ 2026-09-18 现场卷尺复测值。改这里必须同步 MapController.FP_*、RotationSafetyService.FOOTPRINT_*、
+    //   前端 utreeNavigat.vue 的 robotFrontM/BackM/LeftM/RightM、
+    //   机器人端 mapping.launch.py 里 livox_self_filter 的 box_* —— 五处，漏一个就前后不一致。
     /** 车体前端距雷达(body 原点)，与 MapController.FP_* / RotationSafetyService 一致 */
-    static final double FOOTPRINT_FRONT_M = 0.5;
+    static final double FOOTPRINT_FRONT_M = 0.55;
     /** 车体左侧距雷达 */
-    static final double FOOTPRINT_LEFT_M  = 1.2;
-    /** 车体右侧距雷达 */
-    static final double FOOTPRINT_RIGHT_M = 0.9;
+    static final double FOOTPRINT_LEFT_M  = 1.20;
+    /** 车体右侧距雷达(正值参与计算，用到符号的地方写 -FOOTPRINT_RIGHT_M) */
+    static final double FOOTPRINT_RIGHT_M = 0.85;
     /** 车体后端距雷达(负值)，打舵扫掠判定要算整车，不能只算车头 */
-    static final double FOOTPRINT_BACK_M  = -5.0;
+    static final double FOOTPRINT_BACK_M  = -5.20;
 
     // 下面这批 @Value 字段全部 volatile：AgvParamService 会在运行时(HTTP 线程)按
     // tab_ros_python.agv_param 的内容反射改写它们，而读取发生在点云回调线程。不加 volatile
