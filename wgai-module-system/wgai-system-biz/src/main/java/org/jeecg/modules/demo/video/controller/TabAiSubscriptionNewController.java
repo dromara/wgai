@@ -16,6 +16,7 @@ import org.jeecg.modules.demo.video.entity.TabAiSubscriptionNew;
 import org.jeecg.modules.demo.video.service.ITabAiSubscriptionNewService;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.extern.slf4j.Slf4j;
@@ -99,7 +100,15 @@ public class TabAiSubscriptionNewController extends JeecgController<TabAiSubscri
 	//@RequiresPermissions("org.jeecg.modules.demo:tab_ai_subscription_new:edit")
 	@RequestMapping(value = "/edit", method = {RequestMethod.PUT,RequestMethod.POST})
 	public Result<String> edit(@RequestBody TabAiSubscriptionNew tabAiSubscriptionNew) {
-		tabAiSubscriptionNewService.updateById(tabAiSubscriptionNew);
+		if (tabAiSubscriptionNew.getId() == null || tabAiSubscriptionNew.getId().trim().isEmpty()) {
+			return Result.error("缺少订阅ID");
+		}
+		// 编辑表单清空时间时，显式写入 NULL，避免默认更新策略保留旧时间。
+		LambdaUpdateWrapper<TabAiSubscriptionNew> update = new LambdaUpdateWrapper<>();
+		update.eq(TabAiSubscriptionNew::getId, tabAiSubscriptionNew.getId())
+			.set(tabAiSubscriptionNew.getDifyStartEnd() == null, TabAiSubscriptionNew::getDifyStartEnd, null)
+			.set(tabAiSubscriptionNew.getDifyStartTime() == null, TabAiSubscriptionNew::getDifyStartTime, null);
+		tabAiSubscriptionNewService.update(tabAiSubscriptionNew, update);
 		return Result.OK("编辑成功!");
 	}
 

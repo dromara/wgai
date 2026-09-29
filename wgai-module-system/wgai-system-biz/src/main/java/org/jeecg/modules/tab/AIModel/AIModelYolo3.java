@@ -34,6 +34,9 @@ import org.jeecg.modules.tab.AIModel.onnx.VideoReadOnnx;
 import org.jeecg.modules.tab.AIModel.onnx.VideoReadOnnxPose;
 import org.jeecg.modules.tab.AIModel.pose.ActionResult;
 import org.jeecg.modules.tab.AIModel.pose.FallDetectionResult;
+import org.jeecg.modules.ai.ascend.AscendOmModel;
+import org.jeecg.modules.ai.ascend.AscendOmPool;
+import org.jeecg.modules.ai.ascend.AscendOmRunner;
 import org.jeecg.modules.tab.entity.TabAiModel;
 import org.jeecg.modules.tab.util.CharRecognizer;
 import org.opencv.core.*;
@@ -1339,325 +1342,348 @@ public class AIModelYolo3 {
             System.arraycopy(data, 0, inputData, c * 640 * 640, 640 * 640);
         }
 
-        // 4. 创建 ONNX Runtime 环境
-        OrtEnvironment env = OrtEnvironment.getEnvironment();
-        OrtSession.SessionOptions options = new OrtSession.SessionOptions();
-        if (useGpu) {
-            options.addCUDA();
+        // 5. 推理: model_type=100 走昇腾 NPU 的 .om, 其余保持原 ONNX Runtime 逻辑不变
+        List<Rect2d> boxes2d = new ArrayList<>();
+        List<Float> confidences = new ArrayList<>();
+        List<Integer> classIds = new ArrayList<>();
+        List<float[]> keypoints = new ArrayList<>();
+
+        AscendOmModel omModel = AscendOmPool.isOmModel(tabAiModel.getModelDifyType())
+                ? AscendOmPool.preload(uploadpath + File.separator + weight)
+                : null;
+
+        if (omModel != null) {
+            AscendOmRunner.BatchOutput omOut = AscendOmRunner.runBatch(omModel, inputData, 1);
+            if (omOut == null) {
+                throw new IllegalStateException("om 姿态推理失败, 无 ONNX 可回退: " + omModel.getOmPath());
+            }
+            collectPoseBoxes(omOut.rawOutput, omOut.tensorShape, confThreshold,
+                    boxes2d, confidences, classIds, keypoints);
         } else {
-            options.addCPU(true);
-        }
+            // 4. 创建 ONNX Runtime 环境
+            OrtEnvironment env = OrtEnvironment.getEnvironment();
+            OrtSession.SessionOptions options = new OrtSession.SessionOptions();
+            if (useGpu) {
+                options.addCUDA();
+            } else {
+                options.addCPU(true);
+            }
 
-        try (OrtSession session = env.createSession(uploadpath + File.separator + weight, options)) {
-            // 5. 构建输入张量
-            long[] shape = new long[]{1, 3, 640, 640};
-            OnnxTensor inputTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputData), shape);
-            Map<String, OnnxTensor> inputs = Collections.singletonMap(
-                    session.getInputNames().iterator().next(), inputTensor);
+            try (OrtSession session = env.createSession(uploadpath + File.separator + weight, options)) {
+                // 5. 构建输入张量
+                long[] shape = new long[]{1, 3, 640, 640};
+                OnnxTensor inputTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputData), shape);
+                Map<String, OnnxTensor> inputs = Collections.singletonMap(
+                        session.getInputNames().iterator().next(), inputTensor);
+                try (OrtSession.Result results = session.run(inputs)) {
+                    for (Map.Entry<String, OnnxValue> entry : results) {
+                        OnnxValue value = entry.getValue();
+                        if (!(value instanceof OnnxTensor)) continue;
+                        OnnxTensor tensor = (OnnxTensor) value;
 
-            // 6. 推理并解析结果
+                        long[] tensorShape = tensor.getInfo().getShape();
+                        Object rawOutput = tensor.getValue();
 
+                        System.out.println("输出维度: [" + tensorShape[0] + ", " + tensorShape[1] + ", " + tensorShape[2] + "]");
 
-            List<Rect2d> boxes2d = new ArrayList<>();
-            List<Float> confidences = new ArrayList<>();
-            List<Integer> classIds = new ArrayList<>();
-            List<float[]> keypoints = new ArrayList<>();
-
-            try (OrtSession.Result results = session.run(inputs)) {
-                for (Map.Entry<String, OnnxValue> entry : results) {
-                    OnnxValue value = entry.getValue();
-                    if (!(value instanceof OnnxTensor)) continue;
-                    OnnxTensor tensor = (OnnxTensor) value;
-
-                    long[] tensorShape = tensor.getInfo().getShape();
-                    Object rawOutput = tensor.getValue();
-
-                    System.out.println("输出维度: [" + tensorShape[0] + ", " + tensorShape[1] + ", " + tensorShape[2] + "]");
-
-                    if (rawOutput instanceof float[][][]) {
-                        float[][][] batch = (float[][][]) rawOutput;
-
-                        // 🔍 添加调试信息
-                        System.out.println("实际数组维度: [" + batch.length + "]["
-                                + batch[0].length + "][" + batch[0][0].length + "]");
-
-                        // ✅ 根据实际维度判断数据格式
-                        int dim0 = batch.length;        // 通常是 1
-                        int dim1 = batch[0].length;     // 可能是 56 或 8400
-                        int dim2 = batch[0][0].length;  // 可能是 8400 或 56
-                        int debugCount = 0; // 用于控制调试输出数量
-
-                        if (dim1 == 56 && dim2 > 1000) {
-                            System.out.println("✅ 检测到格式: [batch][features][detections]");
-                            float[][] detections = batch[0];
-
-
-                            for (int i = 0; i < dim2; i++) {
-                                float centerX = detections[0][i];
-                                float centerY = detections[1][i];
-                                float width = detections[2][i];
-                                float height = detections[3][i];
-                                float confidence = detections[4][i];
-
-                                if (confidence > confThreshold) {
-                                    float left = centerX - width / 2;
-                                    float top = centerY - height / 2;
-
-                                    // 提取关键点数据
-                                    float[] kpts = new float[51];
-                                    for (int j = 0; j < 51; j++) {
-                                        kpts[j] = detections[5 + j][i];
-                                    }
-
-
-
-
-                                    // ✅ 验证关键点有效性
-                                    int validCoordCount = 0;
-                                    int highVisibilityCount = 0;
-                                    float minX = Float.MAX_VALUE, maxX = Float.MIN_VALUE;
-                                    float minY = Float.MAX_VALUE, maxY = Float.MIN_VALUE;
-
-                                    for (int k = 0; k < 17; k++) {
-                                        float kx = kpts[k * 3];
-                                        float ky = kpts[k * 3 + 1];
-                                        float visibility = kpts[k * 3 + 2];
-
-                                        boolean coordsInRange = (kx >= 0 && kx <= 640 && ky >= 0 && ky <= 640);
-                                        boolean notZero = (kx > 0.1 || ky > 0.1);
-
-                                        if (coordsInRange && notZero) {
-                                            validCoordCount++;
-
-                                            if (visibility > 0.5) {
-                                                if (i == 0) {
-                                                    System.out.println("鼻子坐标: (" + kx + "," + ky + ")");
-                                                } else if (i == 9 || i == 10) {
-                                                    System.out.println("手腕位置: " + (i == 9 ? "左手" : "右手") + " (" + kx + "," + ky + ")");
-                                                }
-                                                highVisibilityCount++;
-                                                // 只统计高可见性的关键点范围
-                                                minX = Math.min(minX, kx);
-                                                maxX = Math.max(maxX, kx);
-                                                minY = Math.min(minY, ky);
-                                                maxY = Math.max(maxY, ky);
-                                            }
-                                        }
-                                    }
-
-                                    // ⭐ 计算关键点分布范围
-                                    float keypointWidth = (maxX == Float.MIN_VALUE) ? 0 : (maxX - minX);
-                                    float keypointHeight = (maxY == Float.MIN_VALUE) ? 0 : (maxY - minY);
-
-                                    // 计算关键点范围与边界框的比例
-                                    float widthRatio = (width > 0) ? (keypointWidth / width) : 0;
-                                    float heightRatio = (height > 0) ? (keypointHeight / height) : 0;
-
-                                    if (debugCount < 3) {
-                                        System.out.println(String.format("  统计: 有效坐标=%d/17, 高可见性=%d/17",
-                                                validCoordCount, highVisibilityCount));
-                                        System.out.println(String.format("  边界框: 宽=%.1f, 高=%.1f", width, height));
-                                        System.out.println(String.format("  关键点范围: 宽=%.1f, 高=%.1f", keypointWidth, keypointHeight));
-                                        System.out.println(String.format("  覆盖率: 宽度%.1f%%, 高度%.1f%%", widthRatio * 100, heightRatio * 100));
-                                        debugCount++;
-                                    }
-
-                                    // ⭐⭐⭐ 关键过滤条件 ⭐⭐⭐
-                                    boolean hasValidKeypoints = false;
-
-                                    if (highVisibilityCount >= 3) {
-
-                                        // 策略2: 根据边界框大小动态调整阈值
-                                        float minWidth = Math.min(30, width * 0.3f);   // 最小宽度: 30px 或 边界框30%
-                                        float minHeight = Math.min(70, height * 0.4f); // 最小高度: 70px 或 边界框40%
-
-                                        boolean hasReasonableSpread = (keypointWidth > minWidth && keypointHeight > minHeight);
-
-                                        // 策略3: 降低覆盖率要求，支持更多姿态
-                                        // 宽度覆盖30%，高度覆盖40% 即可认为有效
-                                        boolean coversEnoughArea = (widthRatio > 0.3 && heightRatio > 0.4);
-
-                                        // 策略4: 特殊情况处理 - 如果关键点非常集中但置信度高，也认为有效
-                                        boolean isHighConfidenceCompact = (confidence > 0.7f && highVisibilityCount >= 5);
-
-                                        // 综合判断
-                                        hasValidKeypoints = hasReasonableSpread && (coversEnoughArea || isHighConfidenceCompact);
-
-                                        if (debugCount <= 3) {
-                                            System.out.println(String.format("  验证结果: 合理分布=%s, 覆盖充分=%s, 高置信紧凑=%s, 最终=%s",
-                                                    hasReasonableSpread, coversEnoughArea, isHighConfidenceCompact, hasValidKeypoints));
-                                        }
-
-                                    } else {
-                                        // 策略5: 低可见性但高置信度的兜底方案
-                                        // 如果置信度很高(>0.75)且至少有2个关键点，也可以尝试保留
-                                        if (confidence > 0.6f && validCoordCount >= 2) {
-                                            hasValidKeypoints = true;
-                                            if (debugCount <= 3) {
-                                                System.out.println(String.format("  验证结果: 高置信度兜底通过 (conf=%.2f, valid=%d)",
-                                                        confidence, validCoordCount));
-                                            }
-                                        } else {
-                                            if (debugCount <= 3) {
-                                                System.out.println(String.format("  验证结果: 高可见性关键点不足(%d<3)", highVisibilityCount));
-                                            }
-                                        }
-                                    }
-
-
-                                    if (hasValidKeypoints) {
-                                        classIds.add(0);
-                                        confidences.add(confidence);
-                                        boxes2d.add(new Rect2d(left, top, width, height));
-                                        keypoints.add(kpts);
-
-                                        log.info("✅ 检测到有效人体: 置信度={}, 坐标=({},{},{},{}), 关键点覆盖={}x{}",
-                                                confidence, left, top, width, height,
-                                                String.format("%.0f%%", widthRatio * 100),
-                                                String.format("%.0f%%", heightRatio * 100));
-                                    } else {
-                                        if (debugCount <= 3) {
-                                            System.out.println(String.format("❌ 过滤掉检测框[%d]: 关键点分布异常", i));
-                                        }
-                                    }
-                                }
-                            }
-                        } else if (dim1 > 1000 && dim2 == 56) {
-                            // 格式: [1][8400][56] - 检测在前
-                            System.out.println("⚠️ 检测到格式: [batch][detections][features]");
-
-                            for (int i = 0; i < dim1; i++) {
-                                float[] detection = batch[0][i];  // [56]
-
-                                float centerX = detection[0];
-                                float centerY = detection[1];
-                                float width = detection[2];
-                                float height = detection[3];
-                                float confidence = detection[4];
-
-                                if (confidence > confThreshold) {
-                                    float left = centerX - width / 2;
-                                    float top = centerY - height / 2;
-
-                                    // 提取关键点
-                                    float[] kpts = new float[51];
-                                    System.arraycopy(detection, 5, kpts, 0, 51);
-
-                                    // 🔍 验证关键点有效性
-                                    boolean hasValidKeypoints = false;
-                                    for (int k = 0; k < 17; k++) {
-                                        float kx = kpts[k * 3];
-                                        float ky = kpts[k * 3 + 1];
-                                        float visibility = kpts[k * 3 + 2];
-                                        if (visibility > 0.3 && kx > 0 && ky > 0) {
-                                            hasValidKeypoints = true;
-                                            break;
-                                        }
-                                    }
-
-                                    if (hasValidKeypoints) {
-                                        classIds.add(0);
-                                        confidences.add(confidence);
-                                        boxes2d.add(new Rect2d(left, top, width, height));
-                                        keypoints.add(kpts);
-
-                                        log.info("检测到人体: 置信度={}, 坐标=({},{},{},{})",
-                                                confidence, left, top, width, height);
-                                    } else {
-                                        System.out.println("⚠️ 跳过无效检测 (置信度=" + confidence + "): 无有效关键点");
-                                    }
-                                }
-                            }
-                        } else {
-                            System.err.println("❌ 未知的输出格式: [" + dim0 + "][" + dim1 + "][" + dim2 + "]");
+                        if (rawOutput instanceof float[][][]) {
+                            float[][][] batch = (float[][][]) rawOutput;
+                            collectPoseBoxes(batch, tensorShape, confThreshold,
+                                    boxes2d, confidences, classIds, keypoints);
                         }
                     }
                 }
             }
-
-            System.out.println("NMS前检测框数量: " + boxes2d.size());
-
-            if (boxes2d.size() <= 0) {
-                return "未检测到";
-            }
-
-            // 7. 应用非极大值抑制
-            MatOfRect2d boxesMat = new MatOfRect2d();
-            boxesMat.fromList(boxes2d);
-            MatOfFloat confidencesMat = new MatOfFloat(Converters.vector_float_to_Mat(confidences));
-            MatOfInt indices = new MatOfInt();
-
-            if (!boxesMat.empty() && !confidencesMat.empty()) {
-                Dnn.NMSBoxes(boxesMat, confidencesMat, confThreshold, nmsThreshold, indices);
-            }
-
-            int[] indicesArr = indices.toArray();
-            System.out.println("NMS后检测框数量: " + indicesArr.length);
-
-            // 8. 计算letterbox的缩放参数
-            double scale = Math.min(640.0 / image.cols(), 640.0 / image.rows());
-            double dx = (640 - image.cols() * scale) / 2;
-            double dy = (640 - image.rows() * scale) / 2;
-
-            // 9. 绘制结果
-            int colorIdx = 0;
-            for (int idx : indicesArr) {
-                Rect2d box = boxes2d.get(idx);
-                int classId = classIds.get(idx);
-                float conf = confidences.get(idx);
-                float[] kpts = keypoints.get(idx);
-
-                // 还原边界框到原图坐标
-                double x = (box.x - dx) / scale;
-                double y = (box.y - dy) / scale;
-                double width = box.width / scale;
-                double height = box.height / scale;
-
-                // 确保坐标在图像范围内
-                x = Math.max(0, Math.min(x, image.cols() - 1));
-                y = Math.max(0, Math.min(y, image.rows() - 1));
-                width = Math.min(width, image.cols() - x);
-                height = Math.min(height, image.rows() - y);
-
-                // 执行跌倒检测
-                FallDetectionResult fallResult = detectFallOrStand(kpts, scale, dx, dy);
-                System.out.println(String.format("人体检测: 置信度=%.3f, 状态=%s (%.2f), 原因=%s, 报警=%s",
-                        conf, fallResult.getStatus(), fallResult.getConfidence(),
-                        fallResult.getReason(), fallResult.isAlert()));
-
-                // 绘制边界框
-                Imgproc.rectangle(image,
-                        new Point(x, y),
-                        new Point(x + width, y + height),
-                        CommonColors(colorIdx), 2);
-
-                String label = "person: " + String.format("%.2f", conf);
-                Imgproc.putText(image, label, new Point(x, y - 10),
-                        Imgproc.FONT_HERSHEY_SIMPLEX, 0.5, CommonColors(colorIdx), 2);
-
-                // 绘制关键点和骨骼连接
-                drawPoseKeypoints(image, kpts, scale, dx, dy);
-
-                colorIdx++;
-            }
-
-            // 10. 保存结果
-            String savepath = uploadpath + File.separator + "temp" + File.separator;
-            if (StringUtils.isNotBlank(saveName)) {
-                savepath += saveName + ".jpg";
-            } else {
-                saveName = System.currentTimeMillis() + "";
-                savepath += saveName + ".jpg";
-            }
-
-            log.info("保存路径: {}", savepath);
-            Imgcodecs.imwrite(savepath, image);
-
-            Long endTime = System.currentTimeMillis();
-            log.info("总耗时: {}ms", (endTime - startTime));
-
-            return saveName + ".jpg";
         }
+
+
+        System.out.println("NMS前检测框数量: " + boxes2d.size());
+
+        if (boxes2d.size() <= 0) {
+            return "未检测到";
+        }
+
+        // 7. 应用非极大值抑制
+        MatOfRect2d boxesMat = new MatOfRect2d();
+        boxesMat.fromList(boxes2d);
+        MatOfFloat confidencesMat = new MatOfFloat(Converters.vector_float_to_Mat(confidences));
+        MatOfInt indices = new MatOfInt();
+
+        if (!boxesMat.empty() && !confidencesMat.empty()) {
+            Dnn.NMSBoxes(boxesMat, confidencesMat, confThreshold, nmsThreshold, indices);
+        }
+
+        int[] indicesArr = indices.toArray();
+        System.out.println("NMS后检测框数量: " + indicesArr.length);
+
+        // 8. 计算letterbox的缩放参数
+        double scale = Math.min(640.0 / image.cols(), 640.0 / image.rows());
+        double dx = (640 - image.cols() * scale) / 2;
+        double dy = (640 - image.rows() * scale) / 2;
+
+        // 9. 绘制结果
+        int colorIdx = 0;
+        for (int idx : indicesArr) {
+            Rect2d box = boxes2d.get(idx);
+            int classId = classIds.get(idx);
+            float conf = confidences.get(idx);
+            float[] kpts = keypoints.get(idx);
+
+            // 还原边界框到原图坐标
+            double x = (box.x - dx) / scale;
+            double y = (box.y - dy) / scale;
+            double width = box.width / scale;
+            double height = box.height / scale;
+
+            // 确保坐标在图像范围内
+            x = Math.max(0, Math.min(x, image.cols() - 1));
+            y = Math.max(0, Math.min(y, image.rows() - 1));
+            width = Math.min(width, image.cols() - x);
+            height = Math.min(height, image.rows() - y);
+
+            // 执行跌倒检测
+            FallDetectionResult fallResult = detectFallOrStand(kpts, scale, dx, dy);
+            System.out.println(String.format("人体检测: 置信度=%.3f, 状态=%s (%.2f), 原因=%s, 报警=%s",
+                    conf, fallResult.getStatus(), fallResult.getConfidence(),
+                    fallResult.getReason(), fallResult.isAlert()));
+
+            // 绘制边界框
+            Imgproc.rectangle(image,
+                    new Point(x, y),
+                    new Point(x + width, y + height),
+                    CommonColors(colorIdx), 2);
+
+            String label = "person: " + String.format("%.2f", conf);
+            Imgproc.putText(image, label, new Point(x, y - 10),
+                    Imgproc.FONT_HERSHEY_SIMPLEX, 0.5, CommonColors(colorIdx), 2);
+
+            // 绘制关键点和骨骼连接
+            drawPoseKeypoints(image, kpts, scale, dx, dy);
+
+            colorIdx++;
+        }
+
+        // 10. 保存结果
+        String savepath = uploadpath + File.separator + "temp" + File.separator;
+        if (StringUtils.isNotBlank(saveName)) {
+            savepath += saveName + ".jpg";
+        } else {
+            saveName = System.currentTimeMillis() + "";
+            savepath += saveName + ".jpg";
+        }
+
+        log.info("保存路径: {}", savepath);
+        Imgcodecs.imwrite(savepath, image);
+
+        Long endTime = System.currentTimeMillis();
+        log.info("总耗时: {}ms", (endTime - startTime));
+
+        return saveName + ".jpg";
+    }
+
+    /**
+     * 解析 3 维姿态输出 [1, 56, 8400] / [1, 8400, 56] 成候选框 + 关键点。
+     * ONNX 和昇腾 om 共用 —— om 输出的形状和数值与 onnx 一致。
+     */
+    private static void collectPoseBoxes(float[][][] batch, long[] tensorShape,
+                                        float confThreshold, List<Rect2d> boxes2d,
+                                        List<Float> confidences, List<Integer> classIds,
+                                        List<float[]> keypoints) {
+
+            // 🔍 添加调试信息
+            System.out.println("实际数组维度: [" + batch.length + "]["
+                    + batch[0].length + "][" + batch[0][0].length + "]");
+
+            // ✅ 根据实际维度判断数据格式
+            int dim0 = batch.length;        // 通常是 1
+            int dim1 = batch[0].length;     // 可能是 56 或 8400
+            int dim2 = batch[0][0].length;  // 可能是 8400 或 56
+            int debugCount = 0; // 用于控制调试输出数量
+
+            if (dim1 == 56 && dim2 > 1000) {
+                System.out.println("✅ 检测到格式: [batch][features][detections]");
+                float[][] detections = batch[0];
+
+
+                for (int i = 0; i < dim2; i++) {
+                    float centerX = detections[0][i];
+                    float centerY = detections[1][i];
+                    float width = detections[2][i];
+                    float height = detections[3][i];
+                    float confidence = detections[4][i];
+
+                    if (confidence > confThreshold) {
+                        float left = centerX - width / 2;
+                        float top = centerY - height / 2;
+
+                        // 提取关键点数据
+                        float[] kpts = new float[51];
+                        for (int j = 0; j < 51; j++) {
+                            kpts[j] = detections[5 + j][i];
+                        }
+
+
+
+
+                        // ✅ 验证关键点有效性
+                        int validCoordCount = 0;
+                        int highVisibilityCount = 0;
+                        float minX = Float.MAX_VALUE, maxX = Float.MIN_VALUE;
+                        float minY = Float.MAX_VALUE, maxY = Float.MIN_VALUE;
+
+                        for (int k = 0; k < 17; k++) {
+                            float kx = kpts[k * 3];
+                            float ky = kpts[k * 3 + 1];
+                            float visibility = kpts[k * 3 + 2];
+
+                            boolean coordsInRange = (kx >= 0 && kx <= 640 && ky >= 0 && ky <= 640);
+                            boolean notZero = (kx > 0.1 || ky > 0.1);
+
+                            if (coordsInRange && notZero) {
+                                validCoordCount++;
+
+                                if (visibility > 0.5) {
+                                    if (i == 0) {
+                                        System.out.println("鼻子坐标: (" + kx + "," + ky + ")");
+                                    } else if (i == 9 || i == 10) {
+                                        System.out.println("手腕位置: " + (i == 9 ? "左手" : "右手") + " (" + kx + "," + ky + ")");
+                                    }
+                                    highVisibilityCount++;
+                                    // 只统计高可见性的关键点范围
+                                    minX = Math.min(minX, kx);
+                                    maxX = Math.max(maxX, kx);
+                                    minY = Math.min(minY, ky);
+                                    maxY = Math.max(maxY, ky);
+                                }
+                            }
+                        }
+
+                        // ⭐ 计算关键点分布范围
+                        float keypointWidth = (maxX == Float.MIN_VALUE) ? 0 : (maxX - minX);
+                        float keypointHeight = (maxY == Float.MIN_VALUE) ? 0 : (maxY - minY);
+
+                        // 计算关键点范围与边界框的比例
+                        float widthRatio = (width > 0) ? (keypointWidth / width) : 0;
+                        float heightRatio = (height > 0) ? (keypointHeight / height) : 0;
+
+                        if (debugCount < 3) {
+                            System.out.println(String.format("  统计: 有效坐标=%d/17, 高可见性=%d/17",
+                                    validCoordCount, highVisibilityCount));
+                            System.out.println(String.format("  边界框: 宽=%.1f, 高=%.1f", width, height));
+                            System.out.println(String.format("  关键点范围: 宽=%.1f, 高=%.1f", keypointWidth, keypointHeight));
+                            System.out.println(String.format("  覆盖率: 宽度%.1f%%, 高度%.1f%%", widthRatio * 100, heightRatio * 100));
+                            debugCount++;
+                        }
+
+                        // ⭐⭐⭐ 关键过滤条件 ⭐⭐⭐
+                        boolean hasValidKeypoints = false;
+
+                        if (highVisibilityCount >= 3) {
+
+                            // 策略2: 根据边界框大小动态调整阈值
+                            float minWidth = Math.min(30, width * 0.3f);   // 最小宽度: 30px 或 边界框30%
+                            float minHeight = Math.min(70, height * 0.4f); // 最小高度: 70px 或 边界框40%
+
+                            boolean hasReasonableSpread = (keypointWidth > minWidth && keypointHeight > minHeight);
+
+                            // 策略3: 降低覆盖率要求，支持更多姿态
+                            // 宽度覆盖30%，高度覆盖40% 即可认为有效
+                            boolean coversEnoughArea = (widthRatio > 0.3 && heightRatio > 0.4);
+
+                            // 策略4: 特殊情况处理 - 如果关键点非常集中但置信度高，也认为有效
+                            boolean isHighConfidenceCompact = (confidence > 0.7f && highVisibilityCount >= 5);
+
+                            // 综合判断
+                            hasValidKeypoints = hasReasonableSpread && (coversEnoughArea || isHighConfidenceCompact);
+
+                            if (debugCount <= 3) {
+                                System.out.println(String.format("  验证结果: 合理分布=%s, 覆盖充分=%s, 高置信紧凑=%s, 最终=%s",
+                                        hasReasonableSpread, coversEnoughArea, isHighConfidenceCompact, hasValidKeypoints));
+                            }
+
+                        } else {
+                            // 策略5: 低可见性但高置信度的兜底方案
+                            // 如果置信度很高(>0.75)且至少有2个关键点，也可以尝试保留
+                            if (confidence > 0.6f && validCoordCount >= 2) {
+                                hasValidKeypoints = true;
+                                if (debugCount <= 3) {
+                                    System.out.println(String.format("  验证结果: 高置信度兜底通过 (conf=%.2f, valid=%d)",
+                                            confidence, validCoordCount));
+                                }
+                            } else {
+                                if (debugCount <= 3) {
+                                    System.out.println(String.format("  验证结果: 高可见性关键点不足(%d<3)", highVisibilityCount));
+                                }
+                            }
+                        }
+
+
+                        if (hasValidKeypoints) {
+                            classIds.add(0);
+                            confidences.add(confidence);
+                            boxes2d.add(new Rect2d(left, top, width, height));
+                            keypoints.add(kpts);
+
+                            log.info("✅ 检测到有效人体: 置信度={}, 坐标=({},{},{},{}), 关键点覆盖={}x{}",
+                                    confidence, left, top, width, height,
+                                    String.format("%.0f%%", widthRatio * 100),
+                                    String.format("%.0f%%", heightRatio * 100));
+                        } else {
+                            if (debugCount <= 3) {
+                                System.out.println(String.format("❌ 过滤掉检测框[%d]: 关键点分布异常", i));
+                            }
+                        }
+                    }
+                }
+            } else if (dim1 > 1000 && dim2 == 56) {
+                // 格式: [1][8400][56] - 检测在前
+                System.out.println("⚠️ 检测到格式: [batch][detections][features]");
+
+                for (int i = 0; i < dim1; i++) {
+                    float[] detection = batch[0][i];  // [56]
+
+                    float centerX = detection[0];
+                    float centerY = detection[1];
+                    float width = detection[2];
+                    float height = detection[3];
+                    float confidence = detection[4];
+
+                    if (confidence > confThreshold) {
+                        float left = centerX - width / 2;
+                        float top = centerY - height / 2;
+
+                        // 提取关键点
+                        float[] kpts = new float[51];
+                        System.arraycopy(detection, 5, kpts, 0, 51);
+
+                        // 🔍 验证关键点有效性
+                        boolean hasValidKeypoints = false;
+                        for (int k = 0; k < 17; k++) {
+                            float kx = kpts[k * 3];
+                            float ky = kpts[k * 3 + 1];
+                            float visibility = kpts[k * 3 + 2];
+                            if (visibility > 0.3 && kx > 0 && ky > 0) {
+                                hasValidKeypoints = true;
+                                break;
+                            }
+                        }
+
+                        if (hasValidKeypoints) {
+                            classIds.add(0);
+                            confidences.add(confidence);
+                            boxes2d.add(new Rect2d(left, top, width, height));
+                            keypoints.add(kpts);
+
+                            log.info("检测到人体: 置信度={}, 坐标=({},{},{},{})",
+                                    confidence, left, top, width, height);
+                        } else {
+                            System.out.println("⚠️ 跳过无效检测 (置信度=" + confidence + "): 无有效关键点");
+                        }
+                    }
+                }
+            } else {
+                System.err.println("❌ 未知的输出格式: [" + dim0 + "][" + dim1 + "][" + dim2 + "]");
+            }
     }
     // 绘制姿态关键点和骨骼连接
     private static void drawPoseKeypoints(Mat image, float[] keypoints, double scale, double dx, double dy) {
@@ -2208,178 +2234,204 @@ public class AIModelYolo3 {
             options.addCPU(true);  // 强制 CPU
         }
 
-        try (OrtSession session = env.createSession(uploadpath + File.separator + weight, options)) {
-            // 4. 构建输入
-            long[] shape = new long[]{1, 3, 640, 640};
-            OnnxTensor inputTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputData), shape);
-            Map<String, OnnxTensor> inputs = Collections.singletonMap(session.getInputNames().iterator().next(), inputTensor);
+        // 5. 推理: model_type=100 走昇腾 NPU 的 .om, 其余保持原 ONNX Runtime 逻辑不变
+        List<Rect2d> boxes2d = new ArrayList<>();
+        List<Float> confidences = new ArrayList<>();
+        List<Integer> classIds = new ArrayList<>();
 
-            // 5. 推理
-            List<Rect2d> boxes2d = new ArrayList<>();
-            List<Float> confidences = new ArrayList<>();
-            List<Integer> classIds = new ArrayList<>();
+        AscendOmModel omModel = AscendOmPool.isOmModel(tabAiModel.getModelDifyType())
+                ? AscendOmPool.preload(uploadpath + File.separator + weight)
+                : null;
 
-            try (OrtSession.Result results = session.run(inputs)) {
-                for (Map.Entry<String, OnnxValue> entry : results) {
-                    OnnxValue value = entry.getValue();
-                    if (!(value instanceof OnnxTensor)) continue;
-                    OnnxTensor tensor = (OnnxTensor) value;
+        if (omModel != null) {
+            AscendOmRunner.BatchOutput omOut = AscendOmRunner.runBatch(omModel, inputData, 1);
+            if (omOut == null) {
+                throw new IllegalStateException("om 推理失败, 无 ONNX 可回退: " + omModel.getOmPath());
+            }
+            collectV11Boxes(omOut.rawOutput, omOut.tensorShape, expectedClassCount, confThreshold,
+                    boxes2d, confidences, classIds);
+        } else {
+            try (OrtSession session = env.createSession(uploadpath + File.separator + weight, options)) {
+                // 4. 构建输入
+                long[] shape = new long[]{1, 3, 640, 640};
+                OnnxTensor inputTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputData), shape);
+                Map<String, OnnxTensor> inputs = Collections.singletonMap(session.getInputNames().iterator().next(), inputTensor);
 
-                    // 获取输出张量的形状
-                    long[] tensorShape = tensor.getInfo().getShape();
-                    Object rawOutput = tensor.getValue();
+                // 5. 推理
+                try (OrtSession.Result results = session.run(inputs)) {
+                    for (Map.Entry<String, OnnxValue> entry : results) {
+                        OnnxValue value = entry.getValue();
+                        if (!(value instanceof OnnxTensor)) continue;
+                        OnnxTensor tensor = (OnnxTensor) value;
 
-                    if (rawOutput instanceof float[][][]) { // 常见 YOLOv5/11 输出
-                        float[][][] batch = (float[][][]) rawOutput;
+                        // 获取输出张量的形状
+                        long[] tensorShape = tensor.getInfo().getShape();
+                        Object rawOutput = tensor.getValue();
 
-                        // 判断是否需要转置 (YOLOv11 格式: [1, 84, 8400])
-                        boolean needTranspose = tensorShape.length == 3 &&
-                                tensorShape[1] < tensorShape[2] &&
-                                tensorShape[1] <= (expectedClassCount + 5);
-
-                        for (float[][] detections : batch) {
-                            if (needTranspose) {
-                                // YOLOv11 转置处理: [84, 8400] -> 按列遍历
-                                int numFeatures = (int) tensorShape[1]; // 84
-                                int numDetections = (int) tensorShape[2]; // 8400
-                                int numClasses = numFeatures - 4;
-
-                                for (int i = 0; i < numDetections; i++) {
-                                    float cx = detections[0][i];
-                                    float cy = detections[1][i];
-                                    float w = detections[2][i];
-                                    float h = detections[3][i];
-
-                                    // 找到最高分数的类别
-                                    float maxScore = 0;
-                                    int classId = 0;
-                                    for (int c = 0; c < numClasses; c++) {
-                                        if (detections[4 + c][i] > maxScore) {
-                                            maxScore = detections[4 + c][i];
-                                            classId = c;
-                                        }
-                                    }
-
-                                    // 边界检查并添加检测结果
-                                    if (maxScore > confThreshold && classId < expectedClassCount) {
-                                        boxes2d.add(new Rect2d(cx - w / 2, cy - h / 2, w, h));
-                                        confidences.add(maxScore);
-                                        classIds.add(classId);
+                        if (rawOutput instanceof float[][][]) { // 常见 YOLOv5/11 输出
+                            float[][][] batch = (float[][][]) rawOutput;
+                            collectV11Boxes(batch, tensorShape, expectedClassCount, confThreshold,
+                                    boxes2d, confidences, classIds);
+                        } else if (rawOutput instanceof float[][]) {
+                            // 可处理部分 YOLOv11 输出为 2D
+                            float[][] detections = (float[][]) rawOutput;
+                            for (float[] det : detections) {
+                                int actualClassCount = det.length - 4;
+                                float confidence = 0;
+                                int classId = 0;
+                                for (int i = 4; i < det.length; i++) {
+                                    if (det[i] > confidence) {
+                                        confidence = det[i];
+                                        classId = i - 4;
                                     }
                                 }
-                            } else {
-                                // YOLOv5 原有处理逻辑: [25200, 85]
-                                for (float[] det : detections) {
-                                    int actualClassCount;
-                                    boolean hasObjectness;
-                                    if (det.length > 5) { // YOLOv5
-                                        hasObjectness = true;
-                                        actualClassCount = det.length - 5;
-                                    } else { // YOLOv11 (2D输出)
-                                        hasObjectness = false;
-                                        actualClassCount = det.length - 4;
-                                    }
 
-                                    int classId = 0;
-                                    float maxScore = 0;
-                                    for (int i = hasObjectness ? 5 : 4; i < det.length; i++) {
-                                        if (det[i] > maxScore) {
-                                            maxScore = det[i];
-                                            classId = i - (hasObjectness ? 5 : 4);
-                                        }
-                                    }
-
-                                    float confidence = hasObjectness ? det[4] * maxScore : maxScore;
-
-                                    // 边界检查并添加检测结果
-                                    if (confidence > confThreshold && classId < expectedClassCount) {
-                                        float cx = det[0], cy = det[1], w = det[2], h = det[3];
-                                        boxes2d.add(new Rect2d(cx - w / 2, cy - h / 2, w, h));
-                                        confidences.add(confidence);
-                                        classIds.add(classId);
-                                    }
+                                // 边界检查并添加检测结果
+                                if (confidence > confThreshold && classId < expectedClassCount) {
+                                    float cx = det[0], cy = det[1], w = det[2], h = det[3];
+                                    boxes2d.add(new Rect2d(cx - w / 2, cy - h / 2, w, h));
+                                    confidences.add(confidence);
+                                    classIds.add(classId);
                                 }
-                            }
-                        }
-                    } else if (rawOutput instanceof float[][]) {
-                        // 可处理部分 YOLOv11 输出为 2D
-                        float[][] detections = (float[][]) rawOutput;
-                        for (float[] det : detections) {
-                            int actualClassCount = det.length - 4;
-                            float confidence = 0;
-                            int classId = 0;
-                            for (int i = 4; i < det.length; i++) {
-                                if (det[i] > confidence) {
-                                    confidence = det[i];
-                                    classId = i - 4;
-                                }
-                            }
-
-                            // 边界检查并添加检测结果
-                            if (confidence > confThreshold && classId < expectedClassCount) {
-                                float cx = det[0], cy = det[1], w = det[2], h = det[3];
-                                boxes2d.add(new Rect2d(cx - w / 2, cy - h / 2, w, h));
-                                confidences.add(confidence);
-                                classIds.add(classId);
                             }
                         }
                     }
                 }
             }
+        }
 
-            log.info("NMS前检测框数量: " + boxes2d.size());
-            // 6. NMS
-            MatOfRect2d boxesMat = new MatOfRect2d();
-            boxesMat.fromList(boxes2d);
-            MatOfFloat confidencesMat = new MatOfFloat(Converters.vector_float_to_Mat(confidences));
-            MatOfInt indices = new MatOfInt();
-            if (!boxesMat.empty() && !confidencesMat.empty()) {
-                Dnn.NMSBoxes(boxesMat, confidencesMat, confThreshold, nmsThreshold, indices);
-            }
+        log.info("NMS前检测框数量: " + boxes2d.size());
+        // 6. NMS
+        MatOfRect2d boxesMat = new MatOfRect2d();
+        boxesMat.fromList(boxes2d);
+        MatOfFloat confidencesMat = new MatOfFloat(Converters.vector_float_to_Mat(confidences));
+        MatOfInt indices = new MatOfInt();
+        if (!boxesMat.empty() && !confidencesMat.empty()) {
+            Dnn.NMSBoxes(boxesMat, confidencesMat, confThreshold, nmsThreshold, indices);
+        }
 
-            int[] indicesArr = indices.toArray();
-            log.info("NMS前检测框后数量: " + indicesArr.length);
-            // 7. 绘制检测框
-            double scale = Math.min(640.0 / image.cols(), 640.0 / image.rows());
-            double dx = (640 - image.cols() * scale) / 2;
-            double dy = (640 - image.rows() * scale) / 2;
+        int[] indicesArr = indices.toArray();
+        log.info("NMS前检测框后数量: " + indicesArr.length);
+        // 7. 绘制检测框
+        double scale = Math.min(640.0 / image.cols(), 640.0 / image.rows());
+        double dx = (640 - image.cols() * scale) / 2;
+        double dy = (640 - image.rows() * scale) / 2;
 
-            int colorIdx = 0;
-            for (int idx : indicesArr) {
-                Rect2d box = boxes2d.get(idx);
-                int clsId = classIds.get(idx);
-                float conf = confidences.get(idx);
+        int colorIdx = 0;
+        for (int idx : indicesArr) {
+            Rect2d box = boxes2d.get(idx);
+            int clsId = classIds.get(idx);
+            float conf = confidences.get(idx);
 
-                double x = (box.x - dx) / scale;
-                double y = (box.y - dy) / scale;
-                double width = box.width / scale;
-                double height = box.height / scale;
+            double x = (box.x - dx) / scale;
+            double y = (box.y - dy) / scale;
+            double width = box.width / scale;
+            double height = box.height / scale;
 
-                x = Math.max(0, Math.min(x, image.cols() - 1));
-                y = Math.max(0, Math.min(y, image.rows() - 1));
-                width = Math.min(width, image.cols() - x);
-                height = Math.min(height, image.rows() - y);
-                log.info("识别下标{}识别坐标内容{},{},{},{}",clsId,x,y,width,height);
-                Imgproc.rectangle(image, new Point(x, y), new Point(x + width, y + height), CommonColors(colorIdx), 2);
-                String label = classes.get(clsId) + ": " + String.format("%.2f", conf);
-                Imgproc.putText(image, label, new Point(x, y - 10), Imgproc.FONT_HERSHEY_SIMPLEX, 0.5, CommonColors(colorIdx), 2);
-                colorIdx++;
+            x = Math.max(0, Math.min(x, image.cols() - 1));
+            y = Math.max(0, Math.min(y, image.rows() - 1));
+            width = Math.min(width, image.cols() - x);
+            height = Math.min(height, image.rows() - y);
+            log.info("识别下标{}识别坐标内容{},{},{},{}",clsId,x,y,width,height);
+            Imgproc.rectangle(image, new Point(x, y), new Point(x + width, y + height), CommonColors(colorIdx), 2);
+            String label = classes.get(clsId) + ": " + String.format("%.2f", conf);
+            Imgproc.putText(image, label, new Point(x, y - 10), Imgproc.FONT_HERSHEY_SIMPLEX, 0.5, CommonColors(colorIdx), 2);
+            colorIdx++;
 
-            }
+        }
 
-            // 8. 保存结果
-            String savepath = uploadpath + File.separator + "temp" + File.separator;
-            if (saveName != null && !saveName.isEmpty()) {
-                savepath += saveName + ".jpg";
+        // 8. 保存结果
+        String savepath = uploadpath + File.separator + "temp" + File.separator;
+        if (saveName != null && !saveName.isEmpty()) {
+            savepath += saveName + ".jpg";
+        } else {
+            saveName = System.currentTimeMillis() + "";
+            savepath += saveName + ".jpg";
+        }
+        Imgcodecs.imwrite(savepath, image);
+
+        long endTime = System.currentTimeMillis();
+        System.out.println("总耗时: " + (endTime - startTime) + "ms");
+        return saveName + ".jpg";
+    }
+
+    /**
+     * 解析 3 维 YOLO 输出 [B, d1, d2] 成候选框。ONNX 和昇腾 om 两条路共用 ——
+     * om 的输出张量形状/数值和 onnx 一致, 所以解析逻辑一个字都不用改。
+     */
+    private static void collectV11Boxes(float[][][] batch, long[] tensorShape,
+                                        int expectedClassCount, float confThreshold,
+                                        List<Rect2d> boxes2d, List<Float> confidences,
+                                        List<Integer> classIds) {
+        // 判断是否需要转置 (YOLOv11 格式: [1, 84, 8400])
+        boolean needTranspose = tensorShape.length == 3 &&
+                tensorShape[1] < tensorShape[2] &&
+                tensorShape[1] <= (expectedClassCount + 5);
+
+
+        for (float[][] detections : batch) {
+            if (needTranspose) {
+                // YOLOv11 转置处理: [84, 8400] -> 按列遍历
+                int numFeatures = (int) tensorShape[1]; // 84
+                int numDetections = (int) tensorShape[2]; // 8400
+                int numClasses = numFeatures - 4;
+
+                for (int i = 0; i < numDetections; i++) {
+                    float cx = detections[0][i];
+                    float cy = detections[1][i];
+                    float w = detections[2][i];
+                    float h = detections[3][i];
+
+                    // 找到最高分数的类别
+                    float maxScore = 0;
+                    int classId = 0;
+                    for (int c = 0; c < numClasses; c++) {
+                        if (detections[4 + c][i] > maxScore) {
+                            maxScore = detections[4 + c][i];
+                            classId = c;
+                        }
+                    }
+
+                    // 边界检查并添加检测结果
+                    if (maxScore > confThreshold && classId < expectedClassCount) {
+                        boxes2d.add(new Rect2d(cx - w / 2, cy - h / 2, w, h));
+                        confidences.add(maxScore);
+                        classIds.add(classId);
+                    }
+                }
             } else {
-                saveName = System.currentTimeMillis() + "";
-                savepath += saveName + ".jpg";
-            }
-            Imgcodecs.imwrite(savepath, image);
+                // YOLOv5 原有处理逻辑: [25200, 85]
+                for (float[] det : detections) {
+                    int actualClassCount;
+                    boolean hasObjectness;
+                    if (det.length > 5) { // YOLOv5
+                        hasObjectness = true;
+                        actualClassCount = det.length - 5;
+                    } else { // YOLOv11 (2D输出)
+                        hasObjectness = false;
+                        actualClassCount = det.length - 4;
+                    }
 
-            long endTime = System.currentTimeMillis();
-            System.out.println("总耗时: " + (endTime - startTime) + "ms");
-            return saveName + ".jpg";
+                    int classId = 0;
+                    float maxScore = 0;
+                    for (int i = hasObjectness ? 5 : 4; i < det.length; i++) {
+                        if (det[i] > maxScore) {
+                            maxScore = det[i];
+                            classId = i - (hasObjectness ? 5 : 4);
+                        }
+                    }
+
+                    float confidence = hasObjectness ? det[4] * maxScore : maxScore;
+
+                    // 边界检查并添加检测结果
+                    if (confidence > confThreshold && classId < expectedClassCount) {
+                        float cx = det[0], cy = det[1], w = det[2], h = det[3];
+                        boxes2d.add(new Rect2d(cx - w / 2, cy - h / 2, w, h));
+                        confidences.add(confidence);
+                        classIds.add(classId);
+                    }
+                }
+            }
         }
     }
     public static String SendPicOnnxInsightFace(TabAiModel tabAiModel, String picUrl,

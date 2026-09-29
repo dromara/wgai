@@ -14,6 +14,8 @@ import org.opencv.core.Mat;
 import org.springframework.data.redis.core.RedisTemplate;
 
 import java.awt.image.BufferedImage;
+import java.time.LocalTime;
+import org.jeecg.modules.demo.video.util.onnx.VideoReadPicOnnxNew;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
@@ -77,6 +79,18 @@ public class VideoReadPicOnnxNewBatch implements Runnable {
                     break;
                 }
 
+                if (tabAiSubscriptionNew.getDifyStartEnd() != null && tabAiSubscriptionNew.getDifyStartTime() != null) {
+                    LocalTime start = LocalTime.of(tabAiSubscriptionNew.getDifyStartEnd(), 0);
+                    LocalTime end = LocalTime.of(tabAiSubscriptionNew.getDifyStartTime(), 0);
+                    if (!VideoReadPicOnnxNew.isWithinSchedule(LocalTime.now(), start, end)) {
+                        if (grabber != null) {
+                            try { grabber.release(); } finally { grabber = null; }
+                        }
+                        Thread.sleep(5000);
+                        continue;
+                    }
+                }
+                if (grabber == null) grabber = createOptimizedGrabber();
                 frame = grabber.grabImage();
                 if (frame == null) {
                     consecutiveNullFrames++;

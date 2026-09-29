@@ -16,6 +16,9 @@ import org.jeecg.modules.demo.tab.entity.TabAiBase;
 import org.jeecg.modules.demo.video.entity.TabAiSubscriptionNew;
 import org.jeecg.modules.demo.video.util.reture.retureBoxInfo;
 import org.jeecg.modules.tab.AIModel.AIModelYolo3;
+import org.jeecg.modules.ai.ascend.AscendOmPool;
+import org.jeecg.modules.ai.ascend.AscendOmRunner;
+import org.jeecg.modules.ai.ascend.AscendOmModel;
 import org.jeecg.modules.tab.AIModel.NetPush;
 
 import org.jeecg.modules.tab.AIModel.VideoSendReadCfg;
@@ -65,6 +68,7 @@ public class BatchOnnxInference {
 
             // 2. 批量ONNX推理
             List<DetectionResult> detectionResults = runBatchOnnxInference(
+                    netPush,
                     netPush.getSession(),
                     netPush.getEnv(),
                     batchInputData,
@@ -117,6 +121,7 @@ public class BatchOnnxInference {
 
             // 2. 批量ONNX推理
             List<DetectionResult> detectionResults = runBatchOnnxInference(
+                    netPush,
                     netPush.getSession(),
                     netPush.getEnv(),
                     batchInputData,
@@ -197,6 +202,7 @@ public class BatchOnnxInference {
      * 批量ONNX推理 - 核心方法
      */
     private static List<DetectionResult> runBatchOnnxInference(
+            NetPush netPush,
             OrtSession session,
             OrtEnvironment env,
             float[] batchInputData,
@@ -205,6 +211,12 @@ public class BatchOnnxInference {
 
         long[] shape = new long[]{batchSize, 3, 640, 640};
         List<DetectionResult> results = new ArrayList<>(batchSize);
+
+        // 昇腾 NPU 分支: model_jm_type=2 且 .om 存在时走 NPU, 否则继续往下走 ONNX
+        AscendOmRunner.BatchOutput npuOut = tryNpuInfer(netPush, batchInputData, batchSize);
+        if (npuOut != null) {
+            return parseBatchOutput(npuOut.rawOutput, npuOut.tensorShape, batchSize, numClasses);
+        }
 
         // 创建输入tensor
         FloatBuffer buffer = FloatBuffer.allocate(batchInputData.length);
@@ -233,6 +245,38 @@ public class BatchOnnxInference {
         }
 
         return results;
+    }
+
+    /**
+     * 走昇腾 NPU 推理。
+     *
+     * 返回 null 表示这个订阅没配 om，调用方继续往下走 ONNX —— 只有这一种情况回退。
+     *
+     * 配了 om (tab_ai_subscription_new.model_jm_type = 100) 但跑不了时**直接抛异常**，
+     * 不静默降级: 只上传 .om 的场景下 session 是 null，回退 ONNX 只会变成 NPE，
+     * 报错信息还不如在这里说清楚"NPU 不可用 / om 文件缺失"。
+     */
+    private static AscendOmRunner.BatchOutput tryNpuInfer(
+            NetPush netPush, float[] batchInputData, int batchSize) {
+
+        if (netPush == null || netPush.getTabAiModel() == null
+                || netPush.getTabAiSubscriptionNew() == null) {
+            return null;
+        }
+        if (!AscendOmPool.isOmModel(netPush.getTabAiSubscriptionNew().getModelJmType())) {
+            return null;
+        }
+
+        TabAiModel model = netPush.getTabAiModel();
+        // 加载失败会抛 IllegalStateException, 外层 try 会记录; 不返回 null
+        AscendOmModel omModel = AscendOmPool.preload(model.getAiWeights());
+
+        AscendOmRunner.BatchOutput out = AscendOmRunner.runBatch(omModel, batchInputData, batchSize);
+        if (out == null) {
+            throw new IllegalStateException(
+                    "om 推理失败且无 ONNX 可回退: " + omModel.getOmPath());
+        }
+        return out;
     }
 
     // ==================== 核心:解析批量输出 ====================
@@ -1009,6 +1053,7 @@ public class BatchOnnxInference {
 
             // 2. 批量ONNX推理
             List<PoseDetectionResult> detectionResults = runBatchPoseOnnxInference(
+                    netPush,
                     netPush.getSession(),
                     netPush.getEnv(),
                     batchInputData,
@@ -1045,6 +1090,7 @@ public class BatchOnnxInference {
      * 批量姿态ONNX推理
      */
     private static List<PoseDetectionResult> runBatchPoseOnnxInference(
+            NetPush netPush,
             OrtSession session,
             OrtEnvironment env,
             float[] batchInputData,
@@ -1052,6 +1098,12 @@ public class BatchOnnxInference {
 
         long[] shape = new long[]{batchSize, 3, 640, 640};
         List<PoseDetectionResult> results = new ArrayList<>(batchSize);
+
+        // 昇腾 NPU 分支, 同上
+        AscendOmRunner.BatchOutput npuOut = tryNpuInfer(netPush, batchInputData, batchSize);
+        if (npuOut != null) {
+            return parseBatchPoseOutput(npuOut.rawOutput, npuOut.tensorShape, batchSize);
+        }
 
         FloatBuffer buffer = FloatBuffer.allocate(batchInputData.length);
         buffer.put(batchInputData);

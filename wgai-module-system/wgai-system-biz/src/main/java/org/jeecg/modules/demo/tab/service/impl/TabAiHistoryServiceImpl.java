@@ -525,7 +525,7 @@ public class TabAiHistoryServiceImpl extends ServiceImpl<TabAiHistoryMapper, Tab
            // if(type.equals("11")){
                 log.info("yolov5-11开始预测节点---------------------");
                 if(tabAiModel1.getModelDify()!=null&&tabAiModel1.getModelDify()==2){ // 1 图像识别  2 姿态识别  3 多边形识别  4图像分割 5.
-                    if(tabAiModel1.getModelDifyType()!=null&&tabAiModel1.getModelDifyType()==20){
+                    if(tabAiModel1.getModelDifyType()!=null&&(tabAiModel1.getModelDifyType()==20||tabAiModel1.getModelDifyType()==100)){ //20=ONNX 100=om昇腾NPU(方法内部再分流)
                         log.info("使用ONNX推理-姿态识别！！！");
                         savePath=modelYolo3.SendPicYoloV11ONNXPose(tabAiModel1,tabAiModelBund.getSaveUrl(),null,path,gpuFlag);
                     }else{
@@ -541,7 +541,7 @@ public class TabAiHistoryServiceImpl extends ServiceImpl<TabAiHistoryMapper, Tab
                         savePath=modelYolo3.SendPicYoloV11Seg(tabAiModel1,tabAiModelBund.getSaveUrl(),null,path,gpuFlag);
                     }
                 }else{
-                    if(tabAiModel1.getModelDifyType()!=null&&tabAiModel1.getModelDifyType()==20){
+                    if(tabAiModel1.getModelDifyType()!=null&&(tabAiModel1.getModelDifyType()==20||tabAiModel1.getModelDifyType()==100)){ //20=ONNX 100=om昇腾NPU(方法内部再分流)
                         log.info("使用ONNX推理！！！");
                         if(tabAiModel1.getModelDify()!=null&&tabAiModel1.getModelDify()==8){//人脸定位
                             log.info("人脸定位！");

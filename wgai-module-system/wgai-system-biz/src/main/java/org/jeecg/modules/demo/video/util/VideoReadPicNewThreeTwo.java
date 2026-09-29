@@ -211,15 +211,15 @@ public class VideoReadPicNewThreeTwo implements Runnable {
                     break;
                 }
                 if(tabAiSubscriptionNew.getDifyStartEnd()!=null&&tabAiSubscriptionNew.getDifyStartTime()!=null){
-                    int startHour = tabAiSubscriptionNew.getDifyStartTime(); // 开始小时
-                    int endHour = tabAiSubscriptionNew.getDifyStartEnd();    // 结束小时
+                    int startHour = tabAiSubscriptionNew.getDifyStartEnd(); // 开始小时
+                    int endHour = tabAiSubscriptionNew.getDifyStartTime();    // 结束小时
 
                     LocalTime now = LocalTime.now();  // 当前时间（时分秒）
                     LocalTime start = LocalTime.of(startHour, 0);
                     LocalTime end = LocalTime.of(endHour, 0);
 
-                    if (now.isBefore(start) || now.isAfter(end)) {
-                        log.info("当前时间不在有效时段 ({}~{})，跳过", startHour, endHour);
+                    if (!org.jeecg.modules.demo.video.util.onnx.VideoReadPicOnnxNew.isWithinSchedule(now, start, end)) {
+                        Thread.sleep(5000);
                         continue;
                     }
                 }

@@ -15,6 +15,7 @@ import org.bytedeco.opencv.global.opencv_core;
 import org.bytedeco.opencv.global.opencv_imgcodecs;
 
 import org.jeecg.common.api.vo.Result;
+import org.jeecg.modules.ai.ascend.AscendOmPool;
 import org.jeecg.modules.demo.audio.entity.TabAudioDevice;
 import org.jeecg.modules.demo.audio.mapper.TabAudioDeviceMapper;
 import org.jeecg.modules.demo.tab.service.impl.TabAiBaseServiceImpl;
@@ -219,7 +220,10 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
                     long modelStartMs = System.currentTimeMillis();
                     try {
                         TabAiModel preloadModel = getTabAiModelInfo(model, "");
-                        if (subscription.getModelJmType() != null && subscription.getModelJmType() == 20) {
+                        if (AscendOmPool.isOmModel(subscription.getModelJmType())) {
+                            // om 权重走昇腾 NPU, 预热阶段就把 om 加载好, 失败在这里暴露
+                            AscendOmPool.preload(preloadModel.getAiWeights());
+                        } else if (subscription.getModelJmType() != null && subscription.getModelJmType() == 20) {
                             getOnnxModel(subscription, preloadModel);
                         } else {
                             getNetModel(subscription, preloadModel);
@@ -397,7 +401,10 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
                         beforePush.setBeforText(tabAiVideoSetting.getModelTxt());
                         beforePush.setClaseeNames(Files.readAllLines(Paths.get(before.getAiNameName())));
 
-                        if (tabAiSubscriptionNew.getModelJmType() != null && tabAiSubscriptionNew.getModelJmType() == 20) { //解码类型 onnx opencv
+                        if (AscendOmPool.isOmModel(tabAiSubscriptionNew.getModelJmType())) { //om 昇腾NPU
+                            // session/net 保持 null, 推理走 AscendOmPool
+                            AscendOmPool.preload(before.getAiWeights());
+                        } else if (tabAiSubscriptionNew.getModelJmType() != null && tabAiSubscriptionNew.getModelJmType() == 20) { //解码类型 onnx opencv
                             OnnxModelWrapper endNet = getOnnxModel(tabAiSubscriptionNew, before);
                             beforePush.setSession(endNet.getSession());
                             beforePush.setEnv(endNet.getEnv());
@@ -427,7 +434,9 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
                         endPush.setIsBeforZoom(tabAiVideoSetting.getIsBeforZoom() == null ? 1 : tabAiVideoSetting.getIsBeforZoom());
                         endPush.setClaseeNames(Files.readAllLines(Paths.get(theEnd.getAiNameName())));
 
-                        if (tabAiSubscriptionNew.getModelJmType() != null && tabAiSubscriptionNew.getModelJmType() == 20) {//解码类型 onnx opencv
+                        if (AscendOmPool.isOmModel(tabAiSubscriptionNew.getModelJmType())) { //om 昇腾NPU
+                            AscendOmPool.preload(theEnd.getAiWeights());
+                        } else if (tabAiSubscriptionNew.getModelJmType() != null && tabAiSubscriptionNew.getModelJmType() == 20) {//解码类型 onnx opencv
                             OnnxModelWrapper endNet = getOnnxModel(tabAiSubscriptionNew, theEnd);
                             endPush.setSession(endNet.getSession());
                             endPush.setEnv(endNet.getEnv());
@@ -456,7 +465,9 @@ public class TabAiSubscriptionNewServiceImpl extends ServiceImpl<TabAiSubscripti
                         allPush.setBeforText("");
                         allPush.setClaseeNames(Files.readAllLines(Paths.get(tabAiModel.getAiNameName())));
 
-                        if (tabAiSubscriptionNew.getModelJmType() != null && tabAiSubscriptionNew.getModelJmType() == 20) {
+                        if (AscendOmPool.isOmModel(tabAiSubscriptionNew.getModelJmType())) { //om 昇腾NPU
+                            AscendOmPool.preload(tabAiModel.getAiWeights());
+                        } else if (tabAiSubscriptionNew.getModelJmType() != null && tabAiSubscriptionNew.getModelJmType() == 20) {
                             OnnxModelWrapper endNet = getOnnxModel(tabAiSubscriptionNew, tabAiModel);
                             allPush.setSession(endNet.getSession());
                             allPush.setEnv(endNet.getEnv());
