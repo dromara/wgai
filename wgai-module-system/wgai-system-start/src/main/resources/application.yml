@@ -27,6 +27,28 @@ ai:
   subscription:
     model-preload:
       enabled: false
+  # 昇腾 310P3 NPU 推理（ATC 编译的 .om + 自建 AscendCL JNI）
+  # ⚠ enabled: false = 全部推理走 ONNX，连 libascend_om.so 都不加载（开发机上不会刷 UnsatisfiedLinkError）。
+  #   只有装了 CANN 的机器才设 true。和 plc.enabled 一个套路：默认不动硬件。
+  #   启动日志认这几行才作数：
+  #     [昇腾NPU] 未启用 (ai.ascend.enabled=false)              ← 开关没开
+  #     [昇腾NPU] device 0 context ready                        ← 单颗 chip 就绪
+  #     [昇腾NPU] 模型池就绪, devices=[0, 1]                     ← 两颗都就绪
+  #     [昇腾NPU] xxx.om 就绪, 副本数=2 分布在 device0 device1    ← 模型加载成功
+  # 走 NPU 的判定：model_type 字典 = 100（图像/姿态识别看 tab_ai_model.model_dify_type，
+  #   视频订阅看 tab_ai_subscription_new.model_jm_type）；20=ONNX，其它=OpenCV DNN
+  # ⚠ 配了 100 但 NPU 不可用时会**直接报错而不是回退** —— 因为只上传 .om 时没有 onnx 可退，
+  #   静默回退只会变成 NPE，报错信息还不如说清楚
+  ascend:
+    enabled: false
+    # JNI 动态库，由 om_jni_prod.c 编出来（换 CANN 版本要重编）
+    lib-path: /home/data/libascend_om.so
+    # NPU device 列表，逗号分隔。310P3 是一卡两 chip，配 0,1 则每个模型在两颗上各放一份副本，
+    # 吞吐翻倍（单副本约 130 FPS @yolo11n / 310 FPS @yolov5）。用 npu-smi info 看 Device 列确认编号
+    device-ids: 0,1
+    # .om 文件名后缀。ai_weights 存 xxx.onnx 时去同目录找 xxx{后缀}.om；
+    # ai_weights 直接存 .om 时忽略此项。onnx2om.sh 的输出不带后缀，那种情况设成 ''
+    om-suffix: _310p3
   ##'D:\opencv\build\java\x64\opencv_java481.dll'F:\JAVAAI\opencv481\code_version_opencv\opencv-4.8.1\opencv-4.8.1\build\install\x64\vc16\bin\opencv_java481.dll;
 ##'/home/opencv481/opencv-4.8.1/build/lib/libopencv_java481.so'
   ## 'F:\JAVAAI\opencv481\opencv\build\java\x64\opencv_java481.dll'

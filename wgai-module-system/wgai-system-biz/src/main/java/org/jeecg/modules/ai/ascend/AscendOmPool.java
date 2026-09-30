@@ -39,7 +39,15 @@ public class AscendOmPool {
 
     private static volatile AscendOmPool INSTANCE;
 
-    /** JNI 动态库路径；Windows 开发机上这个文件不存在，会静默回退 ONNX */
+    /**
+     * 是否启用昇腾 NPU。**默认 false** —— 只有真正装了 CANN 的机器才打开，
+     * 开发机 / 无 NPU 的服务器上连 .so 都不去加载，不刷 UnsatisfiedLinkError 日志。
+     * 和 plc.enabled 一个套路：默认不动硬件，现场显式开。
+     */
+    @Value("${ai.ascend.enabled:false}")
+    private boolean enabled;
+
+    /** JNI 动态库路径 */
     @Value("${ai.ascend.lib-path:/home/data/libascend_om.so}")
     private String libPath;
 
@@ -65,6 +73,12 @@ public class AscendOmPool {
     @PostConstruct
     public void init() {
         INSTANCE = this;
+
+        if (!enabled) {
+            log.info("[昇腾NPU] 未启用 (ai.ascend.enabled=false)，全部推理走 ONNX。"
+                    + "装了 CANN 的机器上设 true 才会加载 {}", libPath);
+            return;
+        }
 
         int[] want = parseDeviceIds(deviceIdsRaw);
         activeDevices = AscendOmSession.tryInit(libPath, want);
@@ -107,9 +121,14 @@ public class AscendOmPool {
         return INSTANCE;
     }
 
-    /** NPU 这条路整体是否可用 */
+    /** NPU 这条路整体是否可用：开关打开 + .so 加载成功 + 至少一个 device 就绪 */
     public static boolean isAvailable() {
-        return INSTANCE != null && AscendOmSession.isNativeReady();
+        return INSTANCE != null && INSTANCE.enabled && AscendOmSession.isNativeReady();
+    }
+
+    /** 开关是否打开（和"是否真的可用"分开，便于报错时区分是没开还是开了没成) */
+    public static boolean isEnabled() {
+        return INSTANCE != null && INSTANCE.enabled;
     }
 
     /**
@@ -130,9 +149,15 @@ public class AscendOmPool {
      */
     public static AscendOmModel preload(String weightPath) {
         AscendOmPool pool = INSTANCE;
-        if (pool == null || !isAvailable()) {
+        if (pool == null || !pool.enabled) {
             throw new IllegalStateException(
-                    "模型配置为 om(model_type=100)，但昇腾 NPU 不可用: "
+                    "模型配置为 om(model_type=100)，但昇腾 NPU 未启用。"
+                            + "请在 application.yml 里设 ai.ascend.enabled=true"
+                            + "（默认 false，只有装了 CANN 的机器才开）。");
+        }
+        if (!isAvailable()) {
+            throw new IllegalStateException(
+                    "模型配置为 om(model_type=100)，昇腾 NPU 已启用但初始化失败: "
                             + AscendOmSession.getUnavailableReason()
                             + "。只上传了 .om 时没有 ONNX 可回退，请检查 "
                             + "ai.ascend.lib-path / device-ids 以及 npu-smi 状态。");
@@ -204,8 +229,11 @@ public class AscendOmPool {
 
     public String getStatistics() {
         StringBuilder sb = new StringBuilder("\n===== 昇腾 NPU 模型池 =====\n");
+        sb.append("开关 ai.ascend.enabled: ").append(enabled).append("\n");
         sb.append("可用: ").append(isAvailable());
-        if (!isAvailable()) {
+        if (!enabled) {
+            sb.append(" (未启用)");
+        } else if (!isAvailable()) {
             sb.append(" (").append(AscendOmSession.getUnavailableReason()).append(")");
         }
         sb.append("\ndevices: ").append(activeDevices);
